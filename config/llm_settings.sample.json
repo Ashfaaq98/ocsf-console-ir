@@ -1,0 +1,9 @@
+{
+  "active": {
+    "provider": "ollama",
+    "endpoint": "http://localhost:11434",
+    "model": "qwen3:0.6b",
+    "api_key": "",
+    "extra": {}
+  }
+}

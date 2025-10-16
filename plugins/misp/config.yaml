@@ -1,0 +1,64 @@
+# MISP Plugin Configuration Example
+
+# MISP Server Configuration
+misp:
+  base_url: "https://misp.example.com"
+  # api_key can be set here or via MISP_API_KEY environment variable
+  # api_key: "your-api-key-here"
+  verify_tls: true
+  timeout: "30s"
+
+# Rate Limiting Configuration
+rate_limiting:
+  requests_per_second: 10
+  burst_limit: 20
+
+# Caching Configuration  
+cache:
+  ttl: "4h"
+  max_size: 2000
+  use_redis: true
+
+# Query Settings
+query:
+  days_back: 30
+  only_to_ids: true
+  include_context: true
+  max_results: 100
+
+# Event Correlation
+correlation:
+  correlate_events: true
+  max_correlations: 10
+
+# Observable Processing
+observables:
+  process_ip_addresses: true
+  process_domain_names: true
+  process_file_hashes: true
+  process_urls: true
+  process_email_addresses: false
+
+# Filtering Settings
+filtering:
+  min_threat_level: 3  # 1=High, 2=Medium, 3=Low, 4=Undefined
+  excluded_organizations: []
+  required_tags: ["tlp:white", "tlp:green"]
+
+# Redis Configuration
+redis:
+  url: "redis://localhost:6379"
+  consumer_name: "misp-plugin"
+  consumer_group: "console-ir-misp"
+
+# Logging Configuration
+logging:
+  level: "info"  # debug, info, warn, error
+  output: "stdout"
+
+# TLP (Traffic Light Protocol) Settings
+tlp:
+  respect_markings: true
+  default_level: "white"
+  exclude_red: true
+  exclude_amber_strict: false

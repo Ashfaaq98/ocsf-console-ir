@@ -1,0 +1,43 @@
+# OpenCTI Plugin Configuration Example
+
+# OpenCTI Server Configuration
+opencti:
+  base_url: "https://opencti.example.com"
+  # token can be set here or via OPENCTI_TOKEN environment variable
+  # token: "your-api-token-here"
+  timeout: "30s"
+
+# Rate Limiting Configuration
+rate_limiting:
+  requests_per_second: 5
+  burst_limit: 10
+
+# Caching Configuration  
+cache:
+  ttl: "2h"
+  max_size: 1000
+  use_redis: true
+
+# Enrichment Settings
+enrichment:
+  include_related_entities: true
+  max_relations: 5
+  min_confidence_threshold: 50
+
+# Observable Processing
+observables:
+  process_ip_addresses: true
+  process_domain_names: true
+  process_file_hashes: true
+  process_urls: false
+
+# Redis Configuration
+redis:
+  url: "redis://localhost:6379"
+  consumer_name: "opencti-plugin"
+  consumer_group: "console-ir-opencti"
+
+# Logging Configuration
+logging:
+  level: "info"  # debug, info, warn, error
+  output: "stdout"

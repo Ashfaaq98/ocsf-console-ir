@@ -1,0 +1,38 @@
+# Compiled binaries
+bin/console-ir-linux
+bin/console-ir-macos
+bin/console-ir-macos-arm64
+bin/console-ir.exe
+bin/*-nocgo*
+bin/*
+
+# Database files
+console-ir.db
+console-ir.db-shm
+console-ir.db-wal
+*.db
+*.db-*
+
+# Log files
+*.log
+console-ir-ui.log
+debug_output.log
+ui-debug.log
+
+# Release preparation directories
+release-*/
+
+# Build and release scripts are kept in repo for reference
+# build.ps1
+# prepare-release.ps1  
+# upload-release.ps1
+
+# Temporary files
+*.tmp
+*.temp
+bin/*
+
+# Runtime and build artifacts
+exports/**
+data/incoming/**/*.jsonl
+config/llm_settings.json

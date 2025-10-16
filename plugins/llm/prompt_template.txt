@@ -1,0 +1,38 @@
+Analyze the following security event and provide insights:
+
+Event Type: {{.Event.activity_name}}
+{{if .Event.src_endpoint}}Source IP: {{.Event.src_endpoint.ip}}{{end}}
+{{if .Event.dst_endpoint}}Destination IP: {{.Event.dst_endpoint.ip}}{{end}}
+{{if .Event.device}}Device: {{.Event.device.name}} ({{.Event.device.ip}}){{end}}
+{{if .Event.actor}}Actor: {{.Event.actor.user.name}}{{end}}
+{{if .Event.process}}Process: {{.Event.process.name}} (PID: {{.Event.process.pid}}){{end}}
+{{if .Event.file}}File: {{.Event.file.name}} ({{.Event.file.path}}){{end}}
+
+Event Details:
+- Timestamp: {{.Event.time}}
+- Severity: {{.Event.severity}}
+- Category: {{.Event.category_name}}
+- Class: {{.Event.class_name}}
+
+Raw Event Data:
+{{.Event | printf "%+v"}}
+
+Please analyze this security event and provide insights in JSON format with the following structure:
+{
+  "summary": "Brief description of what happened in this event",
+  "security_significance": "Why this event is important from a security perspective",
+  "threat_indicators": ["List of potential threat indicators found"],
+  "recommended_actions": ["List of recommended investigation steps or actions"],
+  "risk_level": "Low|Medium|High|Critical",
+  "confidence": 0.85,
+  "threat_type": "Type of threat if applicable",
+  "iocs": ["Any indicators of compromise found"],
+  "context": "Additional context about the event"
+}
+
+Focus on:
+1. Identifying potential security threats or anomalies
+2. Extracting IOCs (IP addresses, domains, file hashes, etc.)
+3. Assessing the risk level based on the event characteristics
+4. Providing actionable recommendations for security analysts
+5. Considering the context of the event within typical attack patterns

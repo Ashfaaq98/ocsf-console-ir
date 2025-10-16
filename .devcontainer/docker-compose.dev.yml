@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  dev:
+    build:
+      context: ..
+      dockerfile: .devcontainer/Dockerfile
+    volumes:
+      - ..:/workspace:cached
+      - go-modules:/go/pkg/mod
+    command: sleep infinity
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - LOG_LEVEL=debug
+      - CGO_ENABLED=1
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - console-ir
+
+volumes:
+  go-modules:

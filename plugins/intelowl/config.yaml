@@ -1,0 +1,46 @@
+# IntelOwl Plugin Configuration (staging-safe defaults)
+# Flags override these values. Environment variables:
+#   INTEL_OWL_URL
+#   INTEL_OWL_TOKEN
+
+intelowl:
+  base_url: ""            # e.g., https://intelowl.example.com (or set INTEL_OWL_URL)
+  verify_tls: true
+  timeout: 30s
+
+auth:
+  token: ""               # or set via INTEL_OWL_TOKEN env var
+
+redis:
+  url: "redis://localhost:6379"
+  group: "console-ir-intelowl"
+  consumer: "intelowl-plugin"
+
+mode:
+  value: "query"          # query | submit
+  poll_interval: 2s
+  poll_timeout: 60s
+  max_concurrent: 2
+
+rate_limit:
+  rps: 5
+  burst: 10
+
+cache:
+  use_redis_cache: true
+  ttl: 4h
+  size: 2000
+
+filters:
+  min_confidence: "low"   # info|low|medium|high
+
+analyzers:
+  # Provide minimal, safe analyzer presets per type (empty means SDK/server defaults).
+  # These are examples; leave empty if unsure and control via flags or server-side presets.
+  ip: []
+  domain: []
+  url: []
+  hash: []
+  email: []
+
+exclude_analyzers: []

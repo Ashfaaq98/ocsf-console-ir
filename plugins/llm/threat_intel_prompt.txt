@@ -1,0 +1,52 @@
+Analyze this security event for threat intelligence indicators and attack patterns.
+
+EVENT DATA:
+==========
+Activity: {{.Event.activity_name}}
+Category: {{.Event.category_name}}
+Class: {{.Event.class_name}}
+Time: {{.Event.time}}
+{{if .Event.src_endpoint}}Source Endpoint: {{.Event.src_endpoint.ip}}{{if .Event.src_endpoint.port}}:{{.Event.src_endpoint.port}}{{end}}{{end}}
+{{if .Event.dst_endpoint}}Destination Endpoint: {{.Event.dst_endpoint.ip}}{{if .Event.dst_endpoint.port}}:{{.Event.dst_endpoint.port}}{{end}}{{end}}
+{{if .Event.process}}Process: {{.Event.process.name}}
+Command Line: {{.Event.process.cmd_line}}{{end}}
+{{if .Event.file}}File: {{.Event.file.name}}
+Path: {{.Event.file.path}}
+{{if .Event.file.hashes}}Hashes: {{.Event.file.hashes}}{{end}}{{end}}
+
+THREAT INTELLIGENCE ANALYSIS:
+===========================
+Extract and analyze all potential indicators of compromise (IOCs) and map them to known attack techniques.
+
+Provide analysis in this JSON structure:
+{
+  "iocs": {
+    "ip_addresses": ["ip1", "ip2"],
+    "domains": ["domain1", "domain2"],
+    "file_hashes": ["hash1", "hash2"],
+    "file_paths": ["path1", "path2"],
+    "process_names": ["proc1", "proc2"],
+    "command_patterns": ["cmd1", "cmd2"],
+    "network_indicators": ["indicator1", "indicator2"]
+  },
+  "mitre_attack": {
+    "tactics": ["TA0001", "TA0002"],
+    "techniques": ["T1055", "T1105"],
+    "sub_techniques": ["T1055.001", "T1105.003"]
+  },
+  "threat_score": 0.85,
+  "confidence": 0.90,
+  "threat_family": "APT group or malware family if identified",
+  "attack_stage": "reconnaissance|initial_access|execution|persistence|privilege_escalation|defense_evasion|credential_access|discovery|lateral_movement|collection|command_control|exfiltration|impact",
+  "behavioral_indicators": ["behavior1", "behavior2"],
+  "attribution_likelihood": {
+    "apt_groups": ["group1", "group2"],
+    "malware_families": ["family1", "family2"],
+    "confidence": 0.75
+  },
+  "recommendations": {
+    "immediate": ["action1", "action2"],
+    "investigative": ["step1", "step2"],
+    "preventive": ["measure1", "measure2"]
+  }
+}
