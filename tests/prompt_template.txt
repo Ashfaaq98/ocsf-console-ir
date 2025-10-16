@@ -1,0 +1,23 @@
+Analyze the following security event and provide insights:
+
+Event Type: {{.Event.activity_name}}
+{{if .Event.src_endpoint}}Source IP: {{.Event.src_endpoint.ip}}{{end}}
+{{if .Event.dst_endpoint}}Destination IP: {{.Event.dst_endpoint.ip}}{{end}}
+{{if .Event.device}}Device: {{.Event.device.name}} ({{.Event.device.ip}}){{end}}
+{{if .Event.actor}}Actor: {{.Event.actor.user.name}}{{end}}
+
+Raw Event Data:
+{{.Event | printf "%+v"}}
+
+Please provide:
+1. A brief summary of what happened
+2. The security significance of this event
+3. Recommended actions or investigation steps
+4. Risk level (Low/Medium/High/Critical)
+
+Format your response as structured JSON with the following fields:
+- summary: Brief description of the event
+- security_significance: Why this event is important from a security perspective
+- recommended_actions: List of recommended actions
+- risk_level: One of Low, Medium, High, or Critical
+- confidence: Your confidence level in this analysis (0.0-1.0)

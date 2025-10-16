@@ -1,0 +1,126 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Console-IR Serve",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}",
+            "args": [
+                "serve",
+                "--log-level", "debug",
+                "--db", "./console-ir-debug.db",
+                "--redis", "redis://localhost:6379"
+            ],
+            "env": {
+                "CGO_ENABLED": "1"
+            },
+            "console": "integratedTerminal",
+            "preLaunchTask": "build",
+            "stopOnEntry": false,
+            "showLog": true
+        },
+        {
+            "name": "Debug Console-IR Serve (Headless)",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}",
+            "args": [
+                "serve",
+                "--no-tui",
+                "--log-level", "debug",
+                "--db", "./console-ir-debug.db",
+                "--redis", "redis://localhost:6379"
+            ],
+            "env": {
+                "CGO_ENABLED": "1"
+            },
+            "console": "integratedTerminal",
+            "preLaunchTask": "build",
+            "stopOnEntry": false,
+            "showLog": true
+        },
+        {
+            "name": "Debug Console-IR Ingest",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}",
+            "args": [
+                "ingest",
+                "./testdata/sample-events.jsonl",
+                "--log-level", "debug",
+                "--db", "./console-ir-debug.db",
+                "--redis", "redis://localhost:6379"
+            ],
+            "env": {
+                "CGO_ENABLED": "1"
+            },
+            "console": "integratedTerminal",
+            "preLaunchTask": "generate-sample-data",
+            "stopOnEntry": false,
+            "showLog": true
+        },
+        {
+            "name": "Debug GeoIP Plugin",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/plugins/geoip",
+            "args": [
+                "--redis", "redis://localhost:6379",
+                "--consumer", "geoip-debug",
+                "--log-level", "debug"
+            ],
+            "console": "integratedTerminal",
+            "stopOnEntry": false,
+            "showLog": true
+        },
+        {
+            "name": "Debug Current File",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "stopOnEntry": false,
+            "showLog": true
+        },
+        {
+            "name": "Debug Tests",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${workspaceFolder}",
+            "args": [
+                "-test.v"
+            ],
+            "console": "integratedTerminal",
+            "stopOnEntry": false,
+            "showLog": true
+        },
+        {
+            "name": "Debug Package Tests",
+            "type": "go",
+            "request": "launch",
+            "mode": "test",
+            "program": "${fileDirname}",
+            "args": [
+                "-test.v"
+            ],
+            "console": "integratedTerminal",
+            "stopOnEntry": false,
+            "showLog": true
+        },
+        {
+            "name": "Attach to Process",
+            "type": "go",
+            "request": "attach",
+            "mode": "local",
+            "processId": 0,
+            "showLog": true
+        }
+    ]
+}

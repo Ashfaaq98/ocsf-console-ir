@@ -1,0 +1,1 @@
+{"summary":"Suspicious network activity","security_significance":"Potential command-and-control traffic","recommended_actions":["Isolate host","Block destination IP","Collect network packet capture"],"risk_level":"High","confidence":0.82,"threat_type":"C2"}

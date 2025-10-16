@@ -1,0 +1,24 @@
+{
+  "enabled": false,
+  "mode": "auto",
+  "server": {
+    "transport": "stdio",
+    "addr": "127.0.0.1:30100"
+  },
+  "virustotal": {
+    "api_key": "",
+    "tools": [
+      "vt.hash_report",
+      "vt.domain_report",
+      "vt.ip_report",
+      "vt.url_report"
+    ],
+    "timeouts": {
+      "connect_ms": 3000,
+      "call_ms": 8000
+    },
+    "budgets": {
+      "per_user_per_hour": 60
+    }
+  }
+}
