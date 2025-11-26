@@ -2,6 +2,9 @@
 
 A terminal-first OCSF-based incident response manager for security analysts.
 
+![Console IR Landing](assets/landing.png)
+
+
 ## **Overview**
 
 - OCSF-native event ingestion
@@ -12,9 +15,9 @@ A terminal-first OCSF-based incident response manager for security analysts.
 - Pluggable LLM providers for summaries
 
 ### Demo - Short walkthrough
-A quick tour of the TUI (cases & events).
+A quick tour of the TUI.
 
-[![TUI walkthrough](docs/demo.gif)](docs/demo.mp4)
+[![TUI walkthrough](assets/demo.gif)](assets/demo.mp4)
 
 
 ## **Quick Start**
@@ -81,7 +84,7 @@ Development is supported via [`.devcontainer/devcontainer.json`](.devcontainer/d
 
 ## **Architecture**
 
-![Architecture](docs/architecture.png)
+![Architecture](assets/architecture.png)
 
 ## **Troubleshooting**
 
