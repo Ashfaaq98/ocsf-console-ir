@@ -3164,11 +3164,13 @@ var refreshModels func()
 var refreshing int32
 
 	// Provider dropdown
-	provOptions := []string{"ollama", "openrouter"}
+	provOptions := []string{"ollama", "openrouter", "groq"}
 	provIdx := 0
 	switch strings.ToLower(provider) {
 	case "openrouter":
 		provIdx = 1
+	case "groq":
+		provIdx = 2
 	default:
 		provIdx = 0
 	}
@@ -3186,6 +3188,8 @@ var refreshing int32
 					switch provider {
 					case "openrouter":
 						endpointIF.SetText("https://openrouter.ai/api/v1")
+					case "groq":
+						endpointIF.SetText("https://api.groq.com/openai/v1")
 					case "ollama":
 						endpointIF.SetText("http://localhost:11434")
 					default:
@@ -3196,15 +3200,21 @@ var refreshing int32
 				// Reset model dropdown options; we auto-load models (no refresh button).
 				if modelDD != nil {
 					switch provider {
-					case "openrouter":
-						if strings.TrimSpace(apiKeyIF.GetText()) == "" && strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")) == "" {
-							modelOptions = []string{"(requires api key)"}
-						} else {
-							modelOptions = []string{"(loading...)"}
-						}
-					default:
+				case "openrouter":
+					if strings.TrimSpace(apiKeyIF.GetText()) == "" && strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")) == "" {
+						modelOptions = []string{"(requires api key)"}
+					} else {
 						modelOptions = []string{"(loading...)"}
 					}
+				case "groq":
+					if strings.TrimSpace(apiKeyIF.GetText()) == "" && strings.TrimSpace(os.Getenv("GROQ_API_KEY")) == "" {
+						modelOptions = []string{"(requires api key)"}
+					} else {
+						modelOptions = []string{"(loading...)"}
+					}
+				default:
+					modelOptions = []string{"(loading...)"}
+				}
 					modelDD.SetOptions(modelOptions, nil)
 					modelDD.SetCurrentOption(0)
 				}
@@ -3212,15 +3222,20 @@ var refreshing int32
 				// Helpful status hint
 				if provider == "openrouter" && strings.TrimSpace(apiKeyIF.GetText()) == "" && strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")) == "" {
 					cm.updateStatus("Provider set to OpenRouter. Enter API key to load models.")
+				} else if provider == "groq" && strings.TrimSpace(apiKeyIF.GetText()) == "" && strings.TrimSpace(os.Getenv("GROQ_API_KEY")) == "" {
+					cm.updateStatus("Provider set to Groq. Enter API key to load models.")
 				} else {
 					cm.updateStatus(fmt.Sprintf("Provider set to %s", provider))
 				}
 			})
 
 			// Auto-refresh models after provider change (no button interaction needed).
-			if !(strings.EqualFold(provider, "openrouter") &&
+			if !((strings.EqualFold(provider, "openrouter") &&
 				strings.TrimSpace(apiKeyIF.GetText()) == "" &&
-				strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")) == "") {
+				strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")) == "") ||
+				(strings.EqualFold(provider, "groq") &&
+				strings.TrimSpace(apiKeyIF.GetText()) == "" &&
+				strings.TrimSpace(os.Getenv("GROQ_API_KEY")) == "")) {
 				refreshModels()
 			}
 		}()
@@ -3232,6 +3247,8 @@ var refreshing int32
 	if strings.TrimSpace(endpointIF.GetText()) == "" {
 		if strings.EqualFold(provider, "openrouter") {
 			endpointIF.SetText("https://openrouter.ai/api/v1")
+		} else if strings.EqualFold(provider, "groq") {
+			endpointIF.SetText("https://api.groq.com/openai/v1")
 		} else if strings.EqualFold(provider, "ollama") {
 			endpointIF.SetText("http://localhost:11434")
 		}
@@ -3256,7 +3273,7 @@ var refreshing int32
 
 		// API Key (for OpenRouter)
 		apiKey := settings.Active.APIKey
-		apiKeyIF = tview.NewInputField().SetLabel("API Key (OpenRouter)").SetText(apiKey)
+		apiKeyIF = tview.NewInputField().SetLabel("API Key (OpenRouter/Groq)").SetText(apiKey)
 		apiKeyIF.SetMaskCharacter('*')
 		apiKeyIF.SetFieldBackgroundColor(cm.theme.Surface).SetFieldTextColor(cm.theme.TextPrimary).SetLabelColor(cm.theme.TextPrimary)
 		form.AddFormItem(apiKeyIF)
@@ -3293,15 +3310,20 @@ var refreshing int32
 			}
 
 			// If OpenRouter selected without an API key, don't attempt network calls; show helpful placeholder.
-			if prov == "openrouter" && key == "" && strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")) == "" {
-				// Non-blocking UI update to avoid deadlock in button callback path
-				cm.app.QueueUpdate(func() {
-					modelOptions = []string{"(requires api key)"}
-					if modelDD != nil {
-						modelDD.SetOptions(modelOptions, nil)
-						modelDD.SetCurrentOption(0)
-					}
+			if (prov == "openrouter" && key == "" && strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")) == "") ||
+			(prov == "groq" && key == "" && strings.TrimSpace(os.Getenv("GROQ_API_KEY")) == "") {
+			// Non-blocking UI update to avoid deadlock in button callback path
+			cm.app.QueueUpdate(func() {
+				modelOptions = []string{"(requires api key)"}
+				if modelDD != nil {
+					modelDD.SetOptions(modelOptions, nil)
+					modelDD.SetCurrentOption(0)
+				}
+				if prov == "groq" {
+					cm.updateStatus("Groq requires an API key to list models")
+				} else {
 					cm.updateStatus("OpenRouter requires an API key to list models")
+				}
 					atomic.StoreInt32(&refreshing, 0)
 				})
 				return
@@ -3423,12 +3445,15 @@ var refreshing int32
 		// Removed Refresh Models button; models load automatically on provider change.
 	
 		// Kick off initial discovery shortly after modal opens (non-blocking), when feasible.
-		// Skip auto-discovery for OpenRouter without an API key to avoid the "(requires api key)" churn.
+		// Skip auto-discovery for OpenRouter/Groq without an API key to avoid the "(requires api key)" churn.
 		go func() {
 			time.Sleep(150 * time.Millisecond)
-			if !(strings.EqualFold(provider, "openrouter") &&
+			if !((strings.EqualFold(provider, "openrouter") &&
 				strings.TrimSpace(apiKeyIF.GetText()) == "" &&
-				strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")) == "") {
+				strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")) == "") ||
+				(strings.EqualFold(provider, "groq") &&
+				strings.TrimSpace(apiKeyIF.GetText()) == "" &&
+				strings.TrimSpace(os.Getenv("GROQ_API_KEY")) == "")) {
 				refreshModels()
 			}
 		}()

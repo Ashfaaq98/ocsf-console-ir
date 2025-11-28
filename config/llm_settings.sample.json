@@ -1,9 +1,32 @@
 {
+  "_comment": "Supported providers: ollama, openrouter, groq",
   "active": {
     "provider": "ollama",
     "endpoint": "http://localhost:11434",
     "model": "qwen3:0.6b",
     "api_key": "",
     "extra": {}
-  }
+  },
+  "_examples": {
+    "_openrouter": {
+      "provider": "openrouter",
+      "endpoint": "https://openrouter.ai/api/v1",
+      "model": "qwen/qwen-2.5-7b-instruct",
+      "api_key": "your-openrouter-api-key",
+      "extra": {}
+    },
+    "_groq": {
+      "provider": "groq",
+      "endpoint": "https://api.groq.com/openai/v1",
+      "model": "llama-3.3-70b-versatile",
+      "api_key": "your-groq-api-key",
+      "extra": {}
+    }
+  },
+  "_groq_popular_models": [
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+    "mixtral-8x7b-32768",
+    "gemma2-9b-it"
+  ]
 }
