@@ -252,6 +252,55 @@ func themeColorblindSafe() Theme {
 	}
 }
 
+func themeClaude() Theme {
+	// Claude's signature theme: Warm, sophisticated, and designed for comfort.
+	// A palette of warm grays, ambers, and terracottas that's easy on the eyes
+	// during long incident response sessions while maintaining professionalism.
+	return Theme{
+		Bg:            hex("#1a1614"), // Deep warm charcoal
+		Surface:       hex("#252220"), // Warm gray surface
+		Border:        hex("#3d3835"), // Subtle warm border
+		FocusBorder:   hex("#d4976c"), // Warm amber focus
+		SelectionBg:   hex("#3d3835"), // Warm selection
+		SelectionFg:   hex("#f5f0eb"), // Warm off-white
+		TextPrimary:   hex("#f5f0eb"), // Warm cream text
+		TextMuted:     hex("#a89a8f"), // Warm muted gray
+		Accent:        hex("#d4976c"), // Signature warm amber - friendly yet professional
+		Success:       hex("#88b369"), // Warm sage green
+		Warning:       hex("#e0a564"), // Warm amber
+		Error:         hex("#d87c7c"), // Warm terracotta red
+		Header:        hex("#e0b882"), // Warm golden header
+
+		// Table colors - warm and readable
+		TableHeader:   hex("#e0b882"), // Warm gold
+		TableHeaderBg: hex("#2a2724"), // Slightly lighter warm bg
+		TableRow:      hex("#f5f0eb"), // Warm cream
+		TableRowMuted: hex("#b0a599"), // Warm gray
+		TableZebra1:   hex("#221f1d"), // Deep warm zebra
+		TableZebra2:   hex("#1a1614"), // Matches bg
+
+		// Severity - warm gradient from green to red
+		SeverityCritical: hex("#e07856"), // Warm coral red
+		SeverityHigh:     hex("#e09856"), // Warm tangerine
+		SeverityMedium:   hex("#d4b356"), // Warm gold
+		SeverityLow:      hex("#8ba36f"), // Warm olive green
+		SeverityInfo:     hex("#7a9bb3"), // Warm steel blue
+
+		// Tag colors for dynamic markup
+		TagTextPrimary:      "#f5f0eb",
+		TagMuted:            "#a89a8f",
+		TagAccent:           "#d4976c",
+		TagSuccess:          "#88b369",
+		TagWarning:          "#e0a564",
+		TagError:            "#d87c7c",
+		TagSeverityCritical: "#e07856",
+		TagSeverityHigh:     "#e09856",
+		TagSeverityMedium:   "#d4b356",
+		TagSeverityLow:      "#8ba36f",
+		TagSeverityInfo:     "#7a9bb3",
+	}
+}
+
 func detectTrueColor() bool {
 	// Best-effort detection without initializing screen
 	ct := strings.ToLower(os.Getenv("COLORTERM"))
@@ -2358,7 +2407,8 @@ func (ui *UI) cycleTheme() {
 	}
 	next := map[string]string{
 		"dark":          "light",
-		"light":         "neon",
+		"light":         "claude",
+		"claude":        "neon",
 		"neon":          "cb-safe",
 		"cb-safe":       "high-contrast",
 		"high-contrast": "dark",
@@ -2390,6 +2440,9 @@ func (ui *UI) setTheme(name string) {
 	case "high-contrast":
 		ui.themeName = "high-contrast"
 		ui.theme = themeHighContrast()
+	case "claude":
+		ui.themeName = "claude"
+		ui.theme = themeClaude()
 	case "cb-safe":
 		ui.themeName = "cb-safe"
 		ui.theme = themeColorblindSafe()
