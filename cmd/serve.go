@@ -286,7 +286,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 				}
 			}()
 
-			ui := ui.NewUI(ctx, st, llmProvider, uiLogger)
+			ui := ui.NewUI(ctx, st, llmProvider, uiLogger, GetVersion())
 			
 			// Start TUI directly - tcell can handle terminal compatibility
 			if err := ui.Start(ctx); err != nil {

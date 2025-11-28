@@ -42,7 +42,7 @@ func TestEventSelectionAndCaseCreationWorkflow(t *testing.T) {
 	// Create UI with test logger
 	logger := log.New(os.Stdout, "[TEST] ", log.LstdFlags)
 	llmProvider := llm.NewLocalStub()
-	ui := ui.NewUI(ctx, store, llmProvider, logger)
+	ui := ui.NewUI(ctx, store, llmProvider, logger, "test")
 
 	// Test 1: Verify initial state
 	t.Run("InitialState", func(t *testing.T) {

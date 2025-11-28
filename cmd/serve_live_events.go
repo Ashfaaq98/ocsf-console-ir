@@ -146,7 +146,7 @@ func runLiveEvents(cmd *cobra.Command, args []string) error {
 	}
 
 	// Create and start the TUI
-	tui := ui.NewUI(ctx, st, nil, uiLogger)
+	tui := ui.NewUI(ctx, st, nil, uiLogger, GetVersion())
 
 	// Auto-refresh ALL EVENTS every 1s so new live-ingested events appear without manual 'r'
 	go func() {

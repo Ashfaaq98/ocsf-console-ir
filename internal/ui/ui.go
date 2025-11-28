@@ -324,6 +324,9 @@ type UI struct {
 	// Context for cancellation
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	// Version info
+	version string
 	// Case filters (Cases sidebar)
 	caseFilterName       string
 	caseFilterStatuses   map[string]bool
@@ -422,7 +425,7 @@ func (ui *UI) applyCaseFilters(in []store.Case) []store.Case {
 }
 
 // NewUI creates a new terminal user interface
-func NewUI(ctx context.Context, store *store.Store, llmProvider llm.LLMProvider, logger *log.Logger) *UI {
+func NewUI(ctx context.Context, store *store.Store, llmProvider llm.LLMProvider, logger *log.Logger, version string) *UI {
 	if logger == nil {
 		logger = log.New(log.Writer(), "[UI] ", log.LstdFlags)
 	}
@@ -441,6 +444,7 @@ func NewUI(ctx context.Context, store *store.Store, llmProvider llm.LLMProvider,
 		selectedEventIDs: make(map[string]bool),
 		shortcutBuffer:   "",
 		shortcutTimeout:  750 * time.Millisecond, // 750ms timeout for multi-key input
+		version:          version,
 	}
 
 	// Initialize LLM provider from persisted settings when not provided by caller.
@@ -613,13 +617,21 @@ func (ui *UI) setupLayout() {
 		AddItem(ui.eventList, 0, 2, true).
 		AddItem(ui.eventDetail, 0, 1, false)
 
-	// App title header (non-selectable)
+	// App title header with owl logo (non-selectable)
 	ui.appTitle = tview.NewTextView().
 		SetDynamicColors(true).
-		SetTextAlign(tview.AlignLeft)
+		SetTextAlign(tview.AlignLeft).
+		SetWordWrap(true)
 	ui.appTitle.SetBorder(false)
 	ui.appTitle.SetBackgroundColor(ui.theme.Surface)
-	ui.appTitle.SetText(fmt.Sprintf(" [%s]Console-IR[-]", ui.theme.TagAccent))
+	// Professional header: Name on left, Date on right, Version below
+	todayDate := time.Now().Format("2006-01-02")
+	ui.appTitle.SetText(fmt.Sprintf(
+		" [%s]Console-IR[-]                  [%s]%s[-]\n [%s]v%s[-]",
+		ui.theme.TagAccent,
+		ui.theme.TagMuted, todayDate,
+		ui.theme.TagMuted, ui.version,
+	))
 
 	// Dedicated ALL EVENTS list (single item)
 	ui.allList = tview.NewList()
@@ -2285,7 +2297,13 @@ func (ui *UI) applyTheme() {
 	// App title header
 	if ui.appTitle != nil {
 		ui.appTitle.SetBackgroundColor(ui.theme.Surface)
-		ui.appTitle.SetText(fmt.Sprintf(" [%s]Console-IR[-]", ui.theme.TagAccent))
+		todayDate := time.Now().Format("2006-01-02")
+		ui.appTitle.SetText(fmt.Sprintf(
+			" [%s]Console-IR[-]                  [%s]%s[-]\n [%s]v%s[-]",
+			ui.theme.TagAccent,
+			ui.theme.TagMuted, todayDate,
+			ui.theme.TagMuted, ui.version,
+		))
 		ui.appTitle.SetTextColor(ui.theme.TextPrimary)
 	}
 

@@ -19,6 +19,22 @@ func SetVersion(v, bt string) {
 	rootCmd.Version = v
 }
 
+// GetVersion returns the current version string
+func GetVersion() string {
+	if appVersion == "" {
+		return "dev"
+	}
+	return appVersion
+}
+
+// GetBuildTime returns the build timestamp
+func GetBuildTime() string {
+	if buildTime == "" {
+		return "unknown"
+	}
+	return buildTime
+}
+
 // versionCmd prints detailed version information.
 var versionCmd = &cobra.Command{
 	Use:   "version",

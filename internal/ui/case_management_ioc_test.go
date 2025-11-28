@@ -40,7 +40,7 @@ func TestIOCTabSelectionToggle_Space(t *testing.T) {
 
 	ctx := context.Background()
 	logger := log.New(os.Stdout, "[TEST] ", 0)
-	ui := NewUI(ctx, st, &mockLLMIOC{}, logger)
+	ui := NewUI(ctx, st, &mockLLMIOC{}, logger, "test")
 
 	c := store.Case{ID: "case-ioc", Title: "IOC Manual", Severity: "low", Status: "open"}
 	cm := NewCaseManagement(ui, c)
@@ -111,7 +111,7 @@ func TestIOCTabAddModalPlusKey_OpensModal(t *testing.T) {
 
 	ctx := context.Background()
 	logger := log.New(os.Stdout, "[TEST] ", 0)
-	ui := NewUI(ctx, st, &mockLLMIOC{}, logger)
+	ui := NewUI(ctx, st, &mockLLMIOC{}, logger, "test")
 
 	c := store.Case{ID: "case-ioc-plus", Title: "IOC Plus", Severity: "low", Status: "open"}
 	cm := NewCaseManagement(ui, c)
@@ -149,7 +149,7 @@ func TestGetCurrentAnalystPriority(t *testing.T) {
 
 	ctx := context.Background()
 	logger := log.New(os.Stdout, "[TEST] ", 0)
-	ui := NewUI(ctx, st, &mockLLMIOC{}, logger)
+	ui := NewUI(ctx, st, &mockLLMIOC{}, logger, "test")
 
 	// 1) Case owner takes precedence
 	c := store.Case{ID: "case-analyst", Title: "Owner First", Severity: "low", Status: "open", AssignedTo: "owner.user"}
@@ -190,7 +190,7 @@ func TestTimelineRender_NoFreeze(t *testing.T) {
 
 	ctx := context.Background()
 	logger := log.New(os.Stdout, "[TEST] ", 0)
-	ui := NewUI(ctx, st, &mockLLMIOC{}, logger)
+	ui := NewUI(ctx, st, &mockLLMIOC{}, logger, "test")
 	c := store.Case{ID: "case-timeline", Title: "Timeline", Severity: "low", Status: "open"}
 	cm := NewCaseManagement(ui, c)
 

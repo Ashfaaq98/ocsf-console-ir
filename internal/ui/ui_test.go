@@ -33,7 +33,7 @@ func (m *mockLLMProvider) GenerateRecommendations(ctx context.Context, case_ sto
 	return []string{"Mock recommendation"}, nil
 }
 
-func TestNewUI(t *testing.T) {
+func TestNewUI(t *testing.T, "test") {
 	// Create temporary database
 	tmpDB := "./test_console_ir.db"
 	defer os.Remove(tmpDB)
@@ -48,7 +48,7 @@ func TestNewUI(t *testing.T) {
 	logger := log.New(os.Stdout, "[TEST] ", log.LstdFlags)
 	mockLLM := &mockLLMProvider{}
 
-	ui := NewUI(ctx, storeInstance, mockLLM, logger)
+	ui := NewUI(ctx, storeInstance, mockLLM, logger, "test")
 
 	// Test initial state
 	if ui.selectedEventIDs == nil {
@@ -81,7 +81,7 @@ func TestEventSelection(t *testing.T) {
 	logger := log.New(os.Stdout, "[TEST] ", log.LstdFlags)
 	mockLLM := &mockLLMProvider{}
 
-	ui := NewUI(ctx, storeInstance, mockLLM, logger)
+	ui := NewUI(ctx, storeInstance, mockLLM, logger, "test")
 
 	// Create test events by manually setting the events slice
 	ui.events = make([]store.Event, 2)
@@ -141,7 +141,7 @@ func TestCaseCreation(t *testing.T) {
 	logger := log.New(os.Stdout, "[TEST] ", log.LstdFlags)
 	mockLLM := &mockLLMProvider{}
 
-	ui := NewUI(ctx, storeInstance, mockLLM, logger)
+	ui := NewUI(ctx, storeInstance, mockLLM, logger, "test")
 
 	// Create test OCSF event
 	ocsfEvent := &ocsf.Event{
@@ -232,7 +232,7 @@ func TestAddEventsToExistingCase(t *testing.T) {
 	logger := log.New(os.Stdout, "[TEST] ", log.LstdFlags)
 	mockLLM := &mockLLMProvider{}
 
-	ui := NewUI(ctx, storeInstance, mockLLM, logger)
+	ui := NewUI(ctx, storeInstance, mockLLM, logger, "test")
 
 	// Create a test case
 	testCase := store.Case{
@@ -312,7 +312,7 @@ func TestGlobalDeleteKey_ContextSensitive(t *testing.T) {
 	ctx := context.Background()
 	logger := log.New(os.Stdout, "[TEST] ", 0)
 	mock := &mockLLMProvider{}
-	ui := NewUI(ctx, st, mock, logger)
+	ui := NewUI(ctx, st, mock, logger, "test")
 
 	// Prepare one case in sidebar without using updateCasesList (which queues UI updates requiring app.Run).
 	ui.cases = []store.Case{
@@ -355,7 +355,7 @@ func TestEventListDeleteKey_NoSelectionConsumed(t *testing.T) {
 
 	ctx := context.Background()
 	logger := log.New(os.Stdout, "[TEST] ", 0)
-	ui := NewUI(ctx, st, &mockLLMProvider{}, logger)
+	ui := NewUI(ctx, st, &mockLLMProvider{}, logger, "test")
 
 	// Focus events table; ensure no selection and trigger 'd'
 	ui.app.SetFocus(ui.eventList)
@@ -384,7 +384,7 @@ func TestHintsShowDeleteForEventsSelection(t *testing.T) {
 
 	ctx := context.Background()
 	logger := log.New(os.Stdout, "[TEST] ", 0)
-	ui := NewUI(ctx, st, &mockLLMProvider{}, logger)
+	ui := NewUI(ctx, st, &mockLLMProvider{}, logger, "test")
 
 	// Focus events table with a selection so hints include "d:delete"
 	ui.app.SetFocus(ui.eventList)
