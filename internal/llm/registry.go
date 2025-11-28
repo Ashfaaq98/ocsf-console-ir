@@ -35,10 +35,16 @@ func Build(ctx context.Context, cfg ProviderConfig, logger *log.Logger) (LLMProv
 			return nil, err
 		}
 		return p, nil
+	case "synthetic":
+		p, err := NewSynthetic(cfg.Endpoint, cfg.Model, cfg.APIKey, logger)
+		if err != nil {
+			return nil, err
+		}
+		return p, nil
 	case "local_stub", "local", "stub", "":
 		// Local stub provider is deprecated/removed as a selectable runtime provider.
 		// Return an error so callers surface a configurable provider (e.g., "ollama").
-		return nil, fmt.Errorf("local stub provider is deprecated; set provider to 'ollama', 'openrouter', or 'groq'")
+		return nil, fmt.Errorf("local stub provider is deprecated; set provider to 'ollama', 'openrouter', 'groq', or 'synthetic'")
 	default:
 		return nil, fmt.Errorf("unknown LLM provider: %s", cfg.Provider)
 	}
@@ -68,6 +74,8 @@ func normalize(s string) string {
 		return "openrouter"
 	case "Groq", "GROQ":
 		return "groq"
+	case "Synthetic", "SYNTHETIC":
+		return "synthetic"
 	case "LocalStub", "LOCAL", "STUB", "LOCAL_STUB":
 		return "local_stub"
 	default:

@@ -3164,13 +3164,15 @@ var refreshModels func()
 var refreshing int32
 
 	// Provider dropdown
-	provOptions := []string{"ollama", "openrouter", "groq"}
+	provOptions := []string{"ollama", "openrouter", "groq", "synthetic"}
 	provIdx := 0
 	switch strings.ToLower(provider) {
 	case "openrouter":
 		provIdx = 1
 	case "groq":
 		provIdx = 2
+	case "synthetic":
+		provIdx = 3
 	default:
 		provIdx = 0
 	}
@@ -3190,6 +3192,8 @@ var refreshing int32
 						endpointIF.SetText("https://openrouter.ai/api/v1")
 					case "groq":
 						endpointIF.SetText("https://api.groq.com/openai/v1")
+					case "synthetic":
+						endpointIF.SetText("https://api.synthetic.new/openai/v1")
 					case "ollama":
 						endpointIF.SetText("http://localhost:11434")
 					default:
@@ -3212,6 +3216,12 @@ var refreshing int32
 					} else {
 						modelOptions = []string{"(loading...)"}
 					}
+				case "synthetic":
+					if strings.TrimSpace(apiKeyIF.GetText()) == "" && strings.TrimSpace(os.Getenv("SYNTHETIC_API_KEY")) == "" {
+						modelOptions = []string{"(requires api key)"}
+					} else {
+						modelOptions = []string{"(loading...)"}
+					}
 				default:
 					modelOptions = []string{"(loading...)"}
 				}
@@ -3224,6 +3234,8 @@ var refreshing int32
 					cm.updateStatus("Provider set to OpenRouter. Enter API key to load models.")
 				} else if provider == "groq" && strings.TrimSpace(apiKeyIF.GetText()) == "" && strings.TrimSpace(os.Getenv("GROQ_API_KEY")) == "" {
 					cm.updateStatus("Provider set to Groq. Enter API key to load models.")
+				} else if provider == "synthetic" && strings.TrimSpace(apiKeyIF.GetText()) == "" && strings.TrimSpace(os.Getenv("SYNTHETIC_API_KEY")) == "" {
+					cm.updateStatus("Provider set to Synthetic. Enter API key to load models.")
 				} else {
 					cm.updateStatus(fmt.Sprintf("Provider set to %s", provider))
 				}
@@ -3235,7 +3247,10 @@ var refreshing int32
 				strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")) == "") ||
 				(strings.EqualFold(provider, "groq") &&
 				strings.TrimSpace(apiKeyIF.GetText()) == "" &&
-				strings.TrimSpace(os.Getenv("GROQ_API_KEY")) == "")) {
+				strings.TrimSpace(os.Getenv("GROQ_API_KEY")) == "") ||
+				(strings.EqualFold(provider, "synthetic") &&
+				strings.TrimSpace(apiKeyIF.GetText()) == "" &&
+				strings.TrimSpace(os.Getenv("SYNTHETIC_API_KEY")) == "")) {
 				refreshModels()
 			}
 		}()
@@ -3249,6 +3264,8 @@ var refreshing int32
 			endpointIF.SetText("https://openrouter.ai/api/v1")
 		} else if strings.EqualFold(provider, "groq") {
 			endpointIF.SetText("https://api.groq.com/openai/v1")
+		} else if strings.EqualFold(provider, "synthetic") {
+			endpointIF.SetText("https://api.synthetic.new/openai/v1")
 		} else if strings.EqualFold(provider, "ollama") {
 			endpointIF.SetText("http://localhost:11434")
 		}
@@ -3311,7 +3328,8 @@ var refreshing int32
 
 			// If OpenRouter selected without an API key, don't attempt network calls; show helpful placeholder.
 			if (prov == "openrouter" && key == "" && strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")) == "") ||
-			(prov == "groq" && key == "" && strings.TrimSpace(os.Getenv("GROQ_API_KEY")) == "") {
+			(prov == "groq" && key == "" && strings.TrimSpace(os.Getenv("GROQ_API_KEY")) == "") ||
+			(prov == "synthetic" && key == "" && strings.TrimSpace(os.Getenv("SYNTHETIC_API_KEY")) == "") {
 			// Non-blocking UI update to avoid deadlock in button callback path
 			cm.app.QueueUpdate(func() {
 				modelOptions = []string{"(requires api key)"}
@@ -3321,6 +3339,8 @@ var refreshing int32
 				}
 				if prov == "groq" {
 					cm.updateStatus("Groq requires an API key to list models")
+				} else if prov == "synthetic" {
+					cm.updateStatus("Synthetic requires an API key to list models")
 				} else {
 					cm.updateStatus("OpenRouter requires an API key to list models")
 				}
@@ -3453,7 +3473,10 @@ var refreshing int32
 				strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")) == "") ||
 				(strings.EqualFold(provider, "groq") &&
 				strings.TrimSpace(apiKeyIF.GetText()) == "" &&
-				strings.TrimSpace(os.Getenv("GROQ_API_KEY")) == "")) {
+				strings.TrimSpace(os.Getenv("GROQ_API_KEY")) == "") ||
+				(strings.EqualFold(provider, "synthetic") &&
+				strings.TrimSpace(apiKeyIF.GetText()) == "" &&
+				strings.TrimSpace(os.Getenv("SYNTHETIC_API_KEY")) == "")) {
 				refreshModels()
 			}
 		}()

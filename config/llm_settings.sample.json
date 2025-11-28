@@ -1,5 +1,5 @@
 {
-  "_comment": "Supported providers: ollama, openrouter, groq",
+  "_comment": "Supported providers: ollama, openrouter, groq, synthetic",
   "active": {
     "provider": "ollama",
     "endpoint": "http://localhost:11434",
@@ -20,6 +20,13 @@
       "endpoint": "https://api.groq.com/openai/v1",
       "model": "llama-3.3-70b-versatile",
       "api_key": "your-groq-api-key",
+      "extra": {}
+    },
+    "_synthetic": {
+      "provider": "synthetic",
+      "endpoint": "https://api.synthetic.new/openai/v1",
+      "model": "gpt-3.5-turbo",
+      "api_key": "your-synthetic-api-key",
       "extra": {}
     }
   },

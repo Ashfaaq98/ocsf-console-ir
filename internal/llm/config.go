@@ -10,7 +10,7 @@ import (
 
 // ProviderConfig defines runtime-selectable LLM provider settings.
 type ProviderConfig struct {
-	Provider string            `json:"provider"` // "ollama" | "openrouter" | "groq"
+	Provider string            `json:"provider"` // "ollama" | "openrouter" | "groq" | "synthetic"
 	Endpoint string            `json:"endpoint"` // e.g., "http://localhost:11434" (for Ollama)
 	Model    string            `json:"model"`    // e.g., "qwen3:0.6b"
 	APIKey   string            `json:"api_key"`  // optional for cloud providers
@@ -69,6 +69,8 @@ func LoadSettings(path string) (Settings, error) {
 			s.Active.Endpoint = "https://openrouter.ai/api/v1"
 		case "groq":
 			s.Active.Endpoint = "https://api.groq.com/openai/v1"
+		case "synthetic":
+			s.Active.Endpoint = "https://api.synthetic.new/openai/v1"
 		}
 	}
 	if s.Active.Model == "" && s.Active.Provider == "ollama" {
