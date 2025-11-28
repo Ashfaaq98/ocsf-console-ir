@@ -2511,7 +2511,7 @@ func (ui *UI) setTheme(name string) {
 	}
 
 	// Direct status update; we're on the UI goroutine
-	ui.setStatusDirect("[%s]Theme: %s[-:-:-]", ui.theme.TagAccent, strings.Title(strings.ReplaceAll(ui.themeName, "-", " ")))
+	ui.setStatusDirect("[%s]Theme:%s[-:-:-]", ui.theme.TagAccent, strings.Title(strings.ReplaceAll(ui.themeName, "-", " ")))
 	if ui.logger != nil {
 		ui.logger.Printf("Theme applied: %s", ui.themeName)
 	}
@@ -4177,11 +4177,11 @@ func (ui *UI) buildStatusMain(message string) string {
 			if maxPages == 0 {
 				maxPages = 1
 			}
-			parts = append(parts, fmt.Sprintf("[%s]Page:[-] %d/%d [%s]Tot:[-] %d", accent, s.pageIndex+1, maxPages, accent, s.totalCount))
+			parts = append(parts, fmt.Sprintf("[%s]Page:[-]%d/%d  [%s]Tot:[-]%d", accent, s.pageIndex+1, maxPages, accent, s.totalCount))
 		}
 	}
 
-	return strings.Join(parts, " ")
+	return strings.Join(parts, "  ")
 }
 
 // openCaseManagement opens the Case Management TUI for the selected case (Enter on a case).
