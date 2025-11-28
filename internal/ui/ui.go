@@ -301,6 +301,55 @@ func themeClaude() Theme {
 	}
 }
 
+func themeGemini() Theme {
+	// Gemini theme: "Google Signature" - Bold, high-contrast, and stylish.
+	// Uses the core Google palette (Blue, Red, Yellow, Green) against a sleek dark background.
+	// This theme is designed to pop and feel distinctively "Google".
+	return Theme{
+		Bg:            hex("#000000"), // True Black for maximum contrast
+		Surface:       hex("#121212"), // Material Dark Surface
+		Border:        hex("#5f6368"), // Google Grey 600 (Subtle borders)
+		FocusBorder:   hex("#4285f4"), // Google Blue 500 (Focus pops)
+		SelectionBg:   hex("#4285f4"), // Google Blue 500
+		SelectionFg:   hex("#ffffff"), // White text on selection
+		TextPrimary:   hex("#ffffff"), // Pure White
+		TextMuted:     hex("#9aa0a6"), // Google Grey 400
+		Accent:        hex("#fbbc04"), // Google Yellow 500 (Accents)
+		Success:       hex("#34a853"), // Google Green 500
+		Warning:       hex("#fbbc04"), // Google Yellow 500
+		Error:         hex("#ea4335"), // Google Red 500
+		Header:        hex("#ea4335"), // Google Red 500 (Distinctive Header)
+
+		// Table colors
+		TableHeader:   hex("#ea4335"), // Red Header
+		TableHeaderBg: hex("#202124"), // Google Dark Grey
+		TableRow:      hex("#e8eaed"), // Google Grey 100
+		TableRowMuted: hex("#9aa0a6"), // Google Grey 400
+		TableZebra1:   hex("#171717"), // Darker Zebra
+		TableZebra2:   hex("#000000"), // Matches Bg
+
+		// Severity - Mapping Google Colors to severities
+		SeverityCritical: hex("#ea4335"), // Red
+		SeverityHigh:     hex("#f9ab00"), // Yellow/Orange-ish
+		SeverityMedium:   hex("#fbbc04"), // Yellow
+		SeverityLow:      hex("#34a853"), // Green
+		SeverityInfo:     hex("#4285f4"), // Blue
+
+		// Tag colors
+		TagTextPrimary:      "#ffffff",
+		TagMuted:            "#9aa0a6",
+		TagAccent:           "#fbbc04",
+		TagSuccess:          "#34a853",
+		TagWarning:          "#fbbc04",
+		TagError:            "#ea4335",
+		TagSeverityCritical: "#ea4335",
+		TagSeverityHigh:     "#f9ab00",
+		TagSeverityMedium:   "#fbbc04",
+		TagSeverityLow:      "#34a853",
+		TagSeverityInfo:     "#4285f4",
+	}
+}
+
 func detectTrueColor() bool {
 	// Best-effort detection without initializing screen
 	ct := strings.ToLower(os.Getenv("COLORTERM"))
@@ -2408,7 +2457,8 @@ func (ui *UI) cycleTheme() {
 	next := map[string]string{
 		"dark":          "light",
 		"light":         "claude",
-		"claude":        "neon",
+		"claude":        "gemini",
+		"gemini":        "neon",
 		"neon":          "cb-safe",
 		"cb-safe":       "high-contrast",
 		"high-contrast": "dark",
@@ -2443,6 +2493,9 @@ func (ui *UI) setTheme(name string) {
 	case "claude":
 		ui.themeName = "claude"
 		ui.theme = themeClaude()
+	case "gemini":
+		ui.themeName = "gemini"
+		ui.theme = themeGemini()
 	case "cb-safe":
 		ui.themeName = "cb-safe"
 		ui.theme = themeColorblindSafe()
