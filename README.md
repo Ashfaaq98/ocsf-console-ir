@@ -1,20 +1,24 @@
 # OCSF Console IR
 
-A terminal-first OCSF-based incident response manager for security analysts.
-
 ![Console IR Landing](assets/landing.png)
 
 
 ## **Overview**
+
+OCSF Console IR is a terminal-first incident response manager designed for security analysts. It leverages the OCSF (Open Cybersecurity Schema Framework) standard to provide a unified platform for event ingestion, case management, and AI-assisted analysis.
+
+## **Features**
 
 - OCSF-native event ingestion
 - Keyboard-first TUI for cases & events
 - AI assisted Case Management
 - Plugin-based enrichment via Redis Streams
 - SQLite storage with FTS
-- Pluggable LLM providers for summaries
+- Pluggable LLM providers for summaries and copilot
+
 
 ### Demo - Short walkthrough
+
 A quick tour of the TUI.
 
 [![TUI walkthrough](assets/demo.gif)](assets/demo.mp4)

@@ -34,7 +34,7 @@ We aim to acknowledge within 72 hours and provide a timeline for remediation aft
 - Vulnerabilities in the core CLI, TUI, internal packages, and official plugins (plugins/*).
 - Misconfigurations or unsafe defaults that materially increase security risk.
 
-## Out of Scope (non-exhaustive)
+## Out of Scope
 
 - Social engineering attacks
 - DoS requiring unrealistic resource exhaustion or non-default flags
