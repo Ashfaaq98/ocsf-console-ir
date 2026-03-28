@@ -36,3 +36,7 @@ bin/*
 exports/**
 data/incoming/**/*.jsonl
 config/llm_settings.json
+
+# Local-only workspace for agent notes, reports, and scratch files
+.local/
+.codex
