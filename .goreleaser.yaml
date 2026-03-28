@@ -94,6 +94,14 @@ dockers:
     goarch: amd64
     use: buildx
     dockerfile: Dockerfile
+    extra_files:
+      - Dockerfile
+      - go.mod
+      - go.sum
+      - main.go
+      - cmd
+      - internal
+      - config
     image_templates:
       - "ghcr.io/ashfaaq98/console-ir:{{ .Tag }}-amd64"
     build_flag_templates:
@@ -111,6 +119,14 @@ dockers:
     goarch: arm64
     use: buildx
     dockerfile: Dockerfile
+    extra_files:
+      - Dockerfile
+      - go.mod
+      - go.sum
+      - main.go
+      - cmd
+      - internal
+      - config
     image_templates:
       - "ghcr.io/ashfaaq98/console-ir:{{ .Tag }}-arm64"
     build_flag_templates:
