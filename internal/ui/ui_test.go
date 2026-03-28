@@ -4,14 +4,14 @@ import (
 	"context"
 	"log"
 	"os"
+	"strings"
 	"testing"
 	"time"
-	"strings"
 
-	"github.com/gdamore/tcell/v2"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
+	"github.com/gdamore/tcell/v2"
 )
 
 // mockLLMProvider implements llm.LLMProvider for testing
@@ -33,7 +33,7 @@ func (m *mockLLMProvider) GenerateRecommendations(ctx context.Context, case_ sto
 	return []string{"Mock recommendation"}, nil
 }
 
-func TestNewUI(t *testing.T, "test") {
+func TestNewUI(t *testing.T) {
 	// Create temporary database
 	tmpDB := "./test_console_ir.db"
 	defer os.Remove(tmpDB)
@@ -271,7 +271,7 @@ func TestAddEventsToExistingCase(t *testing.T) {
 		Status:      "open",
 		EventCount:  0,
 	}
-	
+
 	ui.selectedEventIDs = map[string]bool{eventID: true}
 
 	// Test adding events to existing case

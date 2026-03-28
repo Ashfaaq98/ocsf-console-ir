@@ -1,0 +1,169 @@
+version: 2
+
+project_name: console-ir
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: console-ir
+    main: ./main.go
+    binary: console-ir
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    flags:
+      - -trimpath
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w -X main.Version={{ .Version }} -X main.Commit={{ .ShortCommit }} -X main.BuildTime={{ .Date }}
+
+archives:
+  - id: console-ir
+    ids:
+      - console-ir
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ if eq .Os "darwin" }}macOS{{ else if eq .Os "linux" }}Linux{{ else }}{{ .Os }}{{ end }}_{{ .Arch }}
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - README.md
+      - LICENSE
+      - CHANGELOG.md
+      - config/llm_settings.sample.json
+      - docs/**/*
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+sboms:
+  - artifacts: archive
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+  groups:
+    - title: Features
+      regexp: '^feat(\(.+\))?!?:'
+    - title: Fixes
+      regexp: '^fix(\(.+\))?!?:'
+    - title: Performance
+      regexp: '^perf(\(.+\))?!?:'
+    - title: Other Changes
+
+brews:
+  - name: console-ir
+    repository:
+      owner: Ashfaaq98
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    skip_upload: auto
+    homepage: "https://github.com/Ashfaaq98/ocsf-console-ir"
+    description: "Terminal-first OCSF-native incident response manager for security analysts"
+    license: "AGPL-3.0-only"
+    install: |
+      bin.install "console-ir"
+    test: |
+      system "#{bin}/console-ir", "--version"
+
+dockers:
+  - id: console-ir-amd64
+    goos: linux
+    goarch: amd64
+    use: buildx
+    dockerfile: Dockerfile
+    image_templates:
+      - "ghcr.io/ashfaaq98/console-ir:{{ .Tag }}-amd64"
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--build-arg=VERSION={{ .Version }}"
+      - "--build-arg=COMMIT={{ .ShortCommit }}"
+      - "--build-arg=BUILD_DATE={{ .Date }}"
+      - "--label=org.opencontainers.image.title=console-ir"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.source=https://github.com/Ashfaaq98/ocsf-console-ir"
+  - id: console-ir-arm64
+    goos: linux
+    goarch: arm64
+    use: buildx
+    dockerfile: Dockerfile
+    image_templates:
+      - "ghcr.io/ashfaaq98/console-ir:{{ .Tag }}-arm64"
+    build_flag_templates:
+      - "--platform=linux/arm64"
+      - "--build-arg=VERSION={{ .Version }}"
+      - "--build-arg=COMMIT={{ .ShortCommit }}"
+      - "--build-arg=BUILD_DATE={{ .Date }}"
+      - "--label=org.opencontainers.image.title=console-ir"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.created={{ .Date }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
+      - "--label=org.opencontainers.image.source=https://github.com/Ashfaaq98/ocsf-console-ir"
+
+docker_manifests:
+  - name_template: "ghcr.io/ashfaaq98/console-ir:{{ .Tag }}"
+    image_templates:
+      - "ghcr.io/ashfaaq98/console-ir:{{ .Tag }}-amd64"
+      - "ghcr.io/ashfaaq98/console-ir:{{ .Tag }}-arm64"
+  - name_template: "ghcr.io/ashfaaq98/console-ir:latest"
+    skip_push: auto
+    image_templates:
+      - "ghcr.io/ashfaaq98/console-ir:{{ .Tag }}-amd64"
+      - "ghcr.io/ashfaaq98/console-ir:{{ .Tag }}-arm64"
+
+release:
+  github:
+    owner: Ashfaaq98
+    name: ocsf-console-ir
+  name_template: "v{{ .Version }}"
+  make_latest: "{{ not .Prerelease }}"
+  prerelease: auto
+  header: |
+    ## Quick Install
+
+    ### Homebrew
+
+    ```bash
+    brew install Ashfaaq98/tap/console-ir
+    ```
+
+    ### curl installer
+
+    ```bash
+    curl -sSfL https://raw.githubusercontent.com/Ashfaaq98/ocsf-console-ir/main/scripts/install.sh | bash
+    ```
+
+    ### Docker
+
+    ```bash
+    docker run --rm -it ghcr.io/ashfaaq98/console-ir:latest --help
+    ```
+  footer: |
+    **Full Changelog**: https://github.com/Ashfaaq98/ocsf-console-ir/compare/{{ .PreviousTag }}...{{ .Tag }}
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"

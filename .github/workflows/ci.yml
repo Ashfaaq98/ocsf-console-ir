@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run root module tests
+        run: go test ./...
+
+      - name: Build plugin modules
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r plugin_dir; do
+            echo "Building plugin module: ${plugin_dir}"
+            (cd "${plugin_dir}" && go build ./...)
+          done < <(find plugins -mindepth 1 -maxdepth 1 -type d | sort)

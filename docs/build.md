@@ -175,8 +175,12 @@ If you see errors like undefined: syscall.SYS_IOCTL:
 For continuous integration or release packaging:
 
 ```bash
-make release-build
+goreleaser check
+goreleaser release --snapshot --clean
 ```
+
+Tagged releases are published by GitHub Actions via `.github/workflows/release.yml`.
+For the step-by-step release checklist, see `docs/release-playbook.md`.
 
 ---
 

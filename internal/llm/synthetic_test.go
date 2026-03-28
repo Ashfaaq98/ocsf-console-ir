@@ -50,6 +50,7 @@ func TestSyntheticProviderDefaultEndpoint(t *testing.T) {
 
 func TestSyntheticProviderNoAPIKey(t *testing.T) {
 	// Test NewSynthetic without API key should fail
+	t.Setenv("SYNTHETIC_API_KEY", "")
 	_, err := NewSynthetic("https://api.synthetic.new/openai/v1", "gpt-3.5-turbo", "", nil)
 	if err == nil {
 		t.Fatal("Expected error when creating Synthetic provider without API key")

@@ -5,6 +5,17 @@ bin/console-ir-macos-arm64
 bin/console-ir.exe
 bin/*-nocgo*
 bin/*
+dist/
+coverage.out
+coverage.html
+
+# Built plugin executables
+plugins/geoip/geoip
+plugins/intelowl/intelowl
+plugins/llm/llm
+plugins/misp/misp
+plugins/opencti/opencti
+plugins/whois/whois
 
 # Database files
 console-ir.db

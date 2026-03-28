@@ -1,5 +1,8 @@
 # OCSF Console IR
 
+[![Release](https://img.shields.io/github/v/release/Ashfaaq98/ocsf-console-ir?display_name=tag)](https://github.com/Ashfaaq98/ocsf-console-ir/releases)
+[![Docker](https://img.shields.io/badge/docker-ghcr.io%2Fashfaaq98%2Fconsole--ir-2496ED?logo=docker&logoColor=white)](https://github.com/Ashfaaq98/ocsf-console-ir/pkgs/container/console-ir)
+
 ![Console IR Landing](assets/landing.png)
 
 
@@ -16,6 +19,39 @@ OCSF Console IR is a terminal-first incident response manager designed for secur
 - SQLite storage with FTS
 - Pluggable LLM providers for summaries and copilot
 
+## **Installation**
+
+### Homebrew (macOS / Linux)
+
+```bash
+brew install Ashfaaq98/tap/console-ir
+```
+
+### curl installer (Linux / macOS)
+
+```bash
+curl -sSfL https://raw.githubusercontent.com/Ashfaaq98/ocsf-console-ir/main/scripts/install.sh | bash
+```
+
+### Docker
+
+```bash
+docker run --rm -it ghcr.io/ashfaaq98/console-ir:latest --help
+```
+
+```bash
+# Start the headless runtime with HTTP ingest on port 8080 and persistent data
+docker run --rm -it -p 8080:8080 -v $(pwd)/data:/data ghcr.io/ashfaaq98/console-ir:latest
+```
+
+### Build from source
+
+```bash
+git clone https://github.com/Ashfaaq98/ocsf-console-ir.git
+cd ocsf-console-ir
+make build
+./bin/console-ir serve
+```
 
 ### Demo - Short walkthrough
 
@@ -62,19 +98,19 @@ Or headless:
 
 #### 1. CLI file ingest
 
-Run a JSONL file directly: `./bin/console-ir ingest <file>` — see [`console-ir/cmd/ingest.go`](console-ir/cmd/ingest.go).
+Run a JSONL file directly: `./bin/console-ir ingest <file>` — see [cmd/ingest.go](cmd/ingest.go).
 
 #### 2. Folder drop-in
 
-Drop files into `data/incoming`; the folder watcher ingests new files automatically (see [`console-ir/internal/ingest/folder.go`](console-ir/internal/ingest/folder.go)).
+Drop files into `data/incoming`; the folder watcher ingests new files automatically (see [internal/ingest/folder.go](internal/ingest/folder.go)).
 
 #### 3. HTTP ingestion
 
-Enable the optional HTTP endpoint to POST events into the pipeline (see [`console-ir/internal/ingest/http_ingest.go`](console-ir/internal/ingest/http_ingest.go)).
+Enable the optional HTTP endpoint to POST events into the pipeline (see [internal/ingest/http_ingest.go](internal/ingest/http_ingest.go)).
 
 #### 4. Live / stream ingestion
 
-Real-time OCSF inputs and adapters publish to Redis Streams for processing (see [`console-ir/internal/ingest/live.go`](console-ir/internal/ingest/live.go) and [`console-ir/internal/ingest/ocsf.go`](console-ir/internal/ingest/ocsf.go)).
+Real-time OCSF inputs and adapters publish to Redis Streams for processing (see [internal/ingest/live.go](internal/ingest/live.go) and [internal/ingest/ocsf.go](internal/ingest/ocsf.go)).
 
 ## **Plugins**
 
@@ -95,6 +131,7 @@ Development is supported via [`.devcontainer/devcontainer.json`](.devcontainer/d
 - Ensure Redis is reachable at the configured URL.
 - If TUI fails, run with --no-tui or use a native terminal.
 - Build issues: run `go mod download` and `make build`.
+- Docker image runs the app in headless mode and enables HTTP ingest on `0.0.0.0:8080` by default.
 
 ## **Contributing**
 

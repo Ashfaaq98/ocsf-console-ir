@@ -9,13 +9,16 @@ import (
 	"github.com/Ashfaaq98/ocsf-console-ir/cmd"
 )
 
-// These are set via -ldflags "-X main.Version=... -X main.BuildTime=...".
-var Version = "dev"
-var BuildTime = ""
+// These are set via -ldflags "-X main.Version=... -X main.Commit=... -X main.BuildTime=...".
+var (
+	Version   = "dev"
+	Commit    = "none"
+	BuildTime = "unknown"
+)
 
 func main() {
 	// Wire build metadata into the CLI so `--version` and `version` subcommand work.
-	cmd.SetVersion(Version, BuildTime)
+	cmd.SetVersion(Version, Commit, BuildTime)
 
 	// Set up context with cancellation for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())

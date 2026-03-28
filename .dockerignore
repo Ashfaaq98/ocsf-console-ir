@@ -1,0 +1,17 @@
+.git
+.github
+.codex
+.local
+bin
+dist
+release-*
+coverage.out
+coverage.html
+logs
+exports
+plugins/geoip/geoip
+plugins/intelowl/intelowl
+plugins/llm/llm
+plugins/misp/misp
+plugins/opencti/opencti
+plugins/whois/whois

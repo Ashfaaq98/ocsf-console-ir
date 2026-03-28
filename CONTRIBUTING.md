@@ -13,10 +13,10 @@ This document explains the workflow, coding standards, and how to run checks loc
 
 ## Project layout
 
-- CLI and commands: [cmd/](cmd/README.md:1)
-- Core packages: [internal/](internal/README.md:1)
-- Plugins: [plugins/](plugins/README.md:1)
-- Docs: [docs/](docs/README.md:1)
+- CLI and commands: `cmd/`
+- Core packages: `internal/`
+- Plugins: `plugins/`
+- Docs: `docs/`
 
 ## Prerequisites
 

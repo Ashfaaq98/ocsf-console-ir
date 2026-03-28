@@ -8,15 +8,17 @@ import (
 
 var (
 	appVersion string
+	appCommit  string
 	buildTime  string
 )
 
 // SetVersion sets version/build metadata and wires Cobra's --version flag.
-func SetVersion(v, bt string) {
+func SetVersion(v, c, bt string) {
 	appVersion = v
+	appCommit = c
 	buildTime = bt
-	// Enable --version flag output via Cobra when Version is non-empty
-	rootCmd.Version = v
+	rootCmd.Version = buildVersionString(v, c, bt)
+	rootCmd.SetVersionTemplate("console-ir {{.Version}}\n")
 }
 
 // GetVersion returns the current version string
@@ -35,19 +37,30 @@ func GetBuildTime() string {
 	return buildTime
 }
 
+func getCommit() string {
+	if appCommit == "" {
+		return "none"
+	}
+	return appCommit
+}
+
+func buildVersionString(v, c, bt string) string {
+	return fmt.Sprintf("%s (%s) built %s", defaultValue(v, "dev"), defaultValue(c, "none"), defaultValue(bt, "unknown"))
+}
+
+func defaultValue(value, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
 // versionCmd prints detailed version information.
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print version information",
 	Run: func(cmd *cobra.Command, args []string) {
-		v := appVersion
-		if v == "" {
-			v = "dev"
-		}
-		fmt.Printf("Console-IR %s\n", v)
-		if buildTime != "" {
-			fmt.Printf("Build Time: %s\n", buildTime)
-		}
+		fmt.Printf("console-ir %s\n", buildVersionString(GetVersion(), getCommit(), GetBuildTime()))
 	},
 }
 
