@@ -72,8 +72,8 @@ func (p *OpenCTIPlugin) fetchThreatIntelligence(ctx context.Context, obs Observa
 	// Determine threat level based on score and confidence
 	intel.ThreatLevel = p.calculateThreatLevel(primaryObservable.Score, primaryObservable.Confidence)
 	
-	// Extract indicators
-	for _, indicator := range primaryObservable.Indicators {
+	// Extract indicators from relay connection
+	for _, indicator := range primaryObservable.Indicators.Items() {
 		if indicator.Confidence >= p.config.MinConfidence {
 			intel.Indicators = append(intel.Indicators, indicator)
 		}
@@ -271,7 +271,7 @@ func (p *OpenCTIPlugin) convertToEnrichmentFields(obs Observable, intel *ThreatI
 			if indicator.Name != "" {
 				indicatorNames = append(indicatorNames, indicator.Name)
 			}
-			indicatorLabels = append(indicatorLabels, indicator.Labels...)
+			indicatorLabels = append(indicatorLabels, indicator.Labels.Values()...)
 		}
 		
 		if len(indicatorNames) > 0 {
@@ -387,7 +387,7 @@ func (p *OpenCTIPlugin) generateMockThreatIntelligence(obs Observable) *ThreatIn
 			ID:          "indicator--mock-1",
 			Name:        fmt.Sprintf("Mock indicator for %s", obs.Value),
 			Pattern:     fmt.Sprintf("[%s:value = '%s']", obs.Type, obs.Value),
-			Labels:      []string{"malicious-activity", "dry-run"},
+			Labels:      LabelConnection{Edges: []LabelEdge{{Node: struct{ Value string `json:"value"` }{Value: "malicious-activity"}}, {Node: struct{ Value string `json:"value"` }{Value: "dry-run"}}}},
 			Confidence:  75,
 			ValidFrom:   now.AddDate(0, -1, 0),
 			ValidUntil:  now.AddDate(0, 1, 0),

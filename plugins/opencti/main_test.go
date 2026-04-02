@@ -11,6 +11,15 @@ import (
 	"time"
 )
 
+// testLabels is a test helper that builds a LabelConnection from flat strings.
+func testLabels(values ...string) LabelConnection {
+	edges := make([]LabelEdge, len(values))
+	for i, v := range values {
+		edges[i] = LabelEdge{Node: struct{ Value string `json:"value"` }{Value: v}}
+	}
+	return LabelConnection{Edges: edges}
+}
+
 // MockOpenCTIServer creates a mock OpenCTI server for testing
 func NewMockOpenCTIServer() *httptest.Server {
 	mux := http.NewServeMux()
@@ -399,7 +408,7 @@ func TestConvertToEnrichmentFields(t *testing.T) {
 		Indicators: []STIXIndicator{
 			{
 				Name:   "Malicious IP",
-				Labels: []string{"malicious-activity"},
+				Labels: testLabels("malicious-activity"),
 			},
 		},
 		AttackPatterns: []STIXAttackPattern{
@@ -528,7 +537,7 @@ func BenchmarkEnrichmentFieldConversion(b *testing.B) {
 			{Name: "APT28", Aliases: []string{"Fancy Bear"}},
 		},
 		Indicators: []STIXIndicator{
-			{Name: "Test Indicator", Labels: []string{"malicious"}},
+			{Name: "Test Indicator", Labels: testLabels("malicious")},
 		},
 		QueryTime: time.Now(),
 	}
