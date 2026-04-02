@@ -47,7 +47,7 @@ func main() {
 		// MISP Configuration
 		mispURL          = flag.String("misp-url", "", "MISP base URL (required)")
 		apiKey           = flag.String("api-key", "", "MISP API key (required)")
-		verifyTLS        = flag.Bool("verify-tls", true, "Verify TLS certificates")
+		skipTLSVerify    = flag.Bool("skip-tls-verify", false, "Skip TLS certificate verification (not recommended for production)")
 		timeout          = flag.Duration("timeout", 30*time.Second, "MISP API timeout")
 		rateLimitRPS     = flag.Int("rate-limit-rps", 10, "MISP API requests per second")
 		burstLimit       = flag.Int("burst-limit", 20, "Rate limit burst size")
@@ -145,7 +145,7 @@ func main() {
 	config := MISPConfig{
 		BaseURL:        *mispURL,
 		APIKey:         *apiKey,
-		VerifyTLS:      *verifyTLS,
+		SkipTLSVerify:  *skipTLSVerify,
 		Timeout:        *timeout,
 		RateLimitRPS:   *rateLimitRPS,
 		BurstLimit:     *burstLimit,

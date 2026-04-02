@@ -31,5 +31,9 @@ VOLUME ["/data"]
 WORKDIR /data
 EXPOSE 8080
 
+# VULN-9: When binding to 0.0.0.0, a bearer token is now required.
+# Set INGEST_TOKEN when running: docker run -e INGEST_TOKEN=your-secret ...
+ENV INGEST_TOKEN=""
+
 ENTRYPOINT ["/console-ir"]
 CMD ["serve", "--no-tui", "--http-ingest-enable", "--http-ingest-bind", "0.0.0.0:8080"]

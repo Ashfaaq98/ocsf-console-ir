@@ -100,13 +100,13 @@ type RealIntelOwlClient struct {
 }
 
 type realClientOpts struct {
-	BaseURL    string
-	Token      string
-	VerifyTLS  bool
-	Timeout    time.Duration
-	RPS        int
-	Burst      int
-	Logger     *log.Logger
+	BaseURL       string
+	Token         string
+	SkipTLSVerify bool
+	Timeout       time.Duration
+	RPS           int
+	Burst         int
+	Logger        *log.Logger
 }
 
 func NewRealIntelOwlClient(opts realClientOpts) *RealIntelOwlClient {
@@ -115,8 +115,9 @@ func NewRealIntelOwlClient(opts realClientOpts) *RealIntelOwlClient {
 		MaxIdleConnsPerHost: 5,
 		IdleConnTimeout:     30 * time.Second,
 	}
-	if !opts.VerifyTLS {
+	if opts.SkipTLSVerify {
 		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec
+		opts.Logger.Println("WARNING: TLS certificate verification disabled — not recommended for production")
 	}
 	if opts.Timeout == 0 {
 		opts.Timeout = 30 * time.Second

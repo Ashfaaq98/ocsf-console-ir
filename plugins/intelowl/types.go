@@ -21,7 +21,7 @@ type IntelOwlConfig struct {
 	// IntelOwl API
 	BaseURL   string
 	Token     string
-	VerifyTLS bool
+	SkipTLSVerify bool
 	Timeout   time.Duration
 
 	// Rate limiting

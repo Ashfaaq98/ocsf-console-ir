@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // AuditEntry represents an audit log entry
@@ -153,7 +155,7 @@ func (s *Store) migrateNotesTable() error {
 // AddAuditEntry adds an audit entry to the database
 func (s *Store) AddAuditEntry(ctx context.Context, entry AuditEntry) error {
 	if entry.ID == "" {
-		entry.ID = fmt.Sprintf("audit_%d", time.Now().UnixNano())
+		entry.ID = "audit_" + uuid.New().String()
 	}
 	if entry.Timestamp.IsZero() {
 		entry.Timestamp = time.Now()
@@ -261,7 +263,7 @@ func (s *Store) AddNote(ctx context.Context, note Note) (string, error) {
 	}
 
 	if note.ID == "" {
-		note.ID = fmt.Sprintf("note_%d", time.Now().UnixNano())
+		note.ID = "note_" + uuid.New().String()
 		note.CreatedAt = time.Now()
 	}
 	if note.CreatedAt.IsZero() {

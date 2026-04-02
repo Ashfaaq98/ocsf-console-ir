@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -58,13 +59,19 @@ func NewHTTPIngestServer(opts HTTPIngestOptions) (*HTTPIngestServer, error) {
 	if opts.MaxBodyBytes <= 0 {
 		opts.MaxBodyBytes = 10 * 1024 * 1024 // 10 MiB
 	}
+
+	// VULN-9: Require bearer token when binding to non-localhost addresses
+	if opts.Token == "" && !isLocalhostBind(opts.Bind) {
+		return nil, fmt.Errorf("http ingest: --http-ingest-token is required when binding to non-localhost address %q", opts.Bind)
+	}
+
 	var logger *log.Logger
 	if opts.Logger != nil {
 		logger = opts.Logger
 	} else {
 		logger = log.New(os.Stderr, "[http-ingest] ", log.LstdFlags)
 	}
-	if err := os.MkdirAll(opts.Dir, 0755); err != nil {
+	if err := os.MkdirAll(opts.Dir, 0700); err != nil {
 		return nil, fmt.Errorf("create ingest dir: %w", err)
 	}
 	var lim *simpleLimiter
@@ -136,7 +143,9 @@ func (h *HTTPIngestServer) handleIngest(w http.ResponseWriter, r *http.Request) 
 	// Basic bearer auth
 	if h.opts.Token != "" {
 		auth := r.Header.Get("Authorization")
-		if !strings.HasPrefix(auth, "Bearer ") || strings.TrimSpace(strings.TrimPrefix(auth, "Bearer ")) != h.opts.Token {
+		provided := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+		// VULN-3: Use constant-time comparison to prevent timing attacks
+		if !strings.HasPrefix(auth, "Bearer ") || subtle.ConstantTimeCompare([]byte(provided), []byte(h.opts.Token)) != 1 {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="console-ir"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
@@ -364,4 +373,13 @@ func remoteIP(addr string) string {
 		return addr[:i]
 	}
 	return addr
+}
+
+// isLocalhostBind returns true if the bind address is a localhost address.
+func isLocalhostBind(bind string) bool {
+	host, _, err := net.SplitHostPort(bind)
+	if err != nil {
+		host = bind
+	}
+	return host == "" || host == "127.0.0.1" || host == "localhost" || host == "::1"
 }

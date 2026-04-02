@@ -45,7 +45,7 @@ func main() {
 		// IntelOwl configuration
 		owlURL     = flag.String("intelowl-url", "", "IntelOwl base URL")
 		apiToken   = flag.String("api-key", "", "IntelOwl API token")
-		verifyTLS  = flag.Bool("verify-tls", true, "Verify TLS certificates")
+		skipTLSVerify  = flag.Bool("skip-tls-verify", false, "Skip TLS certificate verification (not recommended for production)")
 		timeout    = flag.Duration("timeout", 30*time.Second, "IntelOwl API timeout")
 
 		// Limits
@@ -97,7 +97,7 @@ func main() {
 	config := IntelOwlConfig{
 		BaseURL:        *owlURL,
 		Token:          *apiToken,
-		VerifyTLS:      *verifyTLS,
+		SkipTLSVerify:  *skipTLSVerify,
 		Timeout:        *timeout,
 		RateLimitRPS:   *rateLimitRPS,
 		BurstLimit:     *burstLimit,
@@ -156,7 +156,7 @@ func main() {
 				plugin.intelClient = NewRealIntelOwlClient(realClientOpts{
 					BaseURL:   plugin.config.BaseURL,
 					Token:     plugin.config.Token,
-					VerifyTLS: plugin.config.VerifyTLS,
+					SkipTLSVerify: plugin.config.SkipTLSVerify,
 					Timeout:   plugin.config.Timeout,
 					RPS:       plugin.config.RateLimitRPS,
 					Burst:     plugin.config.BurstLimit,

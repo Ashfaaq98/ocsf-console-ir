@@ -127,8 +127,9 @@ func NewMISPClient(config MISPConfig, logger *log.Logger) (*MISPClient, error) {
 		IdleConnTimeout:     30 * time.Second,
 	}
 	
-	if !config.VerifyTLS {
-		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	if config.SkipTLSVerify {
+		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec
+		logger.Println("WARNING: TLS certificate verification disabled — not recommended for production")
 	}
 	
 	httpClient := &http.Client{

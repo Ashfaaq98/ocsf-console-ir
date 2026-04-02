@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // ProviderConfig defines runtime-selectable LLM provider settings.
@@ -79,6 +81,17 @@ func LoadSettings(path string) (Settings, error) {
 	if s.Active.Extra == nil {
 		s.Active.Extra = map[string]string{}
 	}
+
+	// VULN-1: Prefer API key from environment variable over file
+	if envKey := os.Getenv("CONSOLE_IR_LLM_API_KEY"); envKey != "" {
+		s.Active.APIKey = envKey
+	}
+
+	// VULN-5: Validate endpoint to prevent SSRF
+	if err := ValidateEndpoint(s.Active.Endpoint); err != nil {
+		return Settings{}, fmt.Errorf("invalid LLM endpoint: %w", err)
+	}
+
 	return s, nil
 }
 
@@ -88,15 +101,55 @@ func SaveSettings(path string, s Settings) error {
 		return errors.New("empty settings path")
 	}
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("mk settings dir: %w", err)
 	}
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal settings: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("write settings: %w", err)
 	}
 	return nil
+}
+
+// blockedHosts are cloud metadata endpoints that must never be used as LLM endpoints.
+var blockedHosts = []string{
+	"169.254.169.254",
+	"metadata.google.internal",
+	"metadata.internal",
+}
+
+// ValidateEndpoint checks that an LLM endpoint URL is safe, preventing SSRF.
+// It allows HTTPS endpoints and plain HTTP only for localhost.
+func ValidateEndpoint(endpoint string) error {
+	if endpoint == "" {
+		return nil // empty is OK, a default will be chosen
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return fmt.Errorf("cannot parse URL: %w", err)
+	}
+	host := strings.ToLower(u.Hostname())
+
+	// Block known cloud metadata endpoints
+	for _, blocked := range blockedHosts {
+		if host == blocked {
+			return fmt.Errorf("endpoint host %q is blocked (cloud metadata)", host)
+		}
+	}
+
+	// Allow HTTPS anywhere, HTTP only for localhost
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+			return nil
+		}
+		return fmt.Errorf("HTTP endpoints only allowed for localhost; use HTTPS for %q", host)
+	default:
+		return fmt.Errorf("unsupported scheme %q; use http or https", u.Scheme)
+	}
 }
