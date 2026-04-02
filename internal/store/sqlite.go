@@ -18,6 +18,26 @@ type Store struct {
 	db *sql.DB
 }
 
+// ensureCaseExists creates a minimal case row when a caller provides a case ID but no case exists.
+// This preserves referential integrity when foreign keys are enforced.
+func (s *Store) ensureCaseExists(ctx context.Context, caseID string) error {
+	caseID = strings.TrimSpace(caseID)
+	if caseID == "" {
+		return nil
+	}
+
+	var exists int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM cases WHERE id = ?`, caseID).Scan(&exists); err == nil && exists > 0 {
+		return nil
+	}
+
+	now := time.Now().Unix()
+	_, err := s.db.ExecContext(ctx, `INSERT INTO cases (id, title, description, severity, status, event_count, created_at, updated_at)
+		VALUES (?, ?, '', 'low', 'open', 0, ?, ?)
+		ON CONFLICT(id) DO NOTHING`, caseID, caseID, now, now)
+	return err
+}
+
 // Event represents a stored event
 type Event struct {
 	ID          string    `json:"id"`
@@ -72,7 +92,9 @@ func NewStore(dbPath string) (*Store, error) {
 		}
 	}
 
-	db, err := sql.Open(sqliteDriver, dbPath+"?_journal_mode=WAL&_foreign_keys=off")
+	// Enable WAL for concurrency and enforce foreign keys for cascades.
+	dsn := dbPath + "?_journal_mode=WAL&_foreign_keys=on"
+	db, err := sql.Open(sqliteDriver, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
@@ -81,6 +103,10 @@ func NewStore(dbPath string) (*Store, error) {
 	
 	if err := store.migrate(); err != nil {
 		return nil, fmt.Errorf("failed to migrate database: %w", err)
+	}
+	// Ensure auxiliary audit/notes tables always exist for downstream callers.
+	if err := store.SetupAuditTables(); err != nil {
+		return nil, fmt.Errorf("failed to set up audit tables: %w", err)
 	}
 
 	return store, nil
@@ -224,9 +250,16 @@ func (s *Store) setupFTS() {
 func (s *Store) SaveEvent(ctx context.Context, ocsfEvent *ocsf.Event) (string, error) {
 	// Generate event ID if not present
 	eventID := fmt.Sprintf("evt_%d", time.Now().UnixNano())
-	
+
 	// Convert OCSF event to store event
 	event := s.ocsfToStoreEvent(ocsfEvent, eventID)
+	caseIDParam := interface{}(nil)
+	if strings.TrimSpace(event.CaseID) != "" {
+		if err := s.ensureCaseExists(ctx, event.CaseID); err != nil {
+			return "", err
+		}
+		caseIDParam = event.CaseID
+	}
 	
 	// Serialize raw JSON
 	rawJSON, err := json.Marshal(ocsfEvent)
@@ -243,7 +276,7 @@ func (s *Store) SaveEvent(ctx context.Context, ocsfEvent *ocsf.Event) (string, e
 	
 	now := time.Now().Unix()
 	_, err = s.db.ExecContext(ctx, query,
-		event.ID, event.CaseID, event.Timestamp.Unix(), event.EventType,
+		event.ID, caseIDParam, event.Timestamp.Unix(), event.EventType,
 		event.Severity, event.Message, event.Host, event.SrcIP, event.DstIP,
 		event.SrcPort, event.DstPort, event.ProcessName, event.FileName,
 		event.FileHash, event.UserName, event.RawJSON, now, now,
@@ -262,12 +295,44 @@ func (s *Store) CreateOrUpdateCase(ctx context.Context, case_ Case) (string, err
 		case_.ID = fmt.Sprintf("case_%d", time.Now().UnixNano())
 		case_.CreatedAt = time.Now()
 	}
+
+	// Preserve existing metadata when updating with zero-value fields
+	if case_.ID != "" {
+		var existingCreated int64
+		var existingCount int
+		err := s.db.QueryRowContext(ctx, `SELECT created_at, event_count FROM cases WHERE id = ?`, case_.ID).
+			Scan(&existingCreated, &existingCount)
+		if err == nil {
+			if case_.CreatedAt.IsZero() && existingCreated > 0 {
+				case_.CreatedAt = time.Unix(existingCreated, 0)
+			}
+			if case_.EventCount == 0 {
+				case_.EventCount = existingCount
+			}
+		}
+	}
+
+	if case_.CreatedAt.IsZero() {
+		case_.CreatedAt = time.Now()
+	}
 	case_.UpdatedAt = time.Now()
-	
-	query := `INSERT OR REPLACE INTO cases (
+	if !case_.CreatedAt.IsZero() && case_.UpdatedAt.Unix() <= case_.CreatedAt.Unix() {
+		case_.UpdatedAt = case_.CreatedAt.Add(time.Second)
+	}
+
+	query := `INSERT INTO cases (
 		id, title, description, severity, status, assigned_to, event_count, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(id) DO UPDATE SET
+		title = excluded.title,
+		description = excluded.description,
+		severity = excluded.severity,
+		status = excluded.status,
+		assigned_to = excluded.assigned_to,
+		created_at = excluded.created_at,
+		updated_at = excluded.updated_at,
+		event_count = excluded.event_count`
+
 	_, err := s.db.ExecContext(ctx, query,
 		case_.ID, case_.Title, case_.Description, case_.Severity,
 		case_.Status, case_.AssignedTo, case_.EventCount,

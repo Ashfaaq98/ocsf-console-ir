@@ -551,25 +551,44 @@ func (cm *CaseManagement) handleNotesInput(event *tcell.EventKey) *tcell.EventKe
 
 func (cm *CaseManagement) loadCaseData() {
 	go func() {
+		if cm.ctx.Err() != nil {
+			return
+		}
 		// Ensure audit/notes tables are available
 		_ = cm.store.SetupAuditTables()
 
+
 		// Load events for this case
 		events, err := cm.store.GetEventsByCase(cm.ctx, cm.caseData.ID)
-		if err != nil && cm.logger != nil {
-			cm.logger.Printf("Error loading events for case %s: %v", cm.caseData.ID, err)
+		if err != nil {
+			if strings.Contains(err.Error(), "database is closed") || cm.ctx.Err() != nil {
+				return
+			}
+			if cm.logger != nil {
+				cm.logger.Printf("Error loading events for case %s: %v", cm.caseData.ID, err)
+			}
 		}
 
 		// Load notes
 		notes, err := cm.store.GetNotes(cm.ctx, cm.caseData.ID)
-		if err != nil && cm.logger != nil {
-			cm.logger.Printf("Error loading notes for case %s: %v", cm.caseData.ID, err)
+		if err != nil {
+			if strings.Contains(err.Error(), "database is closed") || cm.ctx.Err() != nil {
+				return
+			}
+			if cm.logger != nil {
+				cm.logger.Printf("Error loading notes for case %s: %v", cm.caseData.ID, err)
+			}
 		}
 
 		// Load activity log (audit entries)
 		audits, err := cm.store.GetAuditEntries(cm.ctx, cm.caseData.ID, 0)
-		if err != nil && cm.logger != nil {
-			cm.logger.Printf("Error loading audit entries for case %s: %v", cm.caseData.ID, err)
+		if err != nil {
+			if strings.Contains(err.Error(), "database is closed") || cm.ctx.Err() != nil {
+				return
+			}
+			if cm.logger != nil {
+				cm.logger.Printf("Error loading audit entries for case %s: %v", cm.caseData.ID, err)
+			}
 		}
 
 		// Update UI on main thread

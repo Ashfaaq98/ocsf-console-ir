@@ -89,6 +89,20 @@ func initConfig() {
 
 // GetConfig returns the current configuration values
 func GetConfig() Config {
+	var external []map[string]interface{}
+	if raw := viper.Get("plugins.external"); raw != nil {
+		switch v := raw.(type) {
+		case []map[string]interface{}:
+			external = v
+		case []interface{}:
+			for _, item := range v {
+				if m, ok := item.(map[string]interface{}); ok {
+					external = append(external, m)
+				}
+			}
+		}
+	}
+
 	return Config{
 		Database: DatabaseConfig{
 			Path: viper.GetString("database.path"),
@@ -101,7 +115,7 @@ func GetConfig() Config {
 		},
 		Plugins: PluginsConfig{
 			Dir:      viper.GetString("plugins.dir"),
-			External: viper.Get("plugins.external").([]map[string]interface{}),
+			External: external,
 		},
 	}
 }

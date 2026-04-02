@@ -160,6 +160,10 @@ func (s *Store) AddAuditEntry(ctx context.Context, entry AuditEntry) error {
 	}
 	entry.CreatedAt = time.Now()
 
+	if err := s.ensureCaseExists(ctx, entry.CaseID); err != nil {
+		return err
+	}
+
 	// Serialize details and metadata
 	detailsJSON, err := json.Marshal(entry.Details)
 	if err != nil {
@@ -245,8 +249,22 @@ func (s *Store) GetAuditEntries(ctx context.Context, caseID string, limit int) (
 
 // AddNote adds or updates a note (supports color and linking)
 func (s *Store) AddNote(ctx context.Context, note Note) (string, error) {
+	if err := s.ensureCaseExists(ctx, note.CaseID); err != nil {
+		return "", err
+	}
+
+	if note.ID != "" {
+		var existingCreated int64
+		if err := s.db.QueryRowContext(ctx, `SELECT created_at FROM notes WHERE id = ?`, note.ID).Scan(&existingCreated); err == nil && existingCreated > 0 {
+			note.CreatedAt = time.Unix(existingCreated, 0)
+		}
+	}
+
 	if note.ID == "" {
 		note.ID = fmt.Sprintf("note_%d", time.Now().UnixNano())
+		note.CreatedAt = time.Now()
+	}
+	if note.CreatedAt.IsZero() {
 		note.CreatedAt = time.Now()
 	}
 	note.UpdatedAt = time.Now()
@@ -256,9 +274,18 @@ func (s *Store) AddNote(ctx context.Context, note Note) (string, error) {
 		note.Color = "#f1c40f"
 	}
 
-	query := `INSERT OR REPLACE INTO notes (
+	query := `INSERT INTO notes (
 		id, case_id, content, author, color, linked_type, linked_id, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(id) DO UPDATE SET
+		case_id = excluded.case_id,
+		content = excluded.content,
+		author = excluded.author,
+		color = excluded.color,
+		linked_type = excluded.linked_type,
+		linked_id = excluded.linked_id,
+		created_at = CASE WHEN excluded.created_at = 0 THEN notes.created_at ELSE excluded.created_at END,
+		updated_at = excluded.updated_at`
 
 	_, err := s.db.ExecContext(ctx, query,
 		note.ID, note.CaseID, note.Content, note.Author,

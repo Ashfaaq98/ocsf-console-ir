@@ -145,6 +145,72 @@ func TestCreateOrUpdateCase(t *testing.T) {
 	assert.Greater(t, updatedAt, createdAt, "Updated timestamp should be greater than created timestamp")
 }
 
+func TestCreateOrUpdateCase_PreservesCreatedAtAndEventCount(t *testing.T) {
+	store, err := NewStore(":memory:")
+	require.NoError(t, err)
+	defer store.Close()
+
+	ctx := context.Background()
+
+	original := Case{
+		Title:       "Incident A",
+		Description: "desc",
+		Severity:    "high",
+		Status:      "open",
+		AssignedTo:  "alice",
+		EventCount:  5,
+	}
+	caseID, err := store.CreateOrUpdateCase(ctx, original)
+	require.NoError(t, err)
+
+	var createdAt int64
+	err = store.db.QueryRow("SELECT created_at FROM cases WHERE id = ?", caseID).Scan(&createdAt)
+	require.NoError(t, err)
+	require.Greater(t, createdAt, int64(0))
+
+	update := Case{
+		ID:         caseID,
+		Title:      "Incident A (updated)",
+		Severity:   "medium",
+		Status:     "investigating",
+		EventCount: 0, // intentionally zero; should keep previous count
+	}
+	_, err = store.CreateOrUpdateCase(ctx, update)
+	require.NoError(t, err)
+
+	var row struct {
+		title      string
+		severity   string
+		status     string
+		eventCount int
+		created    int64
+	}
+	err = store.db.QueryRow(`SELECT title, severity, status, event_count, created_at FROM cases WHERE id = ?`, caseID).
+		Scan(&row.title, &row.severity, &row.status, &row.eventCount, &row.created)
+	require.NoError(t, err)
+	assert.Equal(t, "Incident A (updated)", row.title)
+	assert.Equal(t, "medium", row.severity)
+	assert.Equal(t, "investigating", row.status)
+	assert.Equal(t, 5, row.eventCount)
+	assert.Equal(t, createdAt, row.created, "created_at should be preserved on update")
+}
+
+func TestAddNote_WorksWithoutExplicitAuditSetup(t *testing.T) {
+	store, err := NewStore(":memory:")
+	require.NoError(t, err)
+	defer store.Close()
+
+	ctx := context.Background()
+
+	note := Note{CaseID: "case-1", Content: "note", Author: "tester"}
+	_, err = store.AddNote(ctx, note)
+	require.NoError(t, err)
+
+	notes, err := store.GetNotes(ctx, "case-1")
+	require.NoError(t, err)
+	assert.Len(t, notes, 1)
+}
+
 func TestListCases(t *testing.T) {
 	store, err := NewStore(":memory:")
 	require.NoError(t, err)
