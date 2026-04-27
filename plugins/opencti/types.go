@@ -58,33 +58,80 @@ type Observable struct {
 
 // OpenCTI API Response Types
 
-// STIXObservable represents a STIX cyber observable from OpenCTI
+// GraphQL relay-style connection types for decoding OpenCTI responses.
+// OpenCTI wraps related objects in { edges: [{ node: {...} }] } structures.
+
+// LabelConnection wraps the edges/node structure for labels.
+type LabelConnection struct {
+	Edges []LabelEdge `json:"edges"`
+}
+
+// LabelEdge is one edge in a label connection.
+type LabelEdge struct {
+	Node struct {
+		Value string `json:"value"`
+	} `json:"node"`
+}
+
+// Values returns a flat string slice from the relay connection.
+func (lc LabelConnection) Values() []string {
+	out := make([]string, 0, len(lc.Edges))
+	for _, e := range lc.Edges {
+		if e.Node.Value != "" {
+			out = append(out, e.Node.Value)
+		}
+	}
+	return out
+}
+
+// IndicatorConnection wraps the edges/node structure for indicators.
+type IndicatorConnection struct {
+	Edges []IndicatorEdge `json:"edges"`
+}
+
+// IndicatorEdge is one edge in an indicator connection.
+type IndicatorEdge struct {
+	Node STIXIndicator `json:"node"`
+}
+
+// Items returns a flat slice of STIXIndicator from the relay connection.
+func (ic IndicatorConnection) Items() []STIXIndicator {
+	out := make([]STIXIndicator, 0, len(ic.Edges))
+	for _, e := range ic.Edges {
+		out = append(out, e.Node)
+	}
+	return out
+}
+
+// STIXObservable represents a STIX cyber observable from OpenCTI.
+// Labels and Indicators use relay connection wrappers because that is
+// how the OpenCTI GraphQL API returns nested relations.
 type STIXObservable struct {
-	ID            string                 `json:"id"`
-	StandardID    string                 `json:"standard_id"`
-	EntityType    string                 `json:"entity_type"`
-	ObservableValue string               `json:"observable_value"`
-	Labels        []string               `json:"labels"`
-	Confidence    int                    `json:"confidence"`
-	Score         int                    `json:"x_opencti_score"`
-	CreatedAt     time.Time              `json:"created_at"`
-	UpdatedAt     time.Time              `json:"updated_at"`
-	Indicators    []STIXIndicator        `json:"indicators"`
-	Relationships []STIXRelationship     `json:"relationships"`
-	CustomFields  map[string]interface{} `json:"custom_fields"`
+	ID              string                 `json:"id"`
+	StandardID      string                 `json:"standard_id"`
+	EntityType      string                 `json:"entity_type"`
+	ObservableValue string                 `json:"observable_value"`
+	Labels          LabelConnection        `json:"labels"`
+	Confidence      int                    `json:"confidence"`
+	Score           int                    `json:"x_opencti_score"`
+	CreatedAt       time.Time              `json:"created_at"`
+	UpdatedAt       time.Time              `json:"updated_at"`
+	Indicators      IndicatorConnection    `json:"indicators"`
+	Relationships   []STIXRelationship     `json:"relationships"`
+	CustomFields    map[string]interface{} `json:"custom_fields"`
 }
 
 // STIXIndicator represents a STIX indicator
 type STIXIndicator struct {
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Pattern     string    `json:"pattern"`
-	Labels      []string  `json:"labels"`
-	Confidence  int       `json:"confidence"`
-	ValidFrom   time.Time `json:"valid_from"`
-	ValidUntil  time.Time `json:"valid_until"`
-	KillChain   []string  `json:"kill_chain_phases"`
-	Description string    `json:"description"`
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Pattern     string          `json:"pattern"`
+	Labels      LabelConnection `json:"labels"`
+	Confidence  int             `json:"confidence"`
+	ValidFrom   time.Time       `json:"valid_from"`
+	ValidUntil  time.Time       `json:"valid_until"`
+	KillChain   []string        `json:"kill_chain_phases"`
+	Description string          `json:"description"`
 }
 
 // STIXThreatActor represents a threat actor

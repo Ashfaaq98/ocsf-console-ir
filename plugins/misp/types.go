@@ -28,7 +28,7 @@ type MISPConfig struct {
 	BaseURL         string        `yaml:"base_url"`
 	APIKey          string        `yaml:"api_key"`
 	Timeout         time.Duration `yaml:"timeout"`
-	VerifyTLS       bool          `yaml:"verify_tls"`
+	SkipTLSVerify   bool          `yaml:"skip_tls_verify"`
 	
 	// Rate Limiting
 	RateLimitRPS    int           `yaml:"rate_limit_rps"`

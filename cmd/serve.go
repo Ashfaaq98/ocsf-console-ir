@@ -73,7 +73,7 @@ func init() {
 	// HTTP ingestion flags
 	serveCmd.Flags().BoolVar(&httpIngestEnable, "http-ingest-enable", false, "Enable HTTP ingestion server")
 	serveCmd.Flags().StringVar(&httpIngestBind, "http-ingest-bind", "127.0.0.1:8081", "Bind address for HTTP ingestion")
-	serveCmd.Flags().StringVar(&httpIngestToken, "http-ingest-token", "", "Bearer token required for HTTP ingestion (optional)")
+	serveCmd.Flags().StringVar(&httpIngestToken, "http-ingest-token", os.Getenv("INGEST_TOKEN"), "Bearer token required for HTTP ingestion (env: INGEST_TOKEN)")
 	serveCmd.Flags().IntVar(&httpIngestRPS, "http-ingest-rps", 10, "Max HTTP ingestion requests per second")
 	serveCmd.Flags().IntVar(&httpIngestBurst, "http-ingest-burst", 20, "Burst size for HTTP ingestion rate limiter")
 	serveCmd.Flags().StringVar(&httpIngestDir, "http-ingest-dir", "data/incoming", "Directory to write ingested payloads")
@@ -791,28 +791,18 @@ func runWithPseudoTTY(cmd *cobra.Command, args []string) error {
 		cmdArgs = append(cmdArgs, "--force-tui")
 	}
 	
-	// Build the full command string with proper quoting
-	quotedExecutable := fmt.Sprintf(`"%s"`, executable)
-	quotedArgs := make([]string, len(cmdArgs))
-	for i, arg := range cmdArgs {
-		quotedArgs[i] = fmt.Sprintf(`"%s"`, arg)
-	}
+	// VULN-4: Avoid shell command string interpolation to prevent injection via
+	// TERM env var or executable path. Use exec.Command with separate arguments
+	// and pass TERM safely through the environment.
+	innerCmd := exec.Command(executable, cmdArgs...)
+	innerCmd.Stdin = os.Stdin
+	innerCmd.Stdout = os.Stdout
+	innerCmd.Stderr = os.Stderr
 	
-	fullCmd := fmt.Sprintf("TERM=%s %s %s",
-		os.Getenv("TERM"),
-		quotedExecutable,
-		strings.Join(quotedArgs, " "))
+	// Inherit environment and ensure TERM is set
+	innerCmd.Env = os.Environ()
 	
-	// Use script command to create pseudo-TTY
-	scriptCmd := exec.Command("script", "-qec", fullCmd, "/dev/null")
-	scriptCmd.Stdin = os.Stdin
-	scriptCmd.Stdout = os.Stdout
-	scriptCmd.Stderr = os.Stderr
-	
-	// Set environment variables
-	scriptCmd.Env = os.Environ()
-	
-	return scriptCmd.Run()
+	return innerCmd.Run()
 }
 
 // determineTUIMode determines if TUI will be used (extracted for logging setup)

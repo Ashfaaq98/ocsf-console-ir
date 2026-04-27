@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
 )
 
@@ -87,7 +88,7 @@ type Enrichment struct {
 func NewStore(dbPath string) (*Store, error) {
 	// Ensure target directory exists (e.g., ./data)
 	if dir := filepath.Dir(dbPath); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, 0700); err != nil {
 			return nil, fmt.Errorf("failed to create database directory %s: %w", dir, err)
 		}
 	}
@@ -249,7 +250,7 @@ func (s *Store) setupFTS() {
 // SaveEvent saves an OCSF event to the database
 func (s *Store) SaveEvent(ctx context.Context, ocsfEvent *ocsf.Event) (string, error) {
 	// Generate event ID if not present
-	eventID := fmt.Sprintf("evt_%d", time.Now().UnixNano())
+	eventID := "evt_" + uuid.New().String()
 
 	// Convert OCSF event to store event
 	event := s.ocsfToStoreEvent(ocsfEvent, eventID)
@@ -292,7 +293,7 @@ func (s *Store) SaveEvent(ctx context.Context, ocsfEvent *ocsf.Event) (string, e
 // CreateOrUpdateCase creates a new case or updates an existing one
 func (s *Store) CreateOrUpdateCase(ctx context.Context, case_ Case) (string, error) {
 	if case_.ID == "" {
-		case_.ID = fmt.Sprintf("case_%d", time.Now().UnixNano())
+		case_.ID = "case_" + uuid.New().String()
 		case_.CreatedAt = time.Now()
 	}
 
@@ -565,7 +566,7 @@ func (s *Store) CountEventsFiltered(
 // ApplyEnrichment applies enrichment data to an event
 func (s *Store) ApplyEnrichment(ctx context.Context, eventID string, enrichment Enrichment) error {
 	if enrichment.ID == "" {
-		enrichment.ID = fmt.Sprintf("enr_%d", time.Now().UnixNano())
+		enrichment.ID = "enr_" + uuid.New().String()
 	}
 	enrichment.EventID = eventID
 	enrichment.CreatedAt = time.Now()
@@ -635,8 +636,34 @@ func (s *Store) GetEnrichmentsByEvent(ctx context.Context, eventID string) ([]En
 	return result, nil
 }
 
+// sanitizeFTSQuery escapes FTS5 special syntax by wrapping each term in double quotes.
+// This prevents operators like AND, OR, NOT, NEAR, *, and column:filters from being
+// interpreted as FTS query syntax.
+func sanitizeFTSQuery(input string) string {
+	terms := strings.Fields(input)
+	if len(terms) == 0 {
+		return `""`
+	}
+	for i, term := range terms {
+		term = strings.ReplaceAll(term, `"`, `""`)
+		terms[i] = `"` + term + `"`
+	}
+	return strings.Join(terms, " ")
+}
+
+// escapeLIKE escapes SQL LIKE metacharacters (%, _) in user input.
+func escapeLIKE(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `%`, `\%`)
+	s = strings.ReplaceAll(s, `_`, `\_`)
+	return s
+}
+
 // SearchEvents performs full-text search on events (falls back to LIKE if FTS unavailable)
 func (s *Store) SearchEvents(ctx context.Context, query string, limit int) ([]Event, error) {
+	// VULN-6: Sanitize FTS input to prevent query syntax injection
+	sanitized := sanitizeFTSQuery(query)
+
 	// Try FTS first
 	ftsQuery := `SELECT e.id, e.case_id, e.timestamp, e.event_type, e.severity, e.message, e.host,
 		e.src_ip, e.dst_ip, e.src_port, e.dst_port, e.process_name, e.file_name,
@@ -646,8 +673,8 @@ func (s *Store) SearchEvents(ctx context.Context, query string, limit int) ([]Ev
 		WHERE events_fts MATCH ?
 		ORDER BY rank
 		LIMIT ?`
-	
-	rows, err := s.db.QueryContext(ctx, ftsQuery, query, limit)
+
+	rows, err := s.db.QueryContext(ctx, ftsQuery, sanitized, limit)
 	if err == nil {
 		defer rows.Close()
 		return s.scanEvents(rows)
@@ -658,17 +685,17 @@ func (s *Store) SearchEvents(ctx context.Context, query string, limit int) ([]Ev
 		src_ip, dst_ip, src_port, dst_port, process_name, file_name,
 		file_hash, user_name, raw_json, created_at, updated_at
 		FROM events
-		WHERE message LIKE ? OR host LIKE ? OR process_name LIKE ? OR file_name LIKE ? OR user_name LIKE ?
+		WHERE message LIKE ? ESCAPE '\' OR host LIKE ? ESCAPE '\' OR process_name LIKE ? ESCAPE '\' OR file_name LIKE ? ESCAPE '\' OR user_name LIKE ? ESCAPE '\'
 		ORDER BY timestamp DESC
 		LIMIT ?`
-	
-	searchPattern := "%" + query + "%"
+
+	searchPattern := "%" + escapeLIKE(query) + "%"
 	rows, err = s.db.QueryContext(ctx, likeQuery, searchPattern, searchPattern, searchPattern, searchPattern, searchPattern, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search events: %w", err)
 	}
 	defer rows.Close()
-	
+
 	return s.scanEvents(rows)
 }
 

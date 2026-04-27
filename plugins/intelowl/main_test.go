@@ -136,7 +136,7 @@ func TestRealClient_HealthPlaceholder(t *testing.T) {
 	client := NewRealIntelOwlClient(realClientOpts{
 		BaseURL:   srv.URL,
 		Token:     "test-token",
-		VerifyTLS: true,
+		SkipTLSVerify: true,
 		Timeout:   2 * time.Second,
 		RPS:       5,
 		Burst:     10,

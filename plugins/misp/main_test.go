@@ -158,7 +158,7 @@ func TestMISPClient_NewClient(t *testing.T) {
 		Timeout:      10 * time.Second,
 		RateLimitRPS: 10,
 		BurstLimit:   20,
-		VerifyTLS:    true,
+		SkipTLSVerify:    true,
 	}
 	
 	client, err := NewMISPClient(config, log.New(io.Discard, "", 0))
@@ -185,7 +185,7 @@ func TestMISPClient_HealthCheck(t *testing.T) {
 		APIKey:       "test-api-key",
 		Timeout:      5 * time.Second,
 		RateLimitRPS: 10,
-		VerifyTLS:    false,
+		SkipTLSVerify:    false,
 	}
 	
 	client, err := NewMISPClient(config, log.New(io.Discard, "", 0))
@@ -230,7 +230,7 @@ func TestMISPClient_ValidateAPIKey(t *testing.T) {
 				APIKey:       tt.apiKey,
 				Timeout:      5 * time.Second,
 				RateLimitRPS: 10,
-				VerifyTLS:    false,
+				SkipTLSVerify:    false,
 			}
 			
 			client, err := NewMISPClient(config, log.New(io.Discard, "", 0))
@@ -262,7 +262,7 @@ func TestMISPClient_SearchAttributes(t *testing.T) {
 		APIKey:         "test-api-key",
 		Timeout:        5 * time.Second,
 		RateLimitRPS:   10,
-		VerifyTLS:      false,
+		SkipTLSVerify:      false,
 		IncludeContext: true,
 		MaxResults:     100,
 		DaysBack:       30,
