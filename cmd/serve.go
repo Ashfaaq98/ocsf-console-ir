@@ -40,29 +40,28 @@ var (
 // serveCmd represents the serve command
 var serveCmd = &cobra.Command{
 	Use:   "serve",
-	Short: "Start the TUI and plugin processing services",
+	Short: "Start the terminal UI and enrichment pipeline",
 	Long: `Start the Console-IR server which includes:
 
 1. Terminal User Interface (TUI) for case management
-2. Redis Streams consumers for plugin coordination
-3. Enrichment processing pipeline
-4. Plugin lifecycle management
+2. In-process enrichment (GeoIP, WHOIS) with no external services
+3. Folder ingestion: OCSF JSONL/JSON dropped into data/incoming/
+4. Optional distributed mode via Redis (only when --redis is set)
 
-The serve command runs until interrupted (Ctrl+C) and handles:
-- Real-time event processing through plugins
-- Case management and visualization
-- Plugin health monitoring and restart
-- Graceful shutdown of all components
+The serve command runs until interrupted (Ctrl+C).
+
+Note: headless mode (--no-tui) is experimental. Folder ingestion and
+enrichment currently run only with the TUI active.
 
 Examples:
   # Start with TUI (default)
   console-ir serve
 
-  # Start without TUI (headless mode)
-  console-ir serve --no-tui
+  # Load the shipped sample, then explore it in the TUI
+  cp examples/sample-events.jsonl data/incoming/ && console-ir serve
 
-  # Start with custom plugins directory
-  console-ir serve --plugins-dir /path/to/plugins`,
+  # Start without TUI (experimental headless mode)
+  console-ir serve --no-tui`,
 	RunE: runServe,
 }
 
@@ -289,8 +288,10 @@ func runServe(cmd *cobra.Command, args []string) error {
 				CaseTitle: "",
 				// Route folder-ingestor logs to the UI file logger to avoid corrupting TUI output
 				Logger: uiLogger,
-				// Avoid re-ingesting existing JSONL lines on each startup; begin tailing from EOF.
-				TailFromEnd: true,
+				// Ingest files already present in the drop folder on startup, then
+				// tail. Persisted offsets prevent re-ingesting on restart, so we do
+				// not skip to EOF (which silently ignored staged files).
+				TailFromEnd: false,
 				// Drive embedded core enrichments in-process for each ingested event.
 				Enricher: pluginManager,
 			}

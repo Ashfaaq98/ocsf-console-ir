@@ -33,7 +33,10 @@ The ingest command:
 1. Parses OCSF events from the input source
 2. Normalizes them to the internal event format
 3. Saves events to the SQLite database
-4. Publishes events to Redis Streams for plugin processing
+
+Note: this batch import does not run enrichment. Enrichment (GeoIP, WHOIS)
+runs in the TUI (console-ir serve). Use ingest to pre-load events, then open
+them in the TUI — or drop files into data/incoming/ while serve is running.
 
 Examples:
   # Ingest from file
@@ -144,6 +147,11 @@ func processEvents(ctx context.Context, input io.Reader, parser *ingest.Parser,
 	stats := &IngestStats{}
 
 	scanner := bufio.NewScanner(input)
+	// Raise the line cap well above the 64 KB default; OCSF events with large
+	// cmd_line or observable arrays routinely exceed it, and the default would
+	// abort the whole run with "token too long" (unrecoverable by --skip-invalid).
+	// Mirrors the folder ingestor's buffer sizing.
+	scanner.Buffer(make([]byte, 0, 1<<20), 10<<20)
 	batch := make([][]byte, 0, batchSize)
 	lineNumber := 0
 

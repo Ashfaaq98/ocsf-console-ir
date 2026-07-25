@@ -26,9 +26,16 @@ type FolderOptions struct {
 	Patterns  []string // e.g. []string{"*.jsonl", "*.json"}
 	CaseTitle string   // default "Ingested Events"
 	Logger    *log.Logger
-	// When true and in Watch mode, start JSONL files at EOF on startup to avoid
-	// re-ingesting existing lines each time the app starts.
+	// When true and in Watch mode, a JSONL file that has no persisted offset
+	// (i.e. one never seen before) starts at EOF instead of being imported from
+	// the beginning. Restart de-duplication is handled by persisted offsets
+	// (see StateFile), so this is only needed to skip importing a large existing
+	// backlog. Default false: pre-existing files are ingested once on startup.
 	TailFromEnd bool
+	// StateFile is where per-file byte offsets are persisted between runs so a
+	// restart resumes where it left off instead of re-ingesting. Watch mode only.
+	// Defaults to ".ingest-offsets.state" inside Dir when empty.
+	StateFile string
 	// Enricher, when set, receives each ingested event for in-process
 	// enrichment by embedded core plugins. Optional; nil disables it.
 	Enricher Enricher
@@ -60,6 +67,10 @@ func NewFolderIngestor(parser *Parser, st *store.Store, b bus.Bus, opts FolderOp
 	if opts.CaseTitle == "" {
 		opts.CaseTitle = "Ingested Events"
 	}
+	if opts.StateFile == "" && opts.Dir != "" {
+		// A ".state" name so it never matches the *.json / *.jsonl watch patterns.
+		opts.StateFile = filepath.Join(opts.Dir, ".ingest-offsets.state")
+	}
 	return &FolderIngestor{
 		parser:  parser,
 		store:   st,
@@ -78,6 +89,12 @@ func (fi *FolderIngestor) Run(ctx context.Context) error {
 		}
 	}
 
+	// In watch mode, resume from persisted offsets so a restart does not
+	// re-ingest files that were already read.
+	if fi.opts.Watch {
+		fi.loadOffsets()
+	}
+
 	// One-shot initial pass
 	if err := fi.scanOnce(ctx); err != nil {
 		return err
@@ -89,6 +106,9 @@ func (fi *FolderIngestor) Run(ctx context.Context) error {
 		fi.opts.Logger.Printf("Completed one-shot ingest: ingested=%d errors=%d", fi.ingested, fi.errors)
 		return nil
 	}
+
+	// Persist offsets reached by the initial pass before we begin tailing.
+	fi.saveOffsets()
 
 	// Watch mode
 	return fi.watchLoop(ctx)
@@ -120,21 +140,31 @@ func (fi *FolderIngestor) scanOnce(ctx context.Context) error {
 		}
 		path := filepath.Join(fi.opts.Dir, e.Name())
 		if strings.HasSuffix(strings.ToLower(e.Name()), ".jsonl") {
-			// If configured to tail from end in watch mode, initialize the offset to EOF
-			// so we don't re-ingest existing lines on every startup.
-			if fi.opts.Watch && fi.opts.TailFromEnd {
+			fi.mu.Lock()
+			offset, seen := fi.offsets[path]
+			fi.mu.Unlock()
+
+			// A brand-new file (no persisted offset) in tail-only mode starts at
+			// EOF so an existing backlog isn't imported. Files already seen resume
+			// from their offset; otherwise we ingest from the beginning.
+			if !seen && fi.opts.Watch && fi.opts.TailFromEnd {
 				if st, err := os.Stat(path); err == nil {
 					fi.mu.Lock()
 					fi.offsets[path] = st.Size()
 					fi.mu.Unlock()
 				}
-				// Do not process existing content now; watchLoop will tail new lines.
 				continue
 			}
-			if _, err := fi.processJSONL(ctx, path, 0); err != nil {
+
+			newOffset, err := fi.processJSONL(ctx, path, offset)
+			if err != nil {
 				fi.opts.Logger.Printf("error processing %s: %v", path, err)
 				fi.errors++
+				continue
 			}
+			fi.mu.Lock()
+			fi.offsets[path] = newOffset
+			fi.mu.Unlock()
 		} else if strings.HasSuffix(strings.ToLower(e.Name()), ".json") {
 			if err := fi.processJSONFile(ctx, path); err != nil {
 				fi.opts.Logger.Printf("error processing %s: %v", path, err)
@@ -193,6 +223,7 @@ func (fi *FolderIngestor) watchLoop(ctx context.Context) error {
 					fi.mu.Lock()
 					fi.offsets[ev.Name] = newOffset
 					fi.mu.Unlock()
+					fi.saveOffsets()
 				case strings.HasSuffix(lower, ".json"):
 					// Re-process entire file on write
 					if err := fi.processJSONFile(ctx, ev.Name); err != nil {
@@ -205,6 +236,7 @@ func (fi *FolderIngestor) watchLoop(ctx context.Context) error {
 				fi.mu.Lock()
 				delete(fi.offsets, ev.Name)
 				fi.mu.Unlock()
+				fi.saveOffsets()
 			}
 		case err := <-w.Errors:
 			if err != nil {
@@ -216,6 +248,55 @@ func (fi *FolderIngestor) watchLoop(ctx context.Context) error {
 				_ = fi.store.UpdateCaseEventCount(context.Background(), fi.caseID)
 			}
 		}
+	}
+}
+
+// loadOffsets reads persisted per-file offsets from the state file into memory.
+// A missing or unreadable file is not an error: ingestion simply starts fresh.
+func (fi *FolderIngestor) loadOffsets() {
+	if fi.opts.StateFile == "" {
+		return
+	}
+	data, err := os.ReadFile(fi.opts.StateFile)
+	if err != nil {
+		return
+	}
+	var m map[string]int64
+	if err := json.Unmarshal(data, &m); err != nil {
+		fi.opts.Logger.Printf("ignoring corrupt ingest state %s: %v", fi.opts.StateFile, err)
+		return
+	}
+	fi.mu.Lock()
+	for k, v := range m {
+		fi.offsets[k] = v
+	}
+	fi.mu.Unlock()
+}
+
+// saveOffsets atomically persists the current per-file offsets so a restart can
+// resume without re-ingesting. Best-effort: failures are logged, not fatal.
+func (fi *FolderIngestor) saveOffsets() {
+	if fi.opts.StateFile == "" {
+		return
+	}
+	fi.mu.Lock()
+	snapshot := make(map[string]int64, len(fi.offsets))
+	for k, v := range fi.offsets {
+		snapshot[k] = v
+	}
+	fi.mu.Unlock()
+
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		return
+	}
+	tmp := fi.opts.StateFile + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		fi.opts.Logger.Printf("could not persist ingest offsets: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, fi.opts.StateFile); err != nil {
+		fi.opts.Logger.Printf("could not persist ingest offsets: %v", err)
 	}
 }
 
