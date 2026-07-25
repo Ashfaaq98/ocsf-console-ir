@@ -17,22 +17,34 @@ import (
 
 // DefaultPluginManager implements the PluginManager interface
 type DefaultPluginManager struct {
-	registry     PluginRegistry
-	bus          bus.Bus
-	store        *store.Store
-	logger       *log.Logger
-	pluginsDir   string
-	
+	registry   PluginRegistry
+	bus        bus.Bus
+	store      *store.Store
+	logger     *log.Logger
+	pluginsDir string
+
 	// State management
-	mu           sync.RWMutex
-	running      bool
-	ctx          context.Context
-	cancel       context.CancelFunc
-	
+	mu      sync.RWMutex
+	running bool
+	ctx     context.Context
+	cancel  context.CancelFunc
+
 	// Plugin processes
 	processes    map[string]*exec.Cmd
 	processStats map[string]*PluginStatus
+
+	// In-process enrichment queue driving embedded core plugins
+	eventQueue chan bus.EventMessage
+	workerWG   sync.WaitGroup
 }
+
+// In-process enrichment tuning. The queue is bounded so a slow enrichment
+// backlog never grows without limit; overflow events are dropped (logged)
+// rather than blocking ingestion.
+const (
+	enrichQueueSize = 1024
+	enrichWorkers   = 4
+)
 
 // DefaultPluginRegistry implements the PluginRegistry interface
 type DefaultPluginRegistry struct {
@@ -66,6 +78,7 @@ func NewPluginManager(eventBus bus.Bus, store *store.Store, pluginsDir string, l
 		cancel:       cancel,
 		processes:    make(map[string]*exec.Cmd),
 		processStats: make(map[string]*PluginStatus),
+		eventQueue:   make(chan bus.EventMessage, enrichQueueSize),
 	}
 }
 
@@ -121,7 +134,43 @@ func (pm *DefaultPluginManager) Start(ctx context.Context) error {
 	// Start monitoring goroutine
 	go pm.monitorPlugins()
 
+	// Start in-process enrichment workers that drive embedded core plugins.
+	// They observe pm.ctx (rebound above), so Stop's cancel() unblocks them.
+	for i := 0; i < enrichWorkers; i++ {
+		pm.workerWG.Add(1)
+		go pm.enrichWorker()
+	}
+
 	return nil
+}
+
+// EnqueueEvent submits an ingested event for in-process enrichment by embedded
+// core plugins. It is non-blocking: if the queue is full the event is dropped
+// with a log line, so ingestion is never stalled by slow enrichment. It
+// satisfies ingest.Enricher.
+func (pm *DefaultPluginManager) EnqueueEvent(event bus.EventMessage) {
+	select {
+	case pm.eventQueue <- event:
+	default:
+		pm.logger.Printf("enrichment queue full, dropping event %s", event.EventID)
+	}
+}
+
+// enrichWorker pulls events off the queue and runs them through the core
+// plugins, applying resulting enrichments to the store. It exits when the
+// manager context is cancelled.
+func (pm *DefaultPluginManager) enrichWorker() {
+	defer pm.workerWG.Done()
+	for {
+		select {
+		case <-pm.ctx.Done():
+			return
+		case event := <-pm.eventQueue:
+			if err := pm.ProcessEvent(pm.ctx, event); err != nil {
+				pm.logger.Printf("enrichment error for event %s: %v", event.EventID, err)
+			}
+		}
+	}
 }
 
 /*
@@ -157,6 +206,10 @@ func (pm *DefaultPluginManager) Stop() error {
 	}
 
 	pm.mu.Unlock()
+
+	// Wait for enrichment workers to observe the cancelled context and exit
+	// (done outside the lock; enrichWorker->ProcessEvent takes pm.mu.RLock).
+	pm.workerWG.Wait()
 
 	// Stop core plugins (outside the lock)
 	for name, plugin := range corePlugins {
@@ -289,8 +342,8 @@ func (pm *DefaultPluginManager) GetStats() map[string]interface{} {
 	defer pm.mu.RUnlock()
 
 	stats := map[string]interface{}{
-		"running":         pm.running,
-		"core_plugins":    len(pm.registry.(*DefaultPluginRegistry).corePlugins),
+		"running":          pm.running,
+		"core_plugins":     len(pm.registry.(*DefaultPluginRegistry).corePlugins),
 		"external_plugins": len(pm.registry.(*DefaultPluginRegistry).externalPlugins),
 		"active_processes": len(pm.processes),
 	}
@@ -332,7 +385,7 @@ func (pm *DefaultPluginManager) discoverExternalPlugins() error {
 		}
 
 		// Require explicit enablement via a marker file beside the executable.
-		// Example: plugins/llm/llm  -> plugins/llm/llm.enabled
+		// Example: plugins/misp/misp  -> plugins/misp/misp.enabled
 		enabledMarker := path + ".enabled"
 		if _, statErr := os.Stat(enabledMarker); os.IsNotExist(statErr) {
 			pm.logger.Printf("Skipping external plugin %s (not enabled). To enable: create %s", filepath.Base(path), enabledMarker)
@@ -359,7 +412,7 @@ func (pm *DefaultPluginManager) discoverExternalPlugins() error {
 // startExternalPlugin starts an external plugin process
 func (pm *DefaultPluginManager) startExternalPlugin(ctx context.Context, plugin *ExternalPlugin) error {
 	cmd := exec.CommandContext(ctx, plugin.Command, plugin.Args...)
-	
+
 	// Set environment variables
 	cmd.Env = os.Environ()
 	for key, value := range plugin.Env {
@@ -544,7 +597,7 @@ func (dr *DefaultPluginRegistry) RegisterCorePlugin(plugin CorePlugin) error {
 	return nil
 }
 
- // RegisterExternalPlugin registers an external executable plugin
+// RegisterExternalPlugin registers an external executable plugin
 func (dr *DefaultPluginRegistry) RegisterExternalPlugin(plugin *ExternalPlugin) error {
 	dr.mu.Lock()
 	defer dr.mu.Unlock()

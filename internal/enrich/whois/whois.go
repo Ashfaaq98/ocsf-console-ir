@@ -1,39 +1,117 @@
-package main
+// Package whois provides an in-process WHOIS enrichment plugin.
+//
+// It implements the plugins.CorePlugin interface so the enrichment runs
+// directly inside the console-ir binary, with no Redis broker or external
+// subprocess. The lookup/parse logic is ported verbatim from the former
+// standalone plugin at plugins/whois; only the transport (Redis streams) and
+// process scaffolding (main, flags, signal handling) were removed.
+package whois
 
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/url"
-	"os"
-	"os/signal"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
 
-	"github.com/go-redis/redis/v8"
-	whois "github.com/likexian/whois"
+	whoislib "github.com/likexian/whois"
+
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/bus"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/plugins"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 )
 
-type EventMessage struct {
-	EventID   string `json:"event_id"`
-	EventType string `json:"event_type"`
-	RawJSON   string `json:"raw_json"`
-	Timestamp int64  `json:"timestamp"`
+// Default provider tuning, matching the former standalone plugin's flag defaults.
+const (
+	defaultTimeout      = 5 * time.Second
+	defaultRateLimitRPS = 1
+	defaultCacheTTL     = 24 * time.Hour
+)
+
+// Plugin is the in-process WHOIS enrichment plugin.
+type Plugin struct {
+	provider *WhoisProvider
+	logger   *log.Logger
 }
 
-type EnrichmentMessage struct {
-	EventID    string            `json:"event_id"`
-	Source     string            `json:"source"`
-	Type       string            `json:"type"`
-	Data       map[string]string `json:"data"`
-	Timestamp  int64             `json:"timestamp"`
-	PluginName string            `json:"plugin_name"`
+// New creates a WHOIS plugin with default tuning. A nil logger discards output.
+func New(logger *log.Logger) *Plugin {
+	if logger == nil {
+		logger = log.New(io.Discard, "", 0)
+	}
+	return &Plugin{
+		provider: NewWhoisProvider(defaultTimeout, defaultRateLimitRPS, defaultCacheTTL),
+		logger:   logger,
+	}
 }
 
+// Name returns the plugin name.
+func (p *Plugin) Name() string { return "whois" }
+
+// Description returns a brief description of the plugin.
+func (p *Plugin) Description() string { return "WHOIS domain registration enrichment" }
+
+// Version returns the plugin version.
+func (p *Plugin) Version() string { return "1.0.0" }
+
+// Start initializes the plugin. The provider is ready on construction, so this
+// is a no-op retained to satisfy the CorePlugin contract.
+func (p *Plugin) Start(ctx context.Context) error { return nil }
+
+// Stop shuts down the plugin gracefully.
+func (p *Plugin) Stop() error { return nil }
+
+// HealthCheck reports plugin health. WHOIS has no external dependency to probe.
+func (p *Plugin) HealthCheck(ctx context.Context) error { return nil }
+
+// GetConfig returns the plugin's configuration requirements. WHOIS needs none.
+func (p *Plugin) GetConfig() plugins.PluginConfig {
+	return plugins.PluginConfig{}
+}
+
+// Process extracts domains from the event and enriches them with WHOIS data.
+// It returns at most one enrichment, whose Data merges the WHOIS fields for
+// every domain found. store.ApplyEnrichment fills in the ID, EventID and
+// timestamp, so those are left zero here.
+func (p *Plugin) Process(ctx context.Context, event bus.EventMessage) ([]store.Enrichment, error) {
+	if event.RawJSON == "" {
+		return nil, nil
+	}
+
+	domains := extractDomains(event.RawJSON)
+	if len(domains) == 0 {
+		return nil, nil
+	}
+
+	data := make(map[string]string)
+	for _, d := range domains {
+		raw, err := p.provider.Lookup(d)
+		if err != nil {
+			p.logger.Printf("whois lookup failed %s: %v", d, err)
+			continue
+		}
+		for k, v := range normalizeWhois(d, raw) {
+			data[k] = v
+		}
+		p.logger.Printf("whois enrichment for %s", d)
+	}
+
+	if len(data) == 0 {
+		return nil, nil
+	}
+
+	return []store.Enrichment{{
+		Source: "whois",
+		Type:   "whois",
+		Data:   data,
+	}}, nil
+}
+
+// WhoisProvider performs rate-limited, cached WHOIS lookups.
 type WhoisProvider struct {
 	clientTimeout time.Duration
 	rateLimitRPS  int
@@ -49,6 +127,7 @@ type cacheEntry struct {
 	expiry time.Time
 }
 
+// NewWhoisProvider builds a provider with the given timeout, rate limit and cache TTL.
 func NewWhoisProvider(timeout time.Duration, rps int, ttl time.Duration) *WhoisProvider {
 	p := &WhoisProvider{
 		clientTimeout: timeout,
@@ -99,6 +178,7 @@ func (p *WhoisProvider) setCached(domain string, data string) {
 	p.cache[domain] = cacheEntry{data: data, expiry: time.Now().Add(p.cacheTTL)}
 }
 
+// Lookup returns the raw WHOIS response for a domain, using the cache and rate limiter.
 func (p *WhoisProvider) Lookup(domain string) (string, error) {
 	// normalize domain
 	domain = strings.ToLower(strings.TrimSpace(domain))
@@ -121,7 +201,7 @@ func (p *WhoisProvider) Lookup(domain string) (string, error) {
 	// perform WHOIS with retries
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
-		raw, err := whois.Whois(domain)
+		raw, err := whoislib.Whois(domain)
 		if err != nil {
 			lastErr = err
 			time.Sleep(time.Duration(100*(1<<attempt)) * time.Millisecond)
@@ -132,13 +212,6 @@ func (p *WhoisProvider) Lookup(domain string) (string, error) {
 		return raw, nil
 	}
 	return "", lastErr
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 // extractDomains attempts to find domains in the event raw JSON.
@@ -234,7 +307,7 @@ func domainFromString(s string) string {
 	return ""
 }
 
-// normalizeWhois converts parsed WhoIs info into flat map[string]string for enrichment.
+// normalizeWhois converts a raw WHOIS response into a flat map[string]string for enrichment.
 func normalizeWhois(domain string, raw string) map[string]string {
 	data := make(map[string]string)
 	prefix := fmt.Sprintf("whois_%s_", strings.ReplaceAll(domain, ".", "_"))
@@ -304,160 +377,4 @@ func normalizeWhois(domain string, raw string) map[string]string {
 	}
 
 	return data
-}
-
-func publishEnrichment(ctx context.Context, client *redis.Client, eventID string, data map[string]string) error {
-	enrichment := EnrichmentMessage{
-		EventID:    eventID,
-		Source:     "whois",
-		Type:       "whois",
-		Data:       data,
-		Timestamp:  time.Now().Unix(),
-		PluginName: "whois-plugin",
-	}
-	b, err := json.Marshal(enrichment.Data)
-	if err != nil {
-		return err
-	}
-	fields := map[string]interface{}{
-		"event_id":    enrichment.EventID,
-		"source":      enrichment.Source,
-		"type":        enrichment.Type,
-		"data":        string(b),
-		"timestamp":   enrichment.Timestamp,
-		"plugin_name": enrichment.PluginName,
-	}
-	if err := client.XAdd(ctx, &redis.XAddArgs{
-		Stream: "enrichments",
-		Values: fields,
-	}).Err(); err != nil {
-		return err
-	}
-	return nil
-}
-
-func createConsumerGroup(ctx context.Context, client *redis.Client, group string) error {
-	err := client.XGroupCreateMkStream(ctx, "events", group, "0").Err()
-	if err != nil {
-		if strings.Contains(err.Error(), "BUSYGROUP") {
-			return nil
-		}
-		return err
-	}
-	return nil
-}
-
-func main() {
-	var (
-		redisURL     = flag.String("redis", "redis://localhost:6379", "Redis connection URL")
-		consumerName = flag.String("consumer", "whois-plugin", "Consumer name for Redis streams")
-		groupName    = flag.String("group", "console-ir-whois", "Redis consumer group name for events stream")
-		timeout      = flag.Duration("timeout", 5*time.Second, "WHOIS client timeout")
-		rateLimitRPS = flag.Int("rate-limit-rps", 1, "WHOIS requests per second")
-		cacheTTL     = flag.Duration("cache-ttl", 24*time.Hour, "WHOIS cache TTL")
-	)
-	flag.Parse()
-
-	logger := log.New(os.Stdout, "[Whois] ", log.LstdFlags)
-	logger.Println("Starting WHOIS plugin")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sig
-		logger.Println("shutdown signal received")
-		cancel()
-	}()
-
-	opts, err := redis.ParseURL(*redisURL)
-	if err != nil {
-		logger.Fatalf("failed to parse redis url: %v", err)
-	}
-	client := redis.NewClient(opts)
-	if err := client.Ping(ctx).Err(); err != nil {
-		logger.Fatalf("failed to ping redis: %v", err)
-	}
-	defer client.Close()
-
-	// create consumer group
-	if err := createConsumerGroup(ctx, client, *groupName); err != nil {
-		logger.Fatalf("failed to create consumer group: %v", err)
-	}
-
-	provider := NewWhoisProvider(*timeout, *rateLimitRPS, *cacheTTL)
-
-	logger.Printf("starting event loop (group=%s consumer=%s)", *groupName, *consumerName)
-	for {
-		select {
-		case <-ctx.Done():
-			logger.Println("stopping event loop")
-			return
-		default:
-			res := client.XReadGroup(ctx, &redis.XReadGroupArgs{
-				Group:    *groupName,
-				Consumer: *consumerName,
-				Streams:  []string{"events", ">"},
-				Count:    5,
-				Block:    2 * time.Second,
-			})
-			if err := res.Err(); err != nil {
-				if err == redis.Nil {
-					continue
-				}
-				logger.Printf("xreadgroup error: %v", err)
-				time.Sleep(2 * time.Second)
-				continue
-			}
-			for _, stream := range res.Val() {
-				for _, msg := range stream.Messages {
-					eventID := getStringField(msg.Values, "event_id")
-					raw := getStringField(msg.Values, "raw_json")
-					if raw == "" {
-						logger.Printf("message %s has no raw_json, skipping", msg.ID)
-						_ = client.XAck(ctx, "events", *groupName, msg.ID).Err()
-						continue
-					}
-					domains := extractDomains(raw)
-					if len(domains) == 0 {
-						logger.Printf("no domains found in event %s", eventID)
-						_ = client.XAck(ctx, "events", *groupName, msg.ID).Err()
-						continue
-					}
-					enrich := make(map[string]string)
-					for _, d := range domains {
-						raw, err := provider.Lookup(d)
-						if err != nil {
-							logger.Printf("whois lookup failed %s: %v", d, err)
-							continue
-						}
-						n := normalizeWhois(d, raw)
-						for k, v := range n {
-							enrich[k] = v
-						}
-						logger.Printf("whois enrichment for %s (fields=%d)", d, len(n))
-					}
-					if len(enrich) > 0 {
-						if err := publishEnrichment(ctx, client, eventID, enrich); err != nil {
-							logger.Printf("failed to publish enrichment: %v", err)
-						}
-					}
-					// Ack message
-					if err := client.XAck(ctx, "events", *groupName, msg.ID).Err(); err != nil {
-						logger.Printf("failed to ack message %s: %v", msg.ID, err)
-					}
-				}
-			}
-		}
-	}
-}
-
-func getStringField(values map[string]interface{}, key string) string {
-	if v, ok := values[key]; ok {
-		if s, ok := v.(string); ok {
-			return s
-		}
-	}
-	return ""
 }

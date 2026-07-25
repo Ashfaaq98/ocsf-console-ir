@@ -1574,8 +1574,24 @@ func (ui *UI) updateEventsList() {
 	}
 
 	if len(ui.events) == 0 {
-		ui.eventList.SetCell(1, 0, tview.NewTableCell("No events found").
-			SetTextColor(ui.theme.TableRowMuted))
+		// Empty-state onboarding: a fresh install has no data and no obvious next
+		// step. Point the analyst at the drop folder and the shipped sample.
+		hint := []string{
+			"No events yet.",
+			"",
+			"Drop OCSF JSONL files into  data/incoming/  to ingest and enrich them.",
+			"Quick start:   cp examples/sample-events.jsonl data/incoming/",
+			"Then press  r  to refresh this list.",
+		}
+		for i, line := range hint {
+			cell := tview.NewTableCell(line).
+				SetTextColor(ui.theme.TableRowMuted).
+				SetExpansion(1)
+			if i == 0 {
+				cell.SetAttributes(tcell.AttrBold)
+			}
+			ui.eventList.SetCell(1+i, 0, cell)
+		}
 		return
 	}
 

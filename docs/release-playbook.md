@@ -6,7 +6,7 @@ This document is the practical checklist for shipping `console-ir` releases.
 
 1. Commit release-prep changes to `main`.
 2. Push a tag like `v0.1.0`.
-3. GitHub Actions runs [`.github/workflows/release.yml`](/home/ashfaaq/Desktop/OCSF/console-ir/ocsf-console-ir/.github/workflows/release.yml).
+3. GitHub Actions runs [`.github/workflows/release.yml`](.github/workflows/release.yml).
 4. GoReleaser builds archives, checksums, SBOMs, Homebrew metadata, and Docker images.
 5. GitHub publishes the release assets and release notes.
 
@@ -42,7 +42,7 @@ Add these secrets in `Ashfaaq98/ocsf-console-ir`:
   Personal access token with permission to push to `Ashfaaq98/homebrew-tap`.
 - `GPG_PRIVATE_KEY`
   Optional. Only needed if you want signing.
-- `PASSPHRASE`
+- `GPG_PASSPHRASE`
   Optional. Passphrase for the GPG key if used.
 
 ### 4. Push a release candidate tag
@@ -146,5 +146,5 @@ Do not reuse the same version number after a public broken release. Prefer `v0.1
 ## Notes
 
 - The Markdown files in `.github/` are in the right place. They are GitHub issue and PR templates, not product docs.
-- The release source of truth is [`.goreleaser.yaml`](/home/ashfaaq/Desktop/OCSF/console-ir/ocsf-console-ir/.goreleaser.yaml).
-- The public install paths are documented in [README.md](/home/ashfaaq/Desktop/OCSF/console-ir/ocsf-console-ir/README.md).
+- The release source of truth is [`.goreleaser.yaml`](.goreleaser.yaml).
+- The public install paths are documented in [README.md](README.md).

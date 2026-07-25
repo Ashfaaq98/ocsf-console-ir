@@ -100,6 +100,16 @@ func NewStore(dbPath string) (*Store, error) {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
+	// In-memory databases live per-connection: each pooled connection gets its
+	// own empty database, so the schema created by migrate() would be invisible
+	// to queries that land on a different connection (this manifests only under
+	// the pure-Go modernc driver, not CGO/mattn). Pin the pool to one connection
+	// so :memory: behaves as a single shared database. File-backed databases keep
+	// the default pool — WAL still allows concurrent readers.
+	if strings.Contains(dbPath, ":memory:") {
+		db.SetMaxOpenConns(1)
+	}
+
 	store := &Store{db: db}
 	
 	if err := store.migrate(); err != nil {

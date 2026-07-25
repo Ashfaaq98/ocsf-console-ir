@@ -40,6 +40,10 @@ type LiveOptions struct {
 
 	// HTTPClient for fetching events. If nil, a default client is used.
 	HTTPClient *http.Client
+
+	// Enricher, when set, receives each ingested event for in-process
+	// enrichment by embedded core plugins. Optional; nil disables it.
+	Enricher Enricher
 }
 
 // LiveIngestor fetches OCSF sample events on an interval and ingests them.
@@ -234,13 +238,18 @@ func (li *LiveIngestor) ingestRaw(ctx context.Context, raw []byte) (string, erro
 		}
 	}
 
-	// Best-effort publish to bus (no-op on NullBus)
-	_ = li.bus.PublishEvent(ctx, bus.EventMessage{
+	msg := bus.EventMessage{
 		EventID:   eventID,
 		EventType: string(ocsfEvent.GetEventType()),
 		RawJSON:   string(raw),
 		Timestamp: ocsfEvent.Time.Unix(),
-	})
+	}
+	// Best-effort publish to bus (no-op on NullBus)
+	_ = li.bus.PublishEvent(ctx, msg)
+	// In-process enrichment by embedded core plugins (optional)
+	if li.opts.Enricher != nil {
+		li.opts.Enricher.EnqueueEvent(msg)
+	}
 
 	return eventID, nil
 }

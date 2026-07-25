@@ -3,7 +3,6 @@ package cmd
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -33,7 +32,10 @@ The ingest command:
 1. Parses OCSF events from the input source
 2. Normalizes them to the internal event format
 3. Saves events to the SQLite database
-4. Publishes events to Redis Streams for plugin processing
+
+Note: this batch import does not run enrichment. Enrichment (GeoIP, WHOIS)
+runs in the TUI (console-ir serve). Use ingest to pre-load events, then open
+them in the TUI — or drop files into data/incoming/ while serve is running.
 
 Examples:
   # Ingest from file
@@ -144,6 +146,11 @@ func processEvents(ctx context.Context, input io.Reader, parser *ingest.Parser,
 	stats := &IngestStats{}
 
 	scanner := bufio.NewScanner(input)
+	// Raise the line cap well above the 64 KB default; OCSF events with large
+	// cmd_line or observable arrays routinely exceed it, and the default would
+	// abort the whole run with "token too long" (unrecoverable by --skip-invalid).
+	// Mirrors the folder ingestor's buffer sizing.
+	scanner.Buffer(make([]byte, 0, 1<<20), 10<<20)
 	batch := make([][]byte, 0, batchSize)
 	lineNumber := 0
 
@@ -256,49 +263,3 @@ func updateStats(main, batch *IngestStats) {
 	main.SkippedEvents += batch.SkippedEvents
 }
 
-// detectFormat attempts to detect the input format (JSON vs JSONL)
-func detectFormat(data []byte) string {
-	// Try to parse as single JSON object
-	var obj interface{}
-	if err := json.Unmarshal(data, &obj); err == nil {
-		// Check if it's an array (JSON) or object (JSONL line)
-		if _, isArray := obj.([]interface{}); isArray {
-			return "json"
-		}
-		return "jsonl"
-	}
-	return "unknown"
-}
-
-// validateEvent performs basic validation on the parsed event
-func validateEvent(event interface{}) error {
-	eventMap, ok := event.(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("event must be a JSON object")
-	}
-
-	// Check for required fields
-	if _, hasTime := eventMap["time"]; !hasTime {
-		return fmt.Errorf("event missing required 'time' field")
-	}
-
-	if _, hasClassUID := eventMap["class_uid"]; !hasClassUID {
-		return fmt.Errorf("event missing required 'class_uid' field")
-	}
-
-	return nil
-}
-
-// createSampleCase creates a sample case for demonstration
-func createSampleCase(ctx context.Context, storeInstance *store.Store, eventType string) error {
-	sampleCase := store.Case{
-		Title:       fmt.Sprintf("Sample %s Investigation", strings.Title(eventType)),
-		Description: fmt.Sprintf("Automatically created case for %s events", eventType),
-		Severity:    "medium",
-		Status:      "open",
-		EventCount:  0,
-	}
-
-	_, err := storeInstance.CreateOrUpdateCase(ctx, sampleCase)
-	return err
-}

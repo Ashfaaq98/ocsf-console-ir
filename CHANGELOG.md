@@ -9,10 +9,31 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Planned
 
-- RBAC / multi-user support
-- PostgreSQL backend option
-- Scapy/pcap ingestion plugin
-- Web UI companion (opt-in)
+- Headless / server-mode ingestion + enrichment
+- Threat-intel enrichment (MISP, OpenCTI, IntelOwl) embedded in-process
+
+## [0.1.1] - 2026-07-25
+
+### Changed
+
+- Enrichment now runs **in-process**: GeoIP and WHOIS are embedded in the binary and need no Redis broker or subprocess.
+- Redis is now **opt-in**. The default is standalone with no external services; pass `--redis` to enable distributed mode.
+- Folder ingestion resumes from persisted offsets, so files staged in `data/incoming/` before launch are ingested on startup and not re-ingested on restart.
+
+### Added
+
+- Shipped sample at `examples/sample-events.jsonl` and an empty-state onboarding hint in the TUI.
+- CI now builds and tests the shipped `CGO_ENABLED=0` (modernc) SQLite driver, runs `go vet` and race tests, and executes the plugin-module test suites.
+
+### Removed
+
+- The redundant external `llm` plugin (built-in LLM providers are unaffected) and the external `geoip`/`whois` plugins (now built in).
+
+### Fixed
+
+- `console-ir ingest` no longer aborts on JSONL lines larger than 64 KB.
+- Enrichment plugin logs no longer corrupt the TUI screen.
+- In-memory SQLite databases are pinned to a single connection so the shipped pure-Go driver behaves correctly.
 
 ## [0.1.0] - 2026-03-28
 
@@ -29,5 +50,6 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - Headless runtime mode with `--no-tui`
 - Devcontainer and VS Code debug configuration for contributors
 
-[Unreleased]: https://github.com/Ashfaaq98/ocsf-console-ir/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Ashfaaq98/ocsf-console-ir/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Ashfaaq98/ocsf-console-ir/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Ashfaaq98/ocsf-console-ir/releases/tag/v0.1.0

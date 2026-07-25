@@ -27,7 +27,7 @@ provides a TUI for case management, and supports extensible plugins for enrichme
 Features:
 - OCSF event ingestion and normalization
 - Terminal-based user interface for case management
-- Redis Streams-based plugin architecture
+- In-process enrichment plugins (optional Redis Streams for distributed mode)
 - SQLite storage with full-text search
 - Extensible enrichment pipeline`,
 }
@@ -44,7 +44,7 @@ func init() {
 	// Global flags
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.console-ir.yaml)")
 	rootCmd.PersistentFlags().StringVar(&dbPath, "db", "./data/console-ir.db", "SQLite database path")
-	rootCmd.PersistentFlags().StringVar(&redisURL, "redis", "redis://localhost:6379", "Redis connection URL")
+	rootCmd.PersistentFlags().StringVar(&redisURL, "redis", "", "Redis URL for distributed mode; empty (default) runs standalone with in-process enrichment and no Redis")
 	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
 	rootCmd.PersistentFlags().StringVar(&pluginsDir, "plugins-dir", "./plugins", "Directory containing plugins")
 
@@ -81,7 +81,7 @@ func initConfig() {
 
 	// Set defaults
 	viper.SetDefault("database.path", "./data/console-ir.db")
-	viper.SetDefault("redis.url", "redis://localhost:6379")
+	viper.SetDefault("redis.url", "")
 	viper.SetDefault("log.level", "info")
 	viper.SetDefault("plugins.dir", "./plugins")
 	viper.SetDefault("plugins.external", []map[string]interface{}{})

@@ -29,11 +29,15 @@ COPY --from=builder /bin/console-ir /console-ir
 
 VOLUME ["/data"]
 WORKDIR /data
-EXPOSE 8080
 
-# VULN-9: When binding to 0.0.0.0, a bearer token is now required.
-# Set INGEST_TOKEN when running: docker run -e INGEST_TOKEN=your-secret ...
-ENV INGEST_TOKEN=""
-
+# Console-IR is a terminal-first (TUI) tool. Headless/containerized serving is
+# EXPERIMENTAL: folder ingestion and enrichment currently run only with the TUI
+# active, so a headless `serve` does not yet process events. The default command
+# therefore shows help rather than silently starting a server that does nothing.
+#
+# To experiment with headless HTTP ingest (writes payloads to /data/incoming for
+# a future headless pipeline), a bearer token is required on a non-loopback bind:
+#   docker run -e INGEST_TOKEN=secret -p 8080:8080 <image> \
+#     serve --no-tui --http-ingest-enable --http-ingest-bind 0.0.0.0:8080
 ENTRYPOINT ["/console-ir"]
-CMD ["serve", "--no-tui", "--http-ingest-enable", "--http-ingest-bind", "0.0.0.0:8080"]
+CMD ["--help"]

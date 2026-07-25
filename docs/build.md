@@ -54,15 +54,15 @@ make build-plugins  # build plugins only
 
 ```pwsh
 # Build for current platform (Windows)
-.\build.ps1 windows
+.\scripts\build.ps1 windows
 
 # Build for Linux, macOS, Apple Silicon
-.\build.ps1 linux
-.\build.ps1 macos
-.\build.ps1 macos-arm64
+.\scripts\build.ps1 linux
+.\scripts\build.ps1 macos
+.\scripts\build.ps1 macos-arm64
 
 # Build all platforms at once
-.\build.ps1 all
+.\scripts\build.ps1 all
 
 ```
 
@@ -72,8 +72,8 @@ make build-plugins  # build plugins only
 # Build for current platform
 go build -o bin/console-ir main.go
 
-# Build plugin (example: GeoIP)
-go build -o bin/geoip plugins/geoip/main.go
+# Build an external threat-intel plugin (example: MISP)
+cd plugins/misp && go build -o ../../bin/misp .
 ```
 
 ### Method 4 — Manual Cross-Compilation

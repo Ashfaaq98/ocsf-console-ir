@@ -43,10 +43,17 @@ plugins:
         - "API_KEY=${MY_PLUGIN_API_KEY}"
 ```
 
-Internal plugins
-- Implement the plugin interface in `internal/plugins` and register in the application.
-- Use existing examples in `internal/plugins` as a starting point.
+In-process (core) plugins — recommended
+- These run inside the binary via the enrichment queue, with no Redis or subprocess.
+- GeoIP and WHOIS ship this way; see `internal/enrich/geoip` and `internal/enrich/whois`.
+- To add one: implement the `CorePlugin` interface (`internal/plugins/interface.go`) —
+  `Process(ctx, event) ([]store.Enrichment, error)` plus lifecycle methods — and register
+  it in `cmd/serve.go` with `pluginManager.GetRegistry().RegisterCorePlugin(...)`.
+- Test with a `:memory:` store and a hermetic event; no external services required.
 
-Testing plugins
-- Use a local Redis instance (docker-compose) and integration tests.
-- Example: `make test-integration` (requires Redis)
+External plugins — for distributed / threat-intel integrations
+- Standalone executables (any language) that consume/publish over Redis Streams.
+- Used by the MISP, OpenCTI, and IntelOwl integrations under `plugins/`.
+- These need a running Redis. Start one with:
+  `docker run -d --name console-ir-redis -p 6379:6379 redis`
+- Then run the integration tests: `make test-integration`.
