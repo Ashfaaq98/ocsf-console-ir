@@ -54,5 +54,6 @@ In-process (core) plugins — recommended
 External plugins — for distributed / threat-intel integrations
 - Standalone executables (any language) that consume/publish over Redis Streams.
 - Used by the MISP, OpenCTI, and IntelOwl integrations under `plugins/`.
-- Testing: a local Redis instance (docker-compose) and integration tests, e.g.
-  `make test-integration` (requires Redis).
+- These need a running Redis. Start one with:
+  `docker run -d --name console-ir-redis -p 6379:6379 redis`
+- Then run the integration tests: `make test-integration`.

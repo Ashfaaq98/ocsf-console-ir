@@ -1,5 +1,5 @@
 # Console-IR Makefile
-.PHONY: help build clean test run-dev run-prod install deps lint fmt vet security plugins docker-up docker-down setup-dev
+.PHONY: help build build-plugins build-all clean test check run-dev run-prod run-headless install deps lint fmt vet security setup-dev demo
 
 # Default target
 help: ## Show this help message
@@ -22,9 +22,6 @@ LDFLAGS=-ldflags "-X main.Version=$(VERSION) -X main.Commit=$(COMMIT) -X main.Bu
 export CGO_ENABLED=1
 export GOOS=$(shell go env GOOS)
 export GOARCH=$(shell go env GOARCH)
-
-# Docker Compose detection - prefer v2 (docker compose) over v1 (docker-compose)
-DOCKER_COMPOSE := $(shell if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then echo "docker compose"; elif command -v docker-compose >/dev/null 2>&1; then echo "docker-compose"; else echo ""; fi)
 
 ## Development targets
 
@@ -107,63 +104,17 @@ check: fmt vet lint test ## Run all code quality checks
 
 ## Runtime targets
 
-run-dev: docker-up ## Run in development mode
+run-dev: ## Run in development mode (standalone, no Redis)
 	@echo "Starting Console-IR in development mode..."
-	@sleep 2  # Wait for Redis to be ready
 	go run . serve --log-level debug
 
-run-prod: build docker-up ## Run in production mode
-	@echo "Starting Console-IR in production mode..."
-	@sleep 2  # Wait for Redis to be ready
+run-prod: build ## Build and run
+	@echo "Starting Console-IR..."
 	$(BUILD_DIR)/$(BINARY_NAME) serve
 
-run-headless: build docker-up ## Run in headless mode (no TUI)
+run-headless: build ## Run without the TUI (experimental: does not ingest yet)
 	@echo "Starting Console-IR in headless mode..."
-	@sleep 2  # Wait for Redis to be ready
 	$(BUILD_DIR)/$(BINARY_NAME) serve --no-tui
-
-## Docker targets
-
-docker-up: ## Start Redis and supporting services
-	@if [ -z "$(DOCKER_COMPOSE)" ]; then \
-		echo "Error: Neither 'docker compose' nor 'docker-compose' found. Please install Docker Compose."; \
-		exit 1; \
-	fi
-	@echo "Starting Docker services using: $(DOCKER_COMPOSE)"
-	$(DOCKER_COMPOSE) up -d redis
-	@echo "Waiting for Redis to be ready..."
-	@for i in $$(seq 1 30); do \
-		if $(DOCKER_COMPOSE) exec -T redis redis-cli ping 2>/dev/null | grep -q PONG; then \
-			echo "Redis is ready!"; \
-			break; \
-		fi; \
-		if [ $$i -eq 30 ]; then \
-			echo "Timeout waiting for Redis to be ready"; \
-			exit 1; \
-		fi; \
-		echo "Waiting for Redis... ($$i/30)"; \
-		sleep 1; \
-	done
-
-docker-down: ## Stop Docker services
-	@if [ -z "$(DOCKER_COMPOSE)" ]; then \
-		echo "Error: Neither 'docker compose' nor 'docker-compose' found. Please install Docker Compose."; \
-		exit 1; \
-	fi
-	@echo "Stopping Docker services..."
-	$(DOCKER_COMPOSE) down
-
-docker-logs: ## Show Docker service logs
-	@if [ -z "$(DOCKER_COMPOSE)" ]; then \
-		echo "Error: Neither 'docker compose' nor 'docker-compose' found. Please install Docker Compose."; \
-		exit 1; \
-	fi
-	$(DOCKER_COMPOSE) logs -f
-
-docker-clean: docker-down ## Clean Docker resources
-	@echo "Cleaning Docker resources..."
-	$(DOCKER_COMPOSE) down -v --remove-orphans
-	docker system prune -f
 
 ## Plugin targets
 ## Note: GeoIP and WHOIS enrichment are now built in (in-process, no Redis);
@@ -202,24 +153,18 @@ plugin-misp: ## Build and run MISP plugin
 	@echo ""
 	@echo "Configuration: See plugins/misp/config.yaml for examples"
 
-## Sample data targets
+## Sample data / demo targets
 
-sample-events: ## Generate sample OCSF events
-	@echo "Generating sample events..."
-	@mkdir -p ./testdata
-	@echo '{"time": "2024-01-15T10:30:00Z", "class_uid": 4001, "category_uid": 4, "activity_id": 1, "type_uid": 400101, "severity_id": 2, "message": "Network connection established", "src_endpoint": {"ip": "192.168.1.100", "port": 54321}, "dst_endpoint": {"ip": "8.8.8.8", "port": 53}, "device": {"hostname": "workstation-01", "ip": "192.168.1.100"}, "metadata": {"product": {"name": "Console-IR", "vendor": "OCSF"}}}' > ./testdata/sample-events.jsonl
-	@echo '{"time": "2024-01-15T10:31:00Z", "class_uid": 1001, "category_uid": 1, "activity_id": 1, "type_uid": 100101, "severity_id": 3, "message": "Process execution detected", "process": {"name": "powershell.exe", "pid": 1234, "cmd_line": "powershell.exe -ExecutionPolicy Bypass"}, "device": {"hostname": "workstation-01"}, "user": {"name": "john.doe"}, "metadata": {"product": {"name": "Console-IR", "vendor": "OCSF"}}}' >> ./testdata/sample-events.jsonl
-	@echo '{"time": "2024-01-15T10:32:00Z", "class_uid": 2001, "category_uid": 2, "activity_id": 2, "type_uid": 200102, "severity_id": 4, "message": "Suspicious file created", "file": {"name": "malware.exe", "path": "C:\\temp\\malware.exe", "hashes": {"sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}, "device": {"hostname": "workstation-01"}, "metadata": {"product": {"name": "Console-IR", "vendor": "OCSF"}}}' >> ./testdata/sample-events.jsonl
-	@echo '{"time": "2024-01-15T10:33:00Z", "class_uid": 3001, "category_uid": 3, "activity_id": 1, "type_uid": 300101, "severity_id": 2, "message": "User authentication successful", "user": {"name": "jane.smith", "domain": "corporate.com"}, "device": {"hostname": "server-01", "ip": "192.168.1.200"}, "src_endpoint": {"ip": "192.168.1.150"}, "metadata": {"product": {"name": "Console-IR", "vendor": "OCSF"}}}' >> ./testdata/sample-events.jsonl
-	@echo "Sample events created in ./testdata/sample-events.jsonl"
-
-ingest-sample: sample-events build ## Ingest sample events
+ingest-sample: build ## Pre-load the shipped sample events into the store (no enrichment)
 	@echo "Ingesting sample events..."
-	$(BUILD_DIR)/$(BINARY_NAME) ingest ./testdata/sample-events.jsonl
+	$(BUILD_DIR)/$(BINARY_NAME) ingest ./examples/sample-events.jsonl
 
-demo: build-all docker-up ingest-sample ## Run full demo (build, start services, ingest data)
-	@echo "Demo setup complete!"
-	@echo "You can now run: make run-dev"
+demo: build ## Stage the sample for the TUI, then show how to explore it
+	@mkdir -p data/incoming
+	@cp examples/sample-events.jsonl data/incoming/
+	@echo "Sample staged in data/incoming/."
+	@echo "Now run:  $(BUILD_DIR)/$(BINARY_NAME) serve"
+	@echo "Open an event to see GeoIP/WHOIS enrichment (press 'r' to refresh)."
 
 ## Installation targets
 
@@ -263,21 +208,7 @@ version: ## Show version information
 	@echo "Build Time: $(BUILD_TIME)"
 	@echo "Go Version: $(shell go version)"
 
-status: ## Show service status
-	@echo "=== Docker Services ==="
-	@if [ -n "$(DOCKER_COMPOSE)" ]; then \
-		$(DOCKER_COMPOSE) ps 2>/dev/null || echo "Docker Compose not running"; \
-	else \
-		echo "Docker Compose not found"; \
-	fi
-	@echo ""
-	@echo "=== Redis Status ==="
-	@if [ -n "$(DOCKER_COMPOSE)" ]; then \
-		$(DOCKER_COMPOSE) exec redis redis-cli ping 2>/dev/null || echo "Redis not accessible"; \
-	else \
-		echo "Docker Compose not found"; \
-	fi
-	@echo ""
+status: ## Show build status
 	@echo "=== Build Status ==="
 	@if [ -f "$(BUILD_DIR)/$(BINARY_NAME)" ]; then \
 		echo "Binary: $(BUILD_DIR)/$(BINARY_NAME) (built)"; \
@@ -291,6 +222,6 @@ logs: ## Show application logs (if running in background)
 	@tail -f console-ir.log 2>/dev/null || echo "No log file found"
 
 # Development workflow shortcuts
-dev: setup-dev build-all docker-up ## Complete development setup
+dev: setup-dev build-all ## Complete development setup
 quick: build run-dev ## Quick build and run
-reset: clean docker-clean setup-dev ## Reset everything and start fresh
+reset: clean setup-dev ## Reset everything and start fresh
