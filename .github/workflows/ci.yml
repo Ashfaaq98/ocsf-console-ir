@@ -22,14 +22,36 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Run root module tests
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build main binary
+        run: go build ./...
+
+      - name: Test (race)
+        run: go test -race ./...
+
+      # The published binaries are built CGO_ENABLED=0, which selects the pure-Go
+      # modernc.org/sqlite driver (internal/store/sqlite_nocgo.go). The default
+      # jobs above exercise the CGO/mattn driver, so build and test the shipped
+      # driver explicitly here.
+      - name: Build shipped driver (CGO_ENABLED=0)
+        env:
+          CGO_ENABLED: 0
+        run: go build ./...
+
+      - name: Test shipped driver (CGO_ENABLED=0)
+        env:
+          CGO_ENABLED: 0
         run: go test ./...
 
-      - name: Build plugin modules
+      # Nested plugin modules have their own go.mod and are excluded from the
+      # root ./... — build AND test each so their suites actually run in CI.
+      - name: Build and test plugin modules
         shell: bash
         run: |
           set -euo pipefail
           while IFS= read -r plugin_dir; do
-            echo "Building plugin module: ${plugin_dir}"
-            (cd "${plugin_dir}" && go build ./...)
+            echo "Plugin module: ${plugin_dir}"
+            (cd "${plugin_dir}" && go build ./... && go test ./...)
           done < <(find plugins -mindepth 1 -maxdepth 1 -type d | sort)
