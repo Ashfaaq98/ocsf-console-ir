@@ -3,7 +3,6 @@ package cmd
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -264,49 +263,3 @@ func updateStats(main, batch *IngestStats) {
 	main.SkippedEvents += batch.SkippedEvents
 }
 
-// detectFormat attempts to detect the input format (JSON vs JSONL)
-func detectFormat(data []byte) string {
-	// Try to parse as single JSON object
-	var obj interface{}
-	if err := json.Unmarshal(data, &obj); err == nil {
-		// Check if it's an array (JSON) or object (JSONL line)
-		if _, isArray := obj.([]interface{}); isArray {
-			return "json"
-		}
-		return "jsonl"
-	}
-	return "unknown"
-}
-
-// validateEvent performs basic validation on the parsed event
-func validateEvent(event interface{}) error {
-	eventMap, ok := event.(map[string]interface{})
-	if !ok {
-		return fmt.Errorf("event must be a JSON object")
-	}
-
-	// Check for required fields
-	if _, hasTime := eventMap["time"]; !hasTime {
-		return fmt.Errorf("event missing required 'time' field")
-	}
-
-	if _, hasClassUID := eventMap["class_uid"]; !hasClassUID {
-		return fmt.Errorf("event missing required 'class_uid' field")
-	}
-
-	return nil
-}
-
-// createSampleCase creates a sample case for demonstration
-func createSampleCase(ctx context.Context, storeInstance *store.Store, eventType string) error {
-	sampleCase := store.Case{
-		Title:       fmt.Sprintf("Sample %s Investigation", strings.Title(eventType)),
-		Description: fmt.Sprintf("Automatically created case for %s events", eventType),
-		Severity:    "medium",
-		Status:      "open",
-		EventCount:  0,
-	}
-
-	_, err := storeInstance.CreateOrUpdateCase(ctx, sampleCase)
-	return err
-}

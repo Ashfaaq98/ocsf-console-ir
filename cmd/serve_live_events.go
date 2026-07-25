@@ -26,7 +26,7 @@ var (
 // liveEventsCmd represents `console-ir serve live-events`
 var liveEventsCmd = &cobra.Command{
 	Use:   "live-events",
-	Short: "Fetch random OCSF events from a simulator endpoint on an interval and ingest them",
+	Short: "[experimental] Fetch OCSF events from a simulator endpoint on an interval and ingest them",
 	Long: `Fetch random OCSF events from a simulator endpoint on a fixed interval and ingest them
 so they appear in the Events view. This behaves similarly to folder-based ingestion,
 but sources events via HTTP instead of files.

@@ -330,19 +330,6 @@ func runServe(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// isTUISupported checks if the current terminal supports TUI
-func isTUISupported() bool {
-	// --- TEMPORARY FIX ---
-	// Always return true to bypass the restrictive terminal check.
-	// This allows the TUI library (tcell/tview) to handle compatibility detection.
-	return true
-	// --- END TEMPORARY FIX ---
-
-	// Original compatibility scoring logic (commented out)
-	// score := getTerminalCompatibilityScore()
-	// return score >= 60 // Require at least 60% compatibility
-}
-
 // canInitializeTUI tests if tcell can actually be initialized
 func canInitializeTUI() bool {
 	screen, err := tcell.NewScreen()
@@ -358,72 +345,6 @@ func canInitializeTUI() bool {
 	// Clean up immediately
 	screen.Fini()
 	return true
-}
-
-// getTerminalCompatibilityScore returns a compatibility score (0-100)
-func getTerminalCompatibilityScore() int {
-	score := 0
-	term := strings.ToLower(os.Getenv("TERM"))
-	termProgram := strings.ToLower(os.Getenv("TERM_PROGRAM"))
-
-	// Base score for having a terminal
-	if isTerminal() {
-		score += 20
-	}
-
-	// TERM environment variable scoring
-	switch {
-	case term == "":
-		score -= 30 // No TERM set
-	case term == "dumb":
-		score -= 40 // Explicitly dumb terminal
-	case strings.Contains(term, "xterm"):
-		score += 40 // xterm family - excellent support
-	case strings.Contains(term, "screen"):
-		score += 35 // screen/tmux - very good
-	case strings.Contains(term, "tmux"):
-		score += 35 // tmux - very good
-	case strings.Contains(term, "linux"):
-		score += 30 // Linux console - good
-	case strings.Contains(term, "ansi"):
-		score += 25 // ANSI terminal - decent
-	case strings.Contains(term, "vt"):
-		score += 20 // VT terminal - basic
-	case term != "":
-		score += 10 // Some TERM set - minimal
-	}
-
-	// Terminal program scoring
-	switch {
-	case strings.Contains(termProgram, "iterm"):
-		score += 20 // iTerm2 - excellent
-	case strings.Contains(termProgram, "terminal"):
-		score += 15 // Terminal.app, gnome-terminal, etc.
-	case strings.Contains(termProgram, "konsole"):
-		score += 15 // KDE Konsole
-	case strings.Contains(termProgram, "vscode"):
-		score -= 20 // VS Code integrated terminal
-	}
-
-	// Terminal size check
-	if hasTerminalSize() {
-		score += 15
-	}
-
-	// Color support check
-	if supportsColors() {
-		score += 10
-	}
-
-	// Ensure score is within bounds
-	if score < 0 {
-		score = 0
-	}
-	if score > 100 {
-		score = 100
-	}
-
-	return score
 }
 
 // getTerminalInfo returns detailed terminal information
@@ -497,12 +418,6 @@ func isTerminal() bool {
 		return (fileInfo.Mode() & os.ModeCharDevice) != 0
 	}
 	return false
-}
-
-// hasTerminalSize checks if we can get terminal dimensions
-func hasTerminalSize() bool {
-	width, height := getTerminalSize()
-	return width > 0 && height > 0
 }
 
 // supportsColors checks if terminal supports colors
@@ -738,42 +653,6 @@ func (sc *ServiceCoordinator) collectMetrics() {
 // createSampleData removed to prevent automatic creation of sample cases/events.
 // Automatic sample data seeding was intentionally deleted to ensure that when
 // cases/events are removed by the user, they are not recreated on restart.
-
-// getServiceStatus returns the status of all services
-func (sc *ServiceCoordinator) getServiceStatus() map[string]interface{} {
-	status := map[string]interface{}{
-		"running": sc.running,
-		"services": map[string]string{
-			"enrichment_processor": "running",
-			"health_monitor":       "running",
-			"metrics_collector":    "running",
-		},
-	}
-
-	// Add plugin manager stats
-	if sc.pluginManager != nil {
-		status["plugins"] = sc.pluginManager.GetStats()
-	}
-
-	return status
-}
-
-// handleGracefulShutdown handles graceful shutdown of services
-func (sc *ServiceCoordinator) handleGracefulShutdown() {
-	sc.logger.Println("Initiating graceful shutdown...")
-
-	// Stop plugin manager first
-	if sc.pluginManager != nil {
-		if err := sc.pluginManager.Stop(); err != nil {
-			sc.logger.Printf("Error stopping plugin manager: %v", err)
-		}
-	}
-
-	// Stop other services
-	sc.Stop()
-
-	sc.logger.Println("Graceful shutdown completed")
-}
 
 // needsPseudoTTY checks if we need to use script command for pseudo-TTY
 func needsPseudoTTY() bool {
