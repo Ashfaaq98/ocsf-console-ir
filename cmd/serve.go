@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/bus"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/enrich/geoip"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/enrich/whois"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ingest"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
@@ -151,6 +152,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// or subprocess required.
 	if err := pluginManager.GetRegistry().RegisterCorePlugin(whois.New(logger)); err != nil {
 		logger.Printf("Failed to register whois enrichment: %v", err)
+	}
+	if err := pluginManager.GetRegistry().RegisterCorePlugin(geoip.New(logger)); err != nil {
+		logger.Printf("Failed to register geoip enrichment: %v", err)
 	}
 
 	// Start plugin manager
