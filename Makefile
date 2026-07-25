@@ -173,18 +173,6 @@ plugin-geoip: ## Build and run GeoIP plugin
 	@echo "Starting GeoIP plugin..."
 	$(BUILD_DIR)/geoip --redis redis://localhost:6379
 
-plugin-llm: ## Build and run LLM plugin
-	@echo "Building LLM plugin..."
-	cd $(PLUGINS_DIR)/llm && go build -o ../../$(BUILD_DIR)/llm .
-	@echo "LLM plugin built successfully!"
-	@echo ""
-	@echo "Usage examples:"
-	@echo "  OpenAI:  $(BUILD_DIR)/llm --api-key YOUR_OPENAI_KEY --provider openai --model gpt-3.5-turbo"
-	@echo "  Claude:  $(BUILD_DIR)/llm --api-key YOUR_CLAUDE_KEY --provider claude --model claude-3-sonnet-20240229"
-	@echo ""
-	@echo "Environment variable: export LLM_API_KEY=your-key-here"
-	@echo "Redis URL: --redis redis://localhost:6379 (default)"
-
 plugin-opencti: ## Build and run OpenCTI plugin
 	@echo "Building OpenCTI plugin..."
 	cd $(PLUGINS_DIR)/opencti && go build -o ../../$(BUILD_DIR)/opencti-plugin .

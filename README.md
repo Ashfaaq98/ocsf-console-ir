@@ -116,7 +116,7 @@ Real-time OCSF inputs and adapters publish to Redis Streams for processing (see 
 
 External plugins run as separate processes and consume/publish via Redis Streams. See [`docs/plugins.md`](docs/plugins.md).
 
-By default external plugins are disabled; enable explicitly by creating an enable marker next to the executable (e.g., `plugins/llm/llm.enabled`) or start plugins manually.
+By default external plugins are disabled; enable explicitly by creating an enable marker next to the executable (e.g., `plugins/misp/misp.enabled`) or start plugins manually.
 
 ## **Devcontainer & Debug**
 

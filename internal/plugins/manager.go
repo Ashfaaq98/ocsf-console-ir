@@ -385,7 +385,7 @@ func (pm *DefaultPluginManager) discoverExternalPlugins() error {
 		}
 
 		// Require explicit enablement via a marker file beside the executable.
-		// Example: plugins/llm/llm  -> plugins/llm/llm.enabled
+		// Example: plugins/misp/misp  -> plugins/misp/misp.enabled
 		enabledMarker := path + ".enabled"
 		if _, statErr := os.Stat(enabledMarker); os.IsNotExist(statErr) {
 			pm.logger.Printf("Skipping external plugin %s (not enabled). To enable: create %s", filepath.Base(path), enabledMarker)
