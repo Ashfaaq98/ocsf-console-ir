@@ -166,12 +166,9 @@ docker-clean: docker-down ## Clean Docker resources
 	docker system prune -f
 
 ## Plugin targets
-
-plugin-geoip: ## Build and run GeoIP plugin
-	@echo "Building GeoIP plugin..."
-	cd $(PLUGINS_DIR)/geoip && go build -o ../../$(BUILD_DIR)/geoip .
-	@echo "Starting GeoIP plugin..."
-	$(BUILD_DIR)/geoip --redis redis://localhost:6379
+## Note: GeoIP and WHOIS enrichment are now built in (in-process, no Redis);
+## see internal/enrich/. The remaining external plugins are threat-intel
+## integrations that still run as separate Redis-based processes.
 
 plugin-opencti: ## Build and run OpenCTI plugin
 	@echo "Building OpenCTI plugin..."
@@ -204,12 +201,6 @@ plugin-misp: ## Build and run MISP plugin
 	@echo "  export MISP_API_KEY=your-api-key-here"
 	@echo ""
 	@echo "Configuration: See plugins/misp/config.yaml for examples"
-
-plugin-whois: ## Build and run Whois plugin
-	@echo "Building Whois plugin..."
-	cd $(PLUGINS_DIR)/whois && go build -o ../../$(BUILD_DIR)/whois .
-	@echo "Starting Whois plugin..."
-	$(BUILD_DIR)/whois --redis redis://localhost:6379
 
 ## Sample data targets
 
