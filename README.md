@@ -14,10 +14,11 @@ OCSF Console IR is a terminal-first incident response manager designed for secur
 
 - OCSF-native event ingestion
 - Keyboard-first TUI for cases & events
-- AI assisted Case Management
-- Plugin-based enrichment via Redis Streams
-- SQLite storage with FTS
-- Pluggable LLM providers for summaries and copilot
+- Built-in enrichment (GeoIP, WHOIS) — in-process, no external services
+- AI-assisted case management with pluggable LLM providers
+- SQLite storage with full-text search
+- Runs fully offline: a single binary, no broker, no database server
+- Optional Redis + threat-intel plugins (MISP, OpenCTI, IntelOwl) for distributed setups
 
 ## **Installation**
 
@@ -33,15 +34,14 @@ brew install Ashfaaq98/tap/console-ir
 curl -sSfL https://raw.githubusercontent.com/Ashfaaq98/ocsf-console-ir/main/scripts/install.sh | bash
 ```
 
-### Docker
+### Docker (experimental)
+
+Console-IR is a terminal-first tool; the container is intended for inspecting the
+CLI and for future headless use. Folder ingestion and enrichment currently run
+only with the TUI active, so a headless container does not yet process events.
 
 ```bash
 docker run --rm -it ghcr.io/ashfaaq98/console-ir:latest --help
-```
-
-```bash
-# Start the headless runtime with HTTP ingest on port 8080 and persistent data
-docker run --rm -it -p 8080:8080 -v $(pwd)/data:/data ghcr.io/ashfaaq98/console-ir:latest
 ```
 
 ### Build from source
@@ -65,8 +65,8 @@ A quick tour of the TUI.
 ### **Prerequisites**
 
 - Go ≥ 1.23
-- Docker (optional, for Redis)
 - Git
+- Docker (optional — only for the experimental distributed mode with Redis + threat-intel plugins)
 
 ### **Clone**
 
@@ -82,41 +82,51 @@ cd ocsf-console-ir
 make build
 ```
 
-### **Run TUI**
+### **Run**
+
+Load the shipped sample and open it in the TUI:
 
 ```bash
+mkdir -p data/incoming
+cp examples/sample-events.jsonl data/incoming/
 ./bin/console-ir serve
 ```
 
-Or headless:
+Select **ALL EVENTS**, open an event, and you'll see GeoIP/WHOIS enrichment
+attached (press `r` to refresh as enrichment lands). To ingest your own data,
+drop OCSF `.jsonl` files into `data/incoming/` — on startup or while running.
 
-```bash
-./bin/console-ir serve --no-tui
-```
+Headless mode (`serve --no-tui`) is experimental and does not yet ingest.
 
 ## Ingesting events
 
-#### 1. CLI file ingest
+#### 1. Folder drop-in (recommended)
 
-Run a JSONL file directly: `./bin/console-ir ingest <file>` — see [cmd/ingest.go](cmd/ingest.go).
+Drop OCSF `.jsonl`/`.json` files into `data/incoming/` while the TUI is running —
+they're ingested and enriched automatically. Files staged before launch are
+picked up on startup. See [internal/ingest/folder.go](internal/ingest/folder.go).
 
-#### 2. Folder drop-in
+#### 2. CLI file ingest
 
-Drop files into `data/incoming`; the folder watcher ingests new files automatically (see [internal/ingest/folder.go](internal/ingest/folder.go)).
+Pre-load a file into the store: `./bin/console-ir ingest <file>`. Note this batch
+import does not run enrichment — open the events in the TUI for that. See
+[cmd/ingest.go](cmd/ingest.go).
 
-#### 3. HTTP ingestion
+#### 3. HTTP ingestion (experimental)
 
-Enable the optional HTTP endpoint to POST events into the pipeline (see [internal/ingest/http_ingest.go](internal/ingest/http_ingest.go)).
+An optional HTTP endpoint can accept POSTed events (localhost by default; a bearer
+token is required on non-loopback binds). See
+[internal/ingest/http_ingest.go](internal/ingest/http_ingest.go).
 
-#### 4. Live / stream ingestion
+## **Enrichment & plugins**
 
-Real-time OCSF inputs and adapters publish to Redis Streams for processing (see [internal/ingest/live.go](internal/ingest/live.go) and [internal/ingest/ocsf.go](internal/ingest/ocsf.go)).
+GeoIP and WHOIS enrichment are **built in** and run in-process — no configuration,
+no external services.
 
-## **Plugins**
-
-External plugins run as separate processes and consume/publish via Redis Streams. See [`docs/plugins.md`](docs/plugins.md).
-
-By default external plugins are disabled; enable explicitly by creating an enable marker next to the executable (e.g., `plugins/misp/misp.enabled`) or start plugins manually.
+Threat-intel integrations (MISP, OpenCTI, IntelOwl) run as optional external
+plugins over Redis Streams, for distributed deployments. They are disabled by
+default; enable one by creating an enable marker next to its executable (e.g.
+`plugins/misp/misp.enabled`). See [`docs/plugins.md`](docs/plugins.md).
 
 ## **Devcontainer & Debug**
 
@@ -128,10 +138,11 @@ Development is supported via [`.devcontainer/devcontainer.json`](.devcontainer/d
 
 ## **Troubleshooting**
 
-- Ensure Redis is reachable at the configured URL.
-- If TUI fails, run with --no-tui or use a native terminal.
+- Empty event list? Drop `examples/sample-events.jsonl` into `data/incoming/` and press `r`.
+- If the TUI won't start, use a native terminal (it needs a real TTY); `--no-tui` is experimental and does not ingest.
+- Enrichment is asynchronous — press `r` to refresh an event's detail once WHOIS/GeoIP lookups complete.
 - Build issues: run `go mod download` and `make build`.
-- Docker image runs the app in headless mode and enables HTTP ingest on `0.0.0.0:8080` by default.
+- Redis is only needed for the optional distributed mode (`--redis ...`); the default is standalone with no external services.
 
 ## **Contributing**
 

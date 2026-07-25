@@ -21,7 +21,7 @@ This document explains the workflow, coding standards, and how to run checks loc
 ## Prerequisites
 
 - Go ≥ 1.23 (see [docs/build.md](docs/build.md:7))
-- Docker (optional, for Redis/quick demo)
+- Docker (optional — only for the experimental Redis-based threat-intel plugins)
 - Make
 
 ## One-time setup
@@ -47,15 +47,13 @@ make build-all       # main + plugins
 ./bin/console-ir serve
 ```
 
-- Headless:
+- Load the shipped sample, then explore it in the TUI:
 ```bash
-./bin/console-ir serve --no-tui
+cp examples/sample-events.jsonl data/incoming/
+./bin/console-ir serve
 ```
 
-- Demo (builds everything, starts Redis, ingests sample data):
-```bash
-make demo
-```
+- Headless (`--no-tui`) is experimental and does not currently ingest.
 
 ## Code style
 
@@ -104,9 +102,16 @@ go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
 Do not include secrets in code, configs, tests, or logs. See [SECURITY.md](SECURITY.md:1) for reporting vulnerabilities.
 
-## Plugins
+## Enrichment & plugins
 
-Each plugin is a standalone Go module under [plugins/](plugins/README.md:1). Build with:
+GeoIP and WHOIS enrichment are built in and run in-process — see
+[internal/enrich/](internal/enrich/). To add a new in-process enrichment,
+implement the `CorePlugin` interface (see [internal/plugins/interface.go](internal/plugins/interface.go))
+and register it in [cmd/serve.go](cmd/serve.go).
+
+The threat-intel integrations under [plugins/](plugins/) (MISP, OpenCTI, IntelOwl)
+are optional external Go modules that communicate over Redis Streams; see
+[docs/plugins.md](docs/plugins.md). Build them with:
 ```bash
 make build-plugins
 ```
