@@ -143,17 +143,20 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 	llmProvider := p
 
-	// Initialize plugin manager
+	// Initialize plugin manager. Plugins share the bus's TUI-silent logger so
+	// their runtime logs (e.g. per-lookup failures during enrichment) never
+	// corrupt the TUI screen; in headless mode this is the normal logger.
 	logger.Println("Initializing plugin manager...")
-	pluginManager := plugins.NewPluginManager(eventBus, st, config.Plugins.Dir, logger)
+	pluginLogger := busLogger
+	pluginManager := plugins.NewPluginManager(eventBus, st, config.Plugins.Dir, pluginLogger)
 
 	// Register embedded (in-process) core enrichments. These run inside the
 	// binary via the plugin manager's enrichment queue, with no Redis broker
 	// or subprocess required.
-	if err := pluginManager.GetRegistry().RegisterCorePlugin(whois.New(logger)); err != nil {
+	if err := pluginManager.GetRegistry().RegisterCorePlugin(whois.New(pluginLogger)); err != nil {
 		logger.Printf("Failed to register whois enrichment: %v", err)
 	}
-	if err := pluginManager.GetRegistry().RegisterCorePlugin(geoip.New(logger)); err != nil {
+	if err := pluginManager.GetRegistry().RegisterCorePlugin(geoip.New(pluginLogger)); err != nil {
 		logger.Printf("Failed to register geoip enrichment: %v", err)
 	}
 
