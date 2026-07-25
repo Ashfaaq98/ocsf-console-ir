@@ -58,7 +58,10 @@ func runReset(cmd *cobra.Command, args []string) error {
 	// Determine what to reset
 	resetBoth := !resetRedis && !resetDB
 	if resetBoth {
-		resetRedis = true
+		// Redis is opt-in: only reset it when a URL is configured. With no
+		// Redis configured, a bare `reset` touches just the database rather
+		// than probing localhost for a broker that was never used.
+		resetRedis = viper.GetString("redis.url") != ""
 		resetDB = true
 	}
 
