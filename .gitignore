@@ -14,10 +14,7 @@ plugins/intelowl/intelowl
 plugins/misp/misp
 plugins/opencti/opencti
 
-# Database files
-console-ir.db
-console-ir.db-shm
-console-ir.db-wal
+# Database files (SQLite) — safety net; runtime DBs live under data/ (below)
 *.db
 *.db-*
 
@@ -30,19 +27,15 @@ ui-debug.log
 # Release preparation directories
 release-*/
 
-# Build and release scripts are kept in repo for reference
-# build.ps1
-# prepare-release.ps1  
-# upload-release.ps1
-
 # Temporary files
 *.tmp
 *.temp
 bin/*
 
-# Runtime and build artifacts
-exports/**
-data/incoming/**/*.jsonl
+# Runtime data — created by the binary at run time; never committed
+data/
+logs/
+exports/
 config/llm_settings.json
 
 # Local-only workspace for agent notes, reports, and scratch files
