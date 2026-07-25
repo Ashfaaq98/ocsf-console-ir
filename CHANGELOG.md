@@ -9,11 +9,10 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ### Planned
 
-- RBAC / multi-user support
 - Headless / server-mode ingestion + enrichment
 - Threat-intel enrichment (MISP, OpenCTI, IntelOwl) embedded in-process
 
-## [0.2.0] - Unreleased
+## [0.1.1] - 2026-07-25
 
 ### Changed
 
@@ -51,6 +50,6 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 - Headless runtime mode with `--no-tui`
 - Devcontainer and VS Code debug configuration for contributors
 
-[Unreleased]: https://github.com/Ashfaaq98/ocsf-console-ir/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/Ashfaaq98/ocsf-console-ir/compare/v0.1.0...v0.2.0
+[Unreleased]: https://github.com/Ashfaaq98/ocsf-console-ir/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/Ashfaaq98/ocsf-console-ir/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Ashfaaq98/ocsf-console-ir/releases/tag/v0.1.0
