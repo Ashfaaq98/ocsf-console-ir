@@ -14,21 +14,24 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/bus"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
+	"github.com/fsnotify/fsnotify"
 )
 
 // FolderOptions controls ingest-folder behavior.
 type FolderOptions struct {
-	Dir         string
-	Watch       bool
-	Patterns    []string // e.g. []string{"*.jsonl", "*.json"}
-	CaseTitle   string   // default "Ingested Events"
-	Logger      *log.Logger
+	Dir       string
+	Watch     bool
+	Patterns  []string // e.g. []string{"*.jsonl", "*.json"}
+	CaseTitle string   // default "Ingested Events"
+	Logger    *log.Logger
 	// When true and in Watch mode, start JSONL files at EOF on startup to avoid
 	// re-ingesting existing lines each time the app starts.
 	TailFromEnd bool
+	// Enricher, when set, receives each ingested event for in-process
+	// enrichment by embedded core plugins. Optional; nil disables it.
+	Enricher Enricher
 }
 
 // FolderIngestor ingests OCSF events from a directory (one-shot or watch mode).
@@ -306,20 +309,25 @@ func (fi *FolderIngestor) processEventJSON(ctx context.Context, raw []byte) erro
 		return err
 	}
 
-		// Assign to the ingest case when configured
-		if fi.caseID != "" {
-			if err := fi.store.AssignEventToCase(ctx, eventID, fi.caseID); err != nil {
-				return err
-			}
+	// Assign to the ingest case when configured
+	if fi.caseID != "" {
+		if err := fi.store.AssignEventToCase(ctx, eventID, fi.caseID); err != nil {
+			return err
 		}
+	}
 
-	// Best-effort publish to bus (optional, no-op on NullBus)
-	_ = fi.bus.PublishEvent(ctx, bus.EventMessage{
+	msg := bus.EventMessage{
 		EventID:   eventID,
 		EventType: string(ocsfEvent.GetEventType()),
 		RawJSON:   string(raw),
 		Timestamp: ocsfEvent.Time.Unix(),
-	})
+	}
+	// Best-effort publish to bus (optional, no-op on NullBus)
+	_ = fi.bus.PublishEvent(ctx, msg)
+	// In-process enrichment by embedded core plugins (optional)
+	if fi.opts.Enricher != nil {
+		fi.opts.Enricher.EnqueueEvent(msg)
+	}
 
 	return nil
 }

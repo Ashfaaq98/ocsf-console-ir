@@ -12,13 +12,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/bus"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/enrich/whois"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ingest"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/plugins"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ui"
+	"github.com/gdamore/tcell/v2"
 	"github.com/spf13/cobra"
 )
 
@@ -66,7 +67,7 @@ Examples:
 
 func init() {
 	rootCmd.AddCommand(serveCmd)
-	
+
 	serveCmd.Flags().BoolVar(&noTUI, "no-tui", false, "Run in headless mode without TUI")
 	serveCmd.Flags().BoolVar(&forceTUI, "force-tui", false, "Force TUI mode even in unsupported terminals")
 
@@ -145,6 +146,13 @@ func runServe(cmd *cobra.Command, args []string) error {
 	logger.Println("Initializing plugin manager...")
 	pluginManager := plugins.NewPluginManager(eventBus, st, config.Plugins.Dir, logger)
 
+	// Register embedded (in-process) core enrichments. These run inside the
+	// binary via the plugin manager's enrichment queue, with no Redis broker
+	// or subprocess required.
+	if err := pluginManager.GetRegistry().RegisterCorePlugin(whois.New(logger)); err != nil {
+		logger.Printf("Failed to register whois enrichment: %v", err)
+	}
+
 	// Start plugin manager
 	if err := pluginManager.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start plugin manager: %w", err)
@@ -207,7 +215,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	if !noTUI {
 		logger.Println("Starting TUI...")
 		logger.Printf("Terminal info: %s", getTerminalInfo())
-		
+
 		// Test if TUI can be initialized (unless forced)
 		if !forceTUI && !canInitializeTUI() {
 			// Check if we can fix this with pseudo-TTY
@@ -226,14 +234,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 			logger.Println("  - CLI commands: ./bin/console-ir list cases")
 			logger.Println("  - Headless mode: ./bin/console-ir serve --no-tui")
 			logger.Println("")
-			
+
 			// Switch to headless mode
 			noTUI = true
 		} else {
 			// Create a silent logger for background services when TUI is active
 			silentLogger := log.New(io.Discard, "", 0)
 			coordinator.logger = silentLogger
-				
+
 			// Create logs directory and a file-backed logger for UI to prevent terminal corruption
 			baseDir := getWorkingDir()
 			logDir := filepath.Join(baseDir, "logs")
@@ -247,7 +255,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 				logger.Printf("Warning: Could not create UI log file at %s: %v", logPath, err)
 				logFile = nil
 			}
-				
+
 			var uiLogger *log.Logger
 			if logFile != nil {
 				uiLogger = log.New(logFile, "[UI] ", log.LstdFlags)
@@ -268,14 +276,16 @@ func runServe(cmd *cobra.Command, args []string) error {
 			}
 			parser := ingest.NewParser()
 			fopts := ingest.FolderOptions{
-				Dir:         ingestDir,
-				Watch:       true,
-				Patterns:    []string{"*.jsonl", "*.json"},
-				CaseTitle:   "",
+				Dir:       ingestDir,
+				Watch:     true,
+				Patterns:  []string{"*.jsonl", "*.json"},
+				CaseTitle: "",
 				// Route folder-ingestor logs to the UI file logger to avoid corrupting TUI output
-				Logger:      uiLogger,
+				Logger: uiLogger,
 				// Avoid re-ingesting existing JSONL lines on each startup; begin tailing from EOF.
 				TailFromEnd: true,
+				// Drive embedded core enrichments in-process for each ingested event.
+				Enricher: pluginManager,
 			}
 			// Use the real event bus so folder ingestion publishes events for plugins
 			fbus := eventBus
@@ -287,7 +297,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 			}()
 
 			ui := ui.NewUI(ctx, st, llmProvider, uiLogger, GetVersion())
-			
+
 			// Start TUI directly - tcell can handle terminal compatibility
 			if err := ui.Start(ctx); err != nil {
 				return fmt.Errorf("TUI error: %w", err)
@@ -319,7 +329,7 @@ func isTUISupported() bool {
 	// This allows the TUI library (tcell/tview) to handle compatibility detection.
 	return true
 	// --- END TEMPORARY FIX ---
-	
+
 	// Original compatibility scoring logic (commented out)
 	// score := getTerminalCompatibilityScore()
 	// return score >= 60 // Require at least 60% compatibility
@@ -331,12 +341,12 @@ func canInitializeTUI() bool {
 	if err != nil {
 		return false
 	}
-	
+
 	err = screen.Init()
 	if err != nil {
 		return false
 	}
-	
+
 	// Clean up immediately
 	screen.Fini()
 	return true
@@ -347,12 +357,12 @@ func getTerminalCompatibilityScore() int {
 	score := 0
 	term := strings.ToLower(os.Getenv("TERM"))
 	termProgram := strings.ToLower(os.Getenv("TERM_PROGRAM"))
-	
+
 	// Base score for having a terminal
 	if isTerminal() {
 		score += 20
 	}
-	
+
 	// TERM environment variable scoring
 	switch {
 	case term == "":
@@ -374,7 +384,7 @@ func getTerminalCompatibilityScore() int {
 	case term != "":
 		score += 10 // Some TERM set - minimal
 	}
-	
+
 	// Terminal program scoring
 	switch {
 	case strings.Contains(termProgram, "iterm"):
@@ -386,17 +396,17 @@ func getTerminalCompatibilityScore() int {
 	case strings.Contains(termProgram, "vscode"):
 		score -= 20 // VS Code integrated terminal
 	}
-	
+
 	// Terminal size check
 	if hasTerminalSize() {
 		score += 15
 	}
-	
+
 	// Color support check
 	if supportsColors() {
 		score += 10
 	}
-	
+
 	// Ensure score is within bounds
 	if score < 0 {
 		score = 0
@@ -404,42 +414,42 @@ func getTerminalCompatibilityScore() int {
 	if score > 100 {
 		score = 100
 	}
-	
+
 	return score
 }
 
 // getTerminalInfo returns detailed terminal information
 func getTerminalInfo() string {
 	var info []string
-	
+
 	term := os.Getenv("TERM")
 	if term == "" {
 		info = append(info, "TERM=<not set>")
 	} else {
 		info = append(info, fmt.Sprintf("TERM=%s", term))
 	}
-	
+
 	termProgram := os.Getenv("TERM_PROGRAM")
 	if termProgram != "" {
 		info = append(info, fmt.Sprintf("TERM_PROGRAM=%s", termProgram))
 	}
-	
+
 	if width, height := getTerminalSize(); width > 0 && height > 0 {
 		info = append(info, fmt.Sprintf("Size=%dx%d", width, height))
 	}
-	
+
 	if isTerminal() {
 		info = append(info, "TTY=yes")
 	} else {
 		info = append(info, "TTY=no")
 	}
-	
+
 	if supportsColors() {
 		info = append(info, "Colors=yes")
 	} else {
 		info = append(info, "Colors=no")
 	}
-	
+
 	return strings.Join(info, ", ")
 }
 
@@ -490,7 +500,7 @@ func hasTerminalSize() bool {
 // supportsColors checks if terminal supports colors
 func supportsColors() bool {
 	term := strings.ToLower(os.Getenv("TERM"))
-	
+
 	// Check for color support indicators
 	colorTerms := []string{"color", "256", "truecolor", "24bit"}
 	for _, colorTerm := range colorTerms {
@@ -498,12 +508,12 @@ func supportsColors() bool {
 			return true
 		}
 	}
-	
+
 	// Check COLORTERM environment variable
 	if colorTerm := os.Getenv("COLORTERM"); colorTerm != "" {
 		return true
 	}
-	
+
 	// Known color-supporting terminals
 	supportedTerms := []string{"xterm", "screen", "tmux", "linux", "ansi"}
 	for _, supported := range supportedTerms {
@@ -511,7 +521,7 @@ func supportsColors() bool {
 			return true
 		}
 	}
-	
+
 	return false
 }
 
@@ -523,7 +533,7 @@ type ServiceCoordinator struct {
 	llmProvider   llm.LLMProvider
 	logger        *log.Logger
 	ctx           context.Context
-	
+
 	// Service state
 	wg      sync.WaitGroup
 	running bool
@@ -561,10 +571,10 @@ func (sc *ServiceCoordinator) Stop() {
 
 	sc.logger.Println("Stopping background services...")
 	sc.running = false
-	
+
 	// Wait for all goroutines to finish
 	sc.wg.Wait()
-	
+
 	sc.logger.Println("Background services stopped")
 }
 
@@ -671,7 +681,7 @@ func (sc *ServiceCoordinator) performHealthChecks() {
 		if err != nil {
 			sc.logger.Printf("Plugin %s is unhealthy: %v", name, err)
 			unhealthyCount++
-			
+
 			// TODO: Implement plugin restart logic
 			// if sc.shouldRestartPlugin(name) {
 			//     sc.restartPlugin(name)
@@ -717,9 +727,9 @@ func (sc *ServiceCoordinator) collectMetrics() {
 }
 
 // createSampleData creates sample data for demonstration (if database is empty)
-	// createSampleData removed to prevent automatic creation of sample cases/events.
-	// Automatic sample data seeding was intentionally deleted to ensure that when
-	// cases/events are removed by the user, they are not recreated on restart.
+// createSampleData removed to prevent automatic creation of sample cases/events.
+// Automatic sample data seeding was intentionally deleted to ensure that when
+// cases/events are removed by the user, they are not recreated on restart.
 
 // getServiceStatus returns the status of all services
 func (sc *ServiceCoordinator) getServiceStatus() map[string]interface{} {
@@ -727,8 +737,8 @@ func (sc *ServiceCoordinator) getServiceStatus() map[string]interface{} {
 		"running": sc.running,
 		"services": map[string]string{
 			"enrichment_processor": "running",
-			"health_monitor":      "running",
-			"metrics_collector":   "running",
+			"health_monitor":       "running",
+			"metrics_collector":    "running",
 		},
 	}
 
@@ -774,11 +784,11 @@ func runWithPseudoTTY(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
-	
+
 	// Build the command arguments
 	cmdArgs := []string{"serve"}
 	cmdArgs = append(cmdArgs, args...)
-	
+
 	// Add force-tui flag if not already present
 	hasForceTUI := false
 	for _, arg := range args {
@@ -790,7 +800,7 @@ func runWithPseudoTTY(cmd *cobra.Command, args []string) error {
 	if !hasForceTUI {
 		cmdArgs = append(cmdArgs, "--force-tui")
 	}
-	
+
 	// VULN-4: Avoid shell command string interpolation to prevent injection via
 	// TERM env var or executable path. Use exec.Command with separate arguments
 	// and pass TERM safely through the environment.
@@ -798,10 +808,10 @@ func runWithPseudoTTY(cmd *cobra.Command, args []string) error {
 	innerCmd.Stdin = os.Stdin
 	innerCmd.Stdout = os.Stdout
 	innerCmd.Stderr = os.Stderr
-	
+
 	// Inherit environment and ensure TERM is set
 	innerCmd.Env = os.Environ()
-	
+
 	return innerCmd.Run()
 }
 
