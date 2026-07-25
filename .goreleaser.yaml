@@ -79,7 +79,11 @@ brews:
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Formula
-    skip_upload: auto
+    # Disabled for the initial public release: the homebrew-tap repository and
+    # HOMEBREW_TAP_TOKEN are not set up yet, and an unguarded push would fail the
+    # release *after* the GitHub release and images are published. Re-enable
+    # (set to "auto") once the tap + token exist.
+    skip_upload: "true"
     homepage: "https://github.com/Ashfaaq98/ocsf-console-ir"
     description: "Terminal-first OCSF-native incident response manager for security analysts"
     license: "AGPL-3.0-only"
@@ -101,7 +105,6 @@ dockers:
       - main.go
       - cmd
       - internal
-      - config
     image_templates:
       - "ghcr.io/ashfaaq98/console-ir:{{ .Tag }}-amd64"
     build_flag_templates:
@@ -126,7 +129,6 @@ dockers:
       - main.go
       - cmd
       - internal
-      - config
     image_templates:
       - "ghcr.io/ashfaaq98/console-ir:{{ .Tag }}-arm64"
     build_flag_templates:

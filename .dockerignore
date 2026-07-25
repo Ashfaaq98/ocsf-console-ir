@@ -9,8 +9,9 @@ coverage.out
 coverage.html
 logs
 exports
-plugins/geoip/geoip
 plugins/intelowl/intelowl
 plugins/misp/misp
 plugins/opencti/opencti
-plugins/whois/whois
+
+# Never copy a real local LLM config (may hold an API key) into a build context
+config/llm_settings.json
