@@ -1,16 +1,25 @@
-# OCSF Console IR
+<div align="center">
 
-**Incident response for the terminal, not another platform to deploy.**
+<img src="assets/logo.png" alt="OCSF Console IR logo" width="200" />
 
-[![Release](https://img.shields.io/github/v/release/Ashfaaq98/ocsf-console-ir?display_name=tag)](https://github.com/Ashfaaq98/ocsf-console-ir/releases)
-[![CI](https://github.com/Ashfaaq98/ocsf-console-ir/actions/workflows/ci.yml/badge.svg)](https://github.com/Ashfaaq98/ocsf-console-ir/actions/workflows/ci.yml)
-[![Docker](https://img.shields.io/badge/docker-ghcr.io%2Fashfaaq98%2Fconsole--ir-2496ED?logo=docker&logoColor=white)](https://github.com/Ashfaaq98/ocsf-console-ir/pkgs/container/console-ir)
-[![Go](https://img.shields.io/badge/go-%E2%89%A51.23-00ADD8?logo=go&logoColor=white)](go.mod)
-[![Platforms](https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-lightgrey)](https://github.com/Ashfaaq98/ocsf-console-ir/releases)
-[![OCSF](https://img.shields.io/badge/OCSF-native-6f42c1)](https://schema.ocsf.io/)
-[![License](https://img.shields.io/badge/license-AGPLv3-blue.svg)](LICENSE)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+<h1>OCSF Console IR</h1>
 
+<p><b>Incident response for the terminal, not another platform to deploy.</b></p>
+
+</div>
+
+<p align="center">
+  <a href="https://github.com/Ashfaaq98/ocsf-console-ir/releases"><img src="https://img.shields.io/github/v/release/Ashfaaq98/ocsf-console-ir?display_name=tag" alt="Release" /></a>
+  <a href="https://github.com/Ashfaaq98/ocsf-console-ir/actions/workflows/ci.yml"><img src="https://github.com/Ashfaaq98/ocsf-console-ir/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/Ashfaaq98/ocsf-console-ir/pkgs/container/console-ir"><img src="https://img.shields.io/badge/docker-ghcr.io%2Fashfaaq98%2Fconsole--ir-2496ED?logo=docker&logoColor=white" alt="Docker" /></a>
+  <a href="go.mod"><img src="https://img.shields.io/badge/go-%E2%89%A51.23-00ADD8?logo=go&logoColor=white" alt="Go" /></a>
+  <a href="https://github.com/Ashfaaq98/ocsf-console-ir/releases"><img src="https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-lightgrey" alt="Platforms" /></a>
+  <a href="https://schema.ocsf.io/"><img src="https://img.shields.io/badge/OCSF-native-6f42c1" alt="OCSF" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPLv3-blue.svg" alt="License" /></a>
+  <a href="CONTRIBUTING.md"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome" /></a>
+</p>
+
+## Overview
 
 Console-IR is a **terminal-first, OCSF-native** incident-response workspace. It ingests
 [OCSF](https://schema.ocsf.io/) events, enriches indicators, and gives a security analyst
