@@ -111,22 +111,6 @@ func (ls *LocalStub) generateChatResponse(message, persona, mcpMode string) stri
 	}
 }
 
-func (ls *LocalStub) generateIRAnalystResponse(message, mcpMode string) string {
-	if strings.Contains(message, "contain") || strings.Contains(message, "isolate") {
-		return "For containment, I recommend: 1) Isolate affected systems from the network, 2) Preserve forensic evidence, 3) Document all actions taken. Consider network segmentation if lateral movement is suspected."
-	}
-	
-	if strings.Contains(message, "timeline") {
-		return "To build an incident timeline: 1) Collect logs from all affected systems, 2) Correlate events by timestamp, 3) Identify initial compromise vector, 4) Map attacker progression through the environment."
-	}
-	
-	if strings.Contains(message, "eradicate") || strings.Contains(message, "remove") {
-		return "Eradication steps: 1) Remove malware and artifacts, 2) Close attack vectors, 3) Update security controls, 4) Patch vulnerabilities. Ensure complete removal before recovery phase."
-	}
-	
-	return "As an IR analyst, I can help with incident containment, evidence collection, timeline reconstruction, and recovery planning. What specific aspect of the incident would you like assistance with?"
-}
-
 func (ls *LocalStub) generateThreatHunterResponse(message, mcpMode string) string {
 	if strings.Contains(message, "hunt") || strings.Contains(message, "search") {
 		return "For threat hunting, focus on: 1) Anomalous network connections, 2) Unusual process execution patterns, 3) Privilege escalation indicators, 4) Data exfiltration signs. Use MITRE ATT&CK framework for structured hunting."

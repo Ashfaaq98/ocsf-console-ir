@@ -49,7 +49,7 @@ check_prerequisites() {
             print_status "SUCCESS" "Redis is running"
         else
             print_status "WARNING" "Redis is not running - starting with Docker..."
-            docker-compose up -d redis
+            docker run -d -p 6379:6379 redis
             sleep 5
             if redis-cli ping >/dev/null 2>&1; then
                 print_status "SUCCESS" "Redis started successfully"

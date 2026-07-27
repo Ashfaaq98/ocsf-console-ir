@@ -112,7 +112,7 @@ Windows:
      - Confirms build, unit tests, dry‑run, Redis connectivity, and generates a test report.
 
 3. Redis/Streams smoke
-   - Ensure Redis up (docker-compose up -d redis or managed).
+   - Ensure Redis up (docker run -d -p 6379:6379 redis, or managed).
    - Check consumer group creation on first run:
      - `redis-cli XINFO GROUPS events` (expect group console-ir-misp if started once)
 
