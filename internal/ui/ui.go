@@ -673,14 +673,6 @@ func (ui *UI) Start(ctx context.Context) error {
 	return err
 }
 
-// Stop stops the TUI application
-func (ui *UI) Stop() {
-	ui.logger.Println("Stopping TUI application")
-	ui.running = false
-	ui.cancel()
-	ui.app.Stop()
-}
-
 // setupLayout creates the main layout
 func (ui *UI) setupLayout() {
 	// Create components
@@ -2097,23 +2089,6 @@ func (ui *UI) cycleFocus() {
 	}
 }
 
-func (ui *UI) focusLeft() {
-	switch ui.app.GetFocus() {
-	case ui.eventDetail:
-		ui.app.SetFocus(ui.eventList)
-		ui.highlightFocus(ui.eventList)
-		ui.setStatusDirect("[%s]Focus: Events List[-:-:-]", ui.theme.TagAccent)
-	case ui.eventList:
-		ui.app.SetFocus(ui.sidebar)
-		ui.highlightFocus(ui.sidebar)
-		ui.setStatusDirect("[%s]Focus: Cases[-:-:-]", ui.theme.TagAccent)
-	default:
-		ui.app.SetFocus(ui.sidebar)
-		ui.highlightFocus(ui.sidebar)
-		ui.setStatusDirect("[%s]Focus: Cases[-:-:-]", ui.theme.TagAccent)
-	}
-}
-
 func (ui *UI) focusRight() {
 	switch ui.app.GetFocus() {
 	case ui.sidebar:
@@ -2873,48 +2848,6 @@ func (ui *UI) showAddToExistingCaseModal() {
 	ui.setStatusDirect("[%s]Enter the case number (1-%d) and press 'Add Events'. Esc to cancel.[-:-:-]", ui.theme.TagAccent, len(ui.cases))
 }
 
-// showCaseSelectionInput shows input field for case number selection
-func (ui *UI) showCaseSelectionInput() {
-	form := tview.NewForm()
-	form.SetTitle(" Select Case ")
-	form.SetBorder(true)
-	
-	// Apply theme colors
-	form.SetBackgroundColor(ui.theme.Surface)
-	form.SetFieldBackgroundColor(ui.theme.Surface)
-	form.SetFieldTextColor(ui.theme.TextPrimary)
-	form.SetLabelColor(ui.theme.TextPrimary)
-	form.SetButtonBackgroundColor(ui.theme.SelectionBg)
-	form.SetButtonTextColor(ui.theme.SelectionFg)
-	form.SetBorderColor(ui.theme.FocusBorder)
-	
-	var caseNumber string
-	form.AddInputField("Case Number", "", 10, nil, func(text string) {
-		caseNumber = text
-	})
-	
-	form.AddButton("Add Events", func() {
-		ui.addEventsToCase(caseNumber)
-		ui.restoreMainLayout()
-	})
-	form.AddButton("Cancel", func() {
-		ui.restoreMainLayout()
-	})
-	
-	// Handle Esc key
-	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEsc {
-			ui.restoreMainLayout()
-			return nil
-		}
-		return event
-	})
-	
-	ui.lastFocus = ui.app.GetFocus()
-	ui.app.SetRoot(form, true)
-	ui.app.SetFocus(form)
-}
-
 // createCaseWithEvents creates a new case and assigns selected events to it
 func (ui *UI) createCaseWithEvents(title, description, severity, assignedTo string) {
 	ui.setStatusDirect("[%s]Creating case and assigning events...[-:-:-]", ui.theme.TagWarning)
@@ -3117,182 +3050,6 @@ func themeNeon() Theme {
 		TagSeverityInfo:     "#0a84ff",
 	}
 }
-// showTimeFilterModal opens a modal to set start/end time filters (RFC3339).
-func (ui *UI) showTimeFilterModal() {
-	form := tview.NewForm()
-	if ui.logger != nil {
-		ui.logger.Printf("Time filter modal opened")
-	}
-	form.SetTitle(" Set Time Filter ")
-	form.SetBorder(true)
-
-	// Theme colors
-	form.SetBackgroundColor(ui.theme.Surface)
-	form.SetFieldBackgroundColor(ui.theme.Surface)
-	form.SetFieldTextColor(ui.theme.TextPrimary)
-	form.SetLabelColor(ui.theme.TextPrimary)
-	form.SetButtonBackgroundColor(ui.theme.SelectionBg)
-	form.SetButtonTextColor(ui.theme.SelectionFg)
-	form.SetBorderColor(ui.theme.FocusBorder)
-
-	// Prefill fields if present
-	startPrefill := ""
-	endPrefill := ""
-	if !ui.filterStart.IsZero() {
-		startPrefill = ui.filterStart.UTC().Format(time.RFC3339)
-	}
-	if !ui.filterEnd.IsZero() {
-		endPrefill = ui.filterEnd.UTC().Format(time.RFC3339)
-	}
-
-	var startStr, endStr string
-
-	// Track indices of the input fields so we can update them from preset buttons.
-	startInputIndex := form.GetFormItemCount()
-	form.AddInputField("Start", startPrefill, 40, nil, func(text string) { startStr = strings.TrimSpace(text) })
-	endInputIndex := form.GetFormItemCount()
-	form.AddInputField("End", endPrefill, 40, nil, func(text string) { endStr = strings.TrimSpace(text) })
-
-	// Helper to update both the variables and the visible input fields.
-	setFieldTexts := func(s, e string) {
-		startStr = strings.TrimSpace(s)
-		endStr = strings.TrimSpace(e)
-		if fi, ok := form.GetFormItem(startInputIndex).(*tview.InputField); ok {
-			fi.SetText(startStr)
-		}
-		if fi, ok := form.GetFormItem(endInputIndex).(*tview.InputField); ok {
-			fi.SetText(endStr)
-		}
-	}
-
-	// Quick presets to speed up filtering UX.
-	form.AddButton("Last 5m", func() {
-		now := time.Now().UTC()
-		setFieldTexts(now.Add(-5*time.Minute).Format(time.RFC3339), now.Format(time.RFC3339))
-	})
-	form.AddButton("Last 1h", func() {
-		now := time.Now().UTC()
-		setFieldTexts(now.Add(-1*time.Hour).Format(time.RFC3339), now.Format(time.RFC3339))
-	})
-	form.AddButton("Last 24h", func() {
-		now := time.Now().UTC()
-		setFieldTexts(now.Add(-24*time.Hour).Format(time.RFC3339), now.Format(time.RFC3339))
-	})
-	form.AddButton("Today", func() {
-		now := time.Now().UTC()
-		startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-		setFieldTexts(startOfDay.Format(time.RFC3339), now.Format(time.RFC3339))
-	})
-
-	form.AddButton("Apply", func() {
-		// Read the current field values directly from the form to avoid relying solely on change callbacks.
-		if fi, ok := form.GetFormItem(startInputIndex).(*tview.InputField); ok {
-			startStr = strings.TrimSpace(fi.GetText())
-		}
-		if fi, ok := form.GetFormItem(endInputIndex).(*tview.InputField); ok {
-			endStr = strings.TrimSpace(fi.GetText())
-		}
-		if ui.logger != nil {
-			ui.logger.Printf("Filter Apply pressed: raw startStr=%q raw endStr=%q", startStr, endStr)
-		}
-
-		// Serialize apply actions
-		if !atomic.CompareAndSwapInt32(&ui.filterApplying, 0, 1) {
-			ui.setStatusDirect("[%s]Filter apply already in progress[-:-:-]", ui.theme.TagWarning)
-			if ui.logger != nil {
-				ui.logger.Printf("Filter Apply ignored: filterApplying=1")
-			}
-			return
-		}
-
-		var start, end time.Time
-		var err error
-
-		if strings.TrimSpace(startStr) != "" {
-			start, err = parseFlexibleTime(startStr, time.Now())
-			if err != nil {
-				atomic.StoreInt32(&ui.filterApplying, 0)
-				ui.setStatusDirect("[%s]Invalid Start time: %v[-:-:-]", ui.theme.TagError, err)
-				if ui.logger != nil {
-					ui.logger.Printf("Filter Apply parse error (start): %v", err)
-				}
-				return
-			}
-		}
-		if strings.TrimSpace(endStr) != "" {
-			end, err = parseFlexibleTime(endStr, time.Now())
-			if err != nil {
-				atomic.StoreInt32(&ui.filterApplying, 0)
-				ui.setStatusDirect("[%s]Invalid End time: %v[-:-:-]", ui.theme.TagError, err)
-				if ui.logger != nil {
-					ui.logger.Printf("Filter Apply parse error (end): %v", err)
-				}
-				return
-			}
-		}
-
-		// Assign computed filter bounds
-		ui.filterStart = start
-		ui.filterEnd = end
-
-		// If a load is in-progress, we'll defer the reload rather than aborting.
-		inProgress := atomic.LoadInt32(&ui.loadingEvents) == 1
-		if ui.logger != nil {
-			ui.logger.Printf("Filter Apply: start=%v end=%v showAll=%v selectedCaseID=%s inProgress=%v",
-				start, end, ui.showAll, ui.selectedCaseID, inProgress)
-		}
-		if inProgress {
-			ui.setStatusDirect("[%s]Load in progress; deferring filter reload...[-:-:-]", ui.theme.TagWarning)
-		}
-
-		// Restore layout and set status directly (we are on UI goroutine), then safely schedule reload
-		if ui.logger != nil {
-			ui.logger.Printf("Filter Apply: restoring layout and scheduling reload")
-		}
-		ui.restoreMainLayout()
-		ui.setStatusDirect("[%s]Applying time filter...[-:-:-]", ui.theme.TagAccent)
-		// Always schedule reload; scheduleEventsReload will defer if needed.
-		go ui.scheduleEventsReload("filter:Apply")
-	})
-
-	form.AddButton("Clear", func() {
-		// Reset filters and schedule reload; do not use QueueUpdate here to avoid UI loop stalls.
-		ui.filterStart = time.Time{}
-		ui.filterEnd = time.Time{}
-		if ui.logger != nil {
-			ui.logger.Printf("Filter Clear button pressed: cleared bounds; restoring layout and scheduling reload")
-		}
-		ui.restoreMainLayout()
-		ui.setStatusDirect("[%s]Clearing time filter...[-:-:-]", ui.theme.TagAccent)
-		go ui.scheduleEventsReload("filter:Clear")
-	})
-
-	form.AddButton("Cancel", func() {
-		ui.restoreMainLayout()
-	})
-
-	// Handle Esc to cancel
-	form.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
-		if ev.Key() == tcell.KeyEsc {
-			ui.restoreMainLayout()
-			return nil
-		}
-		return ev
-	})
-
-	ui.lastFocus = ui.app.GetFocus()
-	ui.app.SetRoot(form, true)
-	ui.app.SetFocus(form)
-}
-
-// clearTimeFilter resets the time filter and reloads events.
-func (ui *UI) clearTimeFilter() {
-	ui.filterStart = time.Time{}
-	ui.filterEnd = time.Time{}
-	ui.setStatusDirect("[%s]Time filter cleared[-:-:-]", ui.theme.TagAccent)
-	ui.scheduleEventsReload("filter:ClearShortcut")
-}
-
 // showCombinedFilterModal opens a structured, keyboard-friendly filter modal with dropdowns and sub-modals.
 func (ui *UI) showCombinedFilterModal() {
 	// Current context state
