@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -87,7 +88,7 @@ func (ui *UI) loadFindings() {
 		if ui.findingsOpenOnly {
 			scope = "open"
 		}
-		ui.setStatusDirect("[%s]%d findings (%s) • s: status • v: verdict • o: open/all • Enter: details[-:-:-]",
+		ui.setStatusDirect("[%s]%d findings (%s) • s: status • v: verdict • e: escalate • o: open/all • Enter: details[-:-:-]",
 			ui.theme.TagSuccess, len(findings), scope)
 	})
 }
@@ -468,4 +469,115 @@ func (ui *UI) applyFormTheme(form *tview.Form) {
 	form.SetButtonTextColor(ui.theme.SelectionFg)
 	form.SetBorderColor(ui.theme.FocusBorder)
 	form.SetTitleColor(ui.theme.Accent)
+}
+
+// escalateFindingToCase turns the selected finding into case work.
+//
+// This is the hinge of the whole workflow: triage decides something matters, and
+// escalation makes it an investigation. The finding joins as a member — the
+// thing the case is *about* — while supporting events are attached separately
+// as evidence.
+func (ui *UI) escalateFindingToCase() {
+	f, ok := ui.currentFinding()
+	if !ok {
+		ui.setStatusDirect("[%s]No finding selected[-:-:-]", ui.theme.TagWarning)
+		return
+	}
+
+	existing, err := ui.store.ListCases(ui.ctx)
+	if err != nil {
+		ui.setStatusDirect("[%s]Could not load cases: %v[-:-:-]", ui.theme.TagError, err)
+		return
+	}
+
+	form := tview.NewForm()
+	form.SetTitle(" Escalate Finding to Case ").SetBorder(true)
+	ui.applyFormTheme(form)
+
+	// Offer the existing cases plus a new one, so a second detection in the same
+	// incident lands in the case that is already open rather than starting another.
+	options := []string{"— Create new case —"}
+	for _, c := range existing {
+		options = append(options, fmt.Sprintf("%s  (%s)", c.Title, c.Status))
+	}
+
+	target := 0
+	form.AddDropDown("Case", options, 0, func(_ string, idx int) { target = idx })
+
+	title := f.Title
+	if len(title) > 60 {
+		title = title[:60]
+	}
+	form.AddInputField("New case title", title, 60, nil, func(text string) { title = text })
+
+	severities := []string{"low", "medium", "high", "critical"}
+	severity := f.Severity
+	sevIdx := 1
+	for i, s := range severities {
+		if s == severity {
+			sevIdx = i
+		}
+	}
+	form.AddDropDown("Severity", severities, sevIdx, func(text string, _ int) { severity = text })
+
+	form.AddButton("Escalate", func() {
+		ui.restoreMainLayout()
+		go func() {
+			caseID := ""
+			if target > 0 && target-1 < len(existing) {
+				caseID = existing[target-1].ID
+			} else {
+				newCase := store.Case{
+					Title:       title,
+					Description: "Escalated from finding: " + f.FindingUID,
+					Severity:    severity,
+					Status:      store.CaseStatusInvestigating,
+					AssignedTo:  ui.currentAnalyst(),
+				}
+				id, err := ui.store.CreateOrUpdateCase(ui.ctx, newCase)
+				if err != nil {
+					ui.app.QueueUpdateDraw(func() {
+						ui.setStatusDirect("[%s]Failed to create case: %v[-:-:-]", ui.theme.TagError, err)
+					})
+					return
+				}
+				caseID = id
+			}
+
+			if err := ui.store.AssignFindingToCase(ui.ctx, f.ID, caseID); err != nil {
+				ui.app.QueueUpdateDraw(func() {
+					ui.setStatusDirect("[%s]Failed to attach finding: %v[-:-:-]", ui.theme.TagError, err)
+				})
+				return
+			}
+
+			// Escalating means someone is working it.
+			if f.StatusID == ocsf.FindingStatusNew {
+				_ = ui.store.UpdateFindingStatus(ui.ctx, f.ID, ocsf.FindingStatusInProgress)
+			}
+			_ = ui.store.LogCaseAction(ui.ctx, caseID, "finding_escalated", ui.currentAnalyst(),
+				map[string]interface{}{"finding_uid": f.FindingUID, "title": f.Title})
+
+			ui.app.QueueUpdateDraw(func() {
+				ui.setStatusDirect("[%s]Finding attached to case[-:-:-]", ui.theme.TagSuccess)
+			})
+			ui.loadFindings()
+			_ = ui.refreshCases()
+		}()
+	})
+	form.AddButton("Cancel", func() { ui.restoreMainLayout() })
+
+	ui.app.SetRoot(form, true)
+	ui.app.SetFocus(form)
+}
+
+// currentAnalyst returns the operator name recorded on audit entries.
+func (ui *UI) currentAnalyst() string {
+	if u := os.Getenv("USER"); u != "" {
+		return u
+	}
+	if u := os.Getenv("USERNAME"); u != "" {
+		return u
+	}
+	return "analyst"
 }

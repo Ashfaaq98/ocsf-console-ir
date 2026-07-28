@@ -589,18 +589,17 @@ func (s *Store) UpdateFindingVerdict(ctx context.Context, findingID string, verd
 	return nil
 }
 
-// AssignFindingToCase links a finding to a case.
+// AssignFindingToCase makes a finding one of the things a case is about.
+//
+// Findings join as members rather than evidence: a case is *about* its
+// detections and merely *supported by* the raw events pulled in around them.
 func (s *Store) AssignFindingToCase(ctx context.Context, findingID, caseID string) error {
-	if err := s.ensureCaseExists(ctx, caseID); err != nil {
-		return err
-	}
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE findings SET case_id = ?, updated_at = ? WHERE id = ?`,
-		caseID, time.Now().Unix(), findingID)
-	if err != nil {
-		return fmt.Errorf("failed to assign finding %s to case %s: %w", findingID, caseID, err)
-	}
-	return nil
+	return s.AddCaseMember(ctx, CaseMember{
+		CaseID:     caseID,
+		MemberType: MemberTypeFinding,
+		MemberID:   findingID,
+		Role:       RoleMember,
+	})
 }
 
 func scanFindings(rows *sql.Rows) ([]Finding, error) {
@@ -668,7 +667,8 @@ func (s *Store) DeleteFindings(ctx context.Context, ids []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to delete findings: %w", err)
 	}
-	return nil
+	// case_members.member_id carries no foreign key, so clean up explicitly.
+	return s.pruneCaseMembers(ctx, MemberTypeFinding, ids)
 }
 
 // SavedRecord reports what SaveRecord persisted.

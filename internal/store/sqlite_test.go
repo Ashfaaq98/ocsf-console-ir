@@ -297,9 +297,9 @@ func TestGetEventsByCase(t *testing.T) {
 		eventID, err := store.SaveEvent(ctx, ocsfEvent)
 		require.NoError(t, err)
 
-		// Associate event with case
-		_, err = store.db.ExecContext(ctx, "UPDATE events SET case_id = ? WHERE id = ?", caseID, eventID)
-		require.NoError(t, err)
+		// Associate event with case through the membership API rather than
+		// writing the legacy column directly.
+		require.NoError(t, store.AssignEventToCase(ctx, eventID, caseID))
 	}
 
 	// Get events by case

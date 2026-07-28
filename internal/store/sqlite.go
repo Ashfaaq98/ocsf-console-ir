@@ -100,17 +100,70 @@ func eventColumnsWithAlias(alias string) string {
 	return strings.Join(parts, ", ")
 }
 
-// Case represents an incident case
+// Case represents an incident case.
+//
+// A Case is an application concept — OCSF has no Case object. Its projection
+// into the schema is an Incident Finding (class_uid 2005), which is why it
+// carries the incident-profile fields below.
 type Case struct {
-	ID          string    `json:"id"`
-	Title       string    `json:"title"`
-	Description string    `json:"description"`
-	Severity    string    `json:"severity"`
-	Status      string    `json:"status"`
-	AssignedTo  string    `json:"assigned_to,omitempty"`
-	EventCount  int       `json:"event_count"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Severity    string `json:"severity"`
+	Status      string `json:"status"`
+	AssignedTo  string `json:"assigned_to,omitempty"`
+
+	// OCSF incident-profile fields. StatusID is the authoritative lifecycle
+	// state; Status is its display label.
+	StatusID          int    `json:"status_id,omitempty"`
+	VerdictID         int    `json:"verdict_id,omitempty"`
+	PriorityID        int    `json:"priority_id,omitempty"`
+	ImpactID          int    `json:"impact_id,omitempty"`
+	IsSuspectedBreach bool   `json:"is_suspected_breach,omitempty"`
+	AssigneeGroup     string `json:"assignee_group,omitempty"`
+
+	// EventCount is supporting evidence; FindingCount is what the case is about.
+	EventCount   int `json:"event_count"`
+	FindingCount int `json:"finding_count"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// VerdictName resolves the case verdict caption, empty when none is set.
+func (c Case) VerdictName() string {
+	if c.VerdictID == ocsf.VerdictUnknown {
+		return ""
+	}
+	return ocsf.VerdictName(c.VerdictID)
+}
+
+// caseColumns is the canonical SELECT list for the cases table.
+const caseColumns = `id, title, description, severity, status, COALESCE(assigned_to, ''),
+	event_count, created_at, updated_at,
+	COALESCE(status_id, 0), COALESCE(verdict_id, 0), COALESCE(priority_id, 0),
+	COALESCE(impact_id, 0), COALESCE(is_suspected_breach, 0),
+	COALESCE(assignee_group, ''), COALESCE(finding_count, 0)`
+
+// scanCases reads rows selected with caseColumns.
+func scanCases(rows *sql.Rows) ([]Case, error) {
+	var out []Case
+	for rows.Next() {
+		var c Case
+		var createdAt, updatedAt int64
+		var breach int
+		if err := rows.Scan(&c.ID, &c.Title, &c.Description, &c.Severity, &c.Status,
+			&c.AssignedTo, &c.EventCount, &createdAt, &updatedAt,
+			&c.StatusID, &c.VerdictID, &c.PriorityID, &c.ImpactID, &breach,
+			&c.AssigneeGroup, &c.FindingCount); err != nil {
+			return nil, fmt.Errorf("failed to scan case: %w", err)
+		}
+		c.IsSuspectedBreach = breach != 0
+		c.CreatedAt = time.Unix(createdAt, 0)
+		c.UpdatedAt = time.Unix(updatedAt, 0)
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }
 
 // Enrichment represents event enrichment data
@@ -255,6 +308,13 @@ func (s *Store) migrate() error {
 		return err
 	}
 	if err := s.migrateObservables(); err != nil {
+		return err
+	}
+	if err := s.migrateCaseOCSFColumns(); err != nil {
+		return err
+	}
+	// case_members depends on both events and findings existing.
+	if err := s.migrateCaseMembers(); err != nil {
 		return err
 	}
 
@@ -498,6 +558,18 @@ func (s *Store) SaveEvent(ctx context.Context, ocsfEvent *ocsf.Event) (string, e
 		return "", err
 	}
 
+	// Keep membership authoritative: an event saved with a case attached must
+	// appear in case_members, not only in the legacy column. Written inside this
+	// transaction because AddCaseMember would open a second one.
+	if caseIDParam != nil {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT OR IGNORE INTO case_members (case_id, member_type, member_id, role, added_by, added_at)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+			event.CaseID, MemberTypeEvent, eventID, RoleEvidence, "ingest", now); err != nil {
+			return "", fmt.Errorf("failed to record case membership: %w", err)
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return "", fmt.Errorf("failed to commit event: %w", err)
 	}
@@ -536,23 +608,42 @@ func (s *Store) CreateOrUpdateCase(ctx context.Context, case_ Case) (string, err
 		case_.UpdatedAt = case_.CreatedAt.Add(time.Second)
 	}
 
+	// Derive the OCSF status_id from the label so every write path keeps them
+	// consistent, rather than relying on each caller to remember.
+	if case_.Status == "" && case_.StatusID != 0 {
+		case_.Status = CaseStatusLabelFor(case_.StatusID)
+	}
+	if case_.Status == "" {
+		case_.Status = CaseStatusOpen
+	}
+	case_.StatusID = CaseStatusIDFor(case_.Status)
+
 	query := `INSERT INTO cases (
-		id, title, description, severity, status, assigned_to, event_count, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		id, title, description, severity, status, assigned_to, event_count, created_at, updated_at,
+		status_id, verdict_id, priority_id, impact_id, is_suspected_breach, assignee_group
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(id) DO UPDATE SET
 		title = excluded.title,
 		description = excluded.description,
 		severity = excluded.severity,
 		status = excluded.status,
+		status_id = excluded.status_id,
 		assigned_to = excluded.assigned_to,
 		created_at = excluded.created_at,
 		updated_at = excluded.updated_at,
-		event_count = excluded.event_count`
+		event_count = excluded.event_count,
+		verdict_id = excluded.verdict_id,
+		priority_id = excluded.priority_id,
+		impact_id = excluded.impact_id,
+		is_suspected_breach = excluded.is_suspected_breach,
+		assignee_group = excluded.assignee_group`
 
 	_, err := s.db.ExecContext(ctx, query,
 		case_.ID, case_.Title, case_.Description, case_.Severity,
 		case_.Status, case_.AssignedTo, case_.EventCount,
 		case_.CreatedAt.Unix(), case_.UpdatedAt.Unix(),
+		case_.StatusID, case_.VerdictID, case_.PriorityID, case_.ImpactID,
+		boolToInt(case_.IsSuspectedBreach), case_.AssigneeGroup,
 	)
 
 	if err != nil {
@@ -564,47 +655,33 @@ func (s *Store) CreateOrUpdateCase(ctx context.Context, case_ Case) (string, err
 
 // ListCases returns all cases
 func (s *Store) ListCases(ctx context.Context) ([]Case, error) {
-	query := `SELECT id, title, description, severity, status, assigned_to, 
-		event_count, created_at, updated_at FROM cases ORDER BY created_at DESC`
-
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+caseColumns+` FROM cases ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query cases: %w", err)
 	}
 	defer rows.Close()
-
-	var cases []Case
-	for rows.Next() {
-		var case_ Case
-		var createdAt, updatedAt int64
-
-		err := rows.Scan(&case_.ID, &case_.Title, &case_.Description,
-			&case_.Severity, &case_.Status, &case_.AssignedTo,
-			&case_.EventCount, &createdAt, &updatedAt)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan case: %w", err)
-		}
-
-		case_.CreatedAt = time.Unix(createdAt, 0)
-		case_.UpdatedAt = time.Unix(updatedAt, 0)
-		cases = append(cases, case_)
-	}
-
-	return cases, nil
+	return scanCases(rows)
 }
 
-// GetEventsByCase returns events for a specific case
-func (s *Store) GetEventsByCase(ctx context.Context, caseID string) ([]Event, error) {
-	query := `SELECT ` + eventColumns + `
-		FROM events WHERE case_id = ? ORDER BY timestamp DESC`
-
-	rows, err := s.db.QueryContext(ctx, query, caseID)
+// GetCase returns a single case by ID, or nil when it does not exist.
+func (s *Store) GetCase(ctx context.Context, caseID string) (*Case, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+caseColumns+` FROM cases WHERE id = ?`, caseID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query events: %w", err)
+		return nil, fmt.Errorf("failed to query case: %w", err)
 	}
 	defer rows.Close()
 
-	return s.scanEvents(rows)
+	found, err := scanCases(rows)
+	if err != nil || len(found) == 0 {
+		return nil, err
+	}
+	return &found[0], nil
+}
+
+// GetEventsByCase returns the events attached to a case as evidence.
+func (s *Store) GetEventsByCase(ctx context.Context, caseID string) ([]Event, error) {
+	return s.GetCaseEventMembers(ctx, caseID)
 }
 
 // GetAllEvents returns all events ordered by timestamp
@@ -1099,28 +1176,24 @@ func (s *Store) scanEvents(rows *sql.Rows) ([]Event, error) {
 
 // Added helpers to assign events to cases and sync event_count
 
-// AssignEventToCase sets the case_id for a given event.
+// AssignEventToCase attaches an event to a case as supporting evidence.
+//
+// Membership lives in case_members, so an event can belong to more than one
+// case; the events.case_id column is kept in step for readers that have not
+// migrated yet.
 func (s *Store) AssignEventToCase(ctx context.Context, eventID, caseID string) error {
-	query := `UPDATE events SET case_id = ?, updated_at = ? WHERE id = ?`
-	_, err := s.db.ExecContext(ctx, query, caseID, time.Now().Unix(), eventID)
-	if err != nil {
-		return fmt.Errorf("failed to assign event %s to case %s: %w", eventID, caseID, err)
-	}
-	return nil
+	return s.AddCaseMember(ctx, CaseMember{
+		CaseID:     caseID,
+		MemberType: MemberTypeEvent,
+		MemberID:   eventID,
+		Role:       RoleEvidence,
+	})
 }
 
 // UpdateCaseEventCount recalculates and persists the event_count for the given case.
+// UpdateCaseEventCount syncs a case's denormalized counts from its membership.
 func (s *Store) UpdateCaseEventCount(ctx context.Context, caseID string) error {
-	var cnt int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM events WHERE case_id = ?`, caseID).Scan(&cnt)
-	if err != nil {
-		return fmt.Errorf("failed to count events for case %s: %w", caseID, err)
-	}
-	_, err = s.db.ExecContext(ctx, `UPDATE cases SET event_count = ?, updated_at = ? WHERE id = ?`, cnt, time.Now().Unix(), caseID)
-	if err != nil {
-		return fmt.Errorf("failed to update event_count for case %s: %w", caseID, err)
-	}
-	return nil
+	return s.RefreshCaseCounts(ctx, caseID)
 }
 
 // DeleteCaseAndUnassign deletes a case and unassigns all its events (sets events.case_id=NULL).
@@ -1135,9 +1208,16 @@ func (s *Store) DeleteCaseAndUnassign(ctx context.Context, caseID string) error 
 		return e
 	}
 
-	// Unassign events from the case
-	if _, err := tx.ExecContext(ctx, `UPDATE events SET case_id = NULL, updated_at = ? WHERE case_id = ?`, time.Now().Unix(), caseID); err != nil {
+	// Unassign events and findings from the case.
+	now := time.Now().Unix()
+	if _, err := tx.ExecContext(ctx, `UPDATE events SET case_id = NULL, updated_at = ? WHERE case_id = ?`, now, caseID); err != nil {
 		return rollback(fmt.Errorf("unassign events for case %s: %w", caseID, err))
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE findings SET case_id = NULL, updated_at = ? WHERE case_id = ?`, now, caseID); err != nil {
+		return rollback(fmt.Errorf("unassign findings for case %s: %w", caseID, err))
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM case_members WHERE case_id = ?`, caseID); err != nil {
+		return rollback(fmt.Errorf("clear members for case %s: %w", caseID, err))
 	}
 
 	// Delete the case row
@@ -1181,7 +1261,7 @@ func (s *Store) DeleteEvents(ctx context.Context, ids []string) error {
 
 	// Determine which cases are affected so we can update their event_count after commit.
 	caseIDs := make([]string, 0)
-	qCases := "SELECT DISTINCT case_id FROM events WHERE id IN (" + placeholders + ") AND case_id IS NOT NULL"
+	qCases := "SELECT DISTINCT case_id FROM case_members WHERE member_type = 'event' AND member_id IN (" + placeholders + ")"
 	rows, err := tx.QueryContext(ctx, qCases, makeArgs(ids)...)
 	if err != nil {
 		return rollback(fmt.Errorf("query affected cases: %w", err))
@@ -1206,6 +1286,13 @@ func (s *Store) DeleteEvents(ctx context.Context, ids []string) error {
 	qEnr := "DELETE FROM enrichments WHERE event_id IN (" + placeholders + ")"
 	if _, err := tx.ExecContext(ctx, qEnr, makeArgs(ids)...); err != nil {
 		return rollback(fmt.Errorf("delete enrichments for events: %w", err))
+	}
+
+	// Drop membership rows: case_members.member_id carries no foreign key
+	// because it points at either events or findings.
+	qMem := "DELETE FROM case_members WHERE member_type = 'event' AND member_id IN (" + placeholders + ")"
+	if _, err := tx.ExecContext(ctx, qMem, makeArgs(ids)...); err != nil {
+		return rollback(fmt.Errorf("delete case members for events: %w", err))
 	}
 
 	// Delete events

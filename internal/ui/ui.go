@@ -1242,6 +1242,11 @@ func (ui *UI) setupKeybindings() {
 					ui.showFindingVerdictModal()
 					return nil
 				}
+			case 'e':
+				if ui.showFindings {
+					ui.escalateFindingToCase()
+					return nil
+				}
 			case 'o':
 				if ui.showFindings {
 					ui.toggleFindingsScope()

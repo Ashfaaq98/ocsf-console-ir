@@ -565,6 +565,7 @@ func (cm *CaseManagement) loadCaseData() {
 		_ = cm.store.SetupAuditTables()
 
 		// Load events for this case
+		cm.reloadCaseRow()
 		events, err := cm.store.GetEventsByCase(cm.ctx, cm.caseData.ID)
 		if err != nil {
 			if strings.Contains(err.Error(), "database is closed") || cm.ctx.Err() != nil {
@@ -618,6 +619,17 @@ func (cm *CaseManagement) loadCaseData() {
 	}()
 }
 
+// reloadCaseRow re-reads the case so denormalized counts and analyst fields
+// stay accurate after membership changes.
+func (cm *CaseManagement) reloadCaseRow() {
+	if cm.store == nil || cm.caseData.ID == "" {
+		return
+	}
+	if c, err := cm.store.GetCase(cm.ctx, cm.caseData.ID); err == nil && c != nil {
+		cm.caseData = *c
+	}
+}
+
 func (cm *CaseManagement) refreshCaseData() {
 	cm.updateStatus("Refreshing case data...")
 	cm.loadCaseData()
@@ -640,13 +652,22 @@ func (cm *CaseManagement) updateMetadataBar() {
 		owner = "Unassigned"
 	}
 
+	verdict := cm.caseData.VerdictName()
+	if verdict == "" {
+		verdict = "—"
+	}
+
+	// Findings are what the case is about; events are the evidence supporting
+	// it. Showing one combined total hides that distinction.
 	line1 := fmt.Sprintf(
-		"[%s]Case ID:[-] [%s]%s[-]  [%s]Title:[-] [%s]%s[-]  [%s]Severity:[-] [%s]%s[-]  [%s]Owner:[-] [%s]%s[-]  [%s]Events:[-] [%s]%d[-]  [%s]Created:[-] [%s]%s[-]",
+		"[%s]Case ID:[-] [%s]%s[-]  [%s]Title:[-] [%s]%s[-]  [%s]Severity:[-] [%s]%s[-]  [%s]Owner:[-] [%s]%s[-]  [%s]Findings:[-] [%s]%d[-]  [%s]Evidence:[-] [%s]%d[-]  [%s]Verdict:[-] [%s]%s[-]  [%s]Created:[-] [%s]%s[-]",
 		lbl, val, shortID,
 		lbl, val, cm.caseData.Title,
 		lbl, val, cm.caseData.Severity,
 		lbl, val, owner,
+		lbl, val, cm.caseData.FindingCount,
 		lbl, val, cm.caseData.EventCount,
+		lbl, val, verdict,
 		lbl, val, cm.caseData.CreatedAt.Format("2006-01-02 15:04"),
 	)
 	// Hotkeys row: single color (accent) for all hints; exact phrasing requested
@@ -3100,7 +3121,7 @@ func (cm *CaseManagement) showStatusChangeModal() {
 	form.SetBorder(true)
 	cm.applyModalTheme(form)
 
-	statuses := []string{"open", "investigating", "contained", "closed"}
+	statuses := store.CaseStatuses()
 	current := 0
 	for i, s := range statuses {
 		if strings.EqualFold(s, cm.caseData.Status) {
@@ -3152,7 +3173,7 @@ func (cm *CaseManagement) showStatusChangeModal() {
 }
 
 func (cm *CaseManagement) quickCycleStatus() {
-	statuses := []string{"open", "investigating", "contained", "closed"}
+	statuses := store.CaseStatuses()
 	current := 0
 	for i, s := range statuses {
 		if strings.EqualFold(s, cm.caseData.Status) {
