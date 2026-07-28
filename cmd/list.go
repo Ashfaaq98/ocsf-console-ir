@@ -40,7 +40,7 @@ var (
 
 func init() {
 	rootCmd.AddCommand(listCmd)
-	
+
 	listCmd.Flags().StringVar(&listType, "type", "cases", "What to list: cases, events")
 	listCmd.Flags().StringVar(&caseID, "case-id", "", "Case ID for listing events")
 	listCmd.Flags().IntVar(&limit, "limit", 20, "Maximum number of items to show")
@@ -104,7 +104,7 @@ func listCases(ctx context.Context, store *store.Store) error {
 	}
 
 	fmt.Printf("Found %d cases:\n\n", len(cases))
-	
+
 	for i, case_ := range cases {
 		fmt.Printf("%d. [%s] %s\n", i+1, strings.ToUpper(case_.Severity), case_.Title)
 		fmt.Printf("   ID: %s\n", case_.ID)

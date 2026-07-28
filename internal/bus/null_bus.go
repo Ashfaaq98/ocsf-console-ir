@@ -34,7 +34,7 @@ func (nb *NullBus) PublishEvent(ctx context.Context, eventMsg EventMessage) erro
 
 // PublishEnrichment logs the enrichment but doesn't actually publish it
 func (nb *NullBus) PublishEnrichment(ctx context.Context, enrichmentMsg EnrichmentMessage) error {
-	nb.logger.Printf("Would publish enrichment for event %s from plugin %s (Redis disabled)", 
+	nb.logger.Printf("Would publish enrichment for event %s from plugin %s (Redis disabled)",
 		enrichmentMsg.EventID, enrichmentMsg.PluginName)
 	return nil
 }
@@ -50,7 +50,7 @@ func (nb *NullBus) ReadEnrichmentsStream(ctx context.Context, group, consumer st
 // GetStats returns empty stats for null bus
 func (nb *NullBus) GetStats(ctx context.Context) (map[string]interface{}, error) {
 	return map[string]interface{}{
-		"type": "null",
+		"type":   "null",
 		"status": "disabled",
 	}, nil
 }

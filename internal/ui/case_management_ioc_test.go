@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
+	"github.com/gdamore/tcell/v2"
 )
 
 // mockLLMIOC implements llm.LLMProvider for these tests.

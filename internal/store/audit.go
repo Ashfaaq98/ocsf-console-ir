@@ -14,10 +14,10 @@ type AuditEntry struct {
 	ID        string                 `json:"id"`
 	CaseID    string                 `json:"case_id"`
 	EventID   string                 `json:"event_id,omitempty"`
-	Action    string                 `json:"action"`    // "create_case", "assign_event", "copilot_query", "note_added", etc.
-	Actor     string                 `json:"actor"`     // user or system identifier
-	Details   map[string]interface{} `json:"details"`   // action-specific data
-	Metadata  map[string]string      `json:"metadata"`  // tokens, cost, etc.
+	Action    string                 `json:"action"`   // "create_case", "assign_event", "copilot_query", "note_added", etc.
+	Actor     string                 `json:"actor"`    // user or system identifier
+	Details   map[string]interface{} `json:"details"`  // action-specific data
+	Metadata  map[string]string      `json:"metadata"` // tokens, cost, etc.
 	Timestamp time.Time              `json:"timestamp"`
 	CreatedAt time.Time              `json:"created_at"`
 }
@@ -28,9 +28,9 @@ type Note struct {
 	CaseID     string    `json:"case_id"`
 	Content    string    `json:"content"`
 	Author     string    `json:"author"`
-	Color      string    `json:"color,omitempty"`        // hex color e.g. "#f1c40f"
-	LinkedType string    `json:"linked_type,omitempty"`  // "event", "ioc", or ""
-	LinkedID   string    `json:"linked_id,omitempty"`    // event_id or ioc unique value
+	Color      string    `json:"color,omitempty"`       // hex color e.g. "#f1c40f"
+	LinkedType string    `json:"linked_type,omitempty"` // "event", "ioc", or ""
+	LinkedID   string    `json:"linked_id,omitempty"`   // event_id or ioc unique value
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 }
@@ -199,7 +199,7 @@ func (s *Store) AddAuditEntry(ctx context.Context, entry AuditEntry) error {
 func (s *Store) GetAuditEntries(ctx context.Context, caseID string, limit int) ([]AuditEntry, error) {
 	query := `SELECT id, case_id, event_id, action, actor, details, metadata, timestamp, created_at
 		FROM audit_entries WHERE case_id = ? ORDER BY timestamp DESC`
-	
+
 	if limit > 0 {
 		query += fmt.Sprintf(" LIMIT %d", limit)
 	}

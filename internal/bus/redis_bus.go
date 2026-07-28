@@ -33,12 +33,12 @@ type EventMessage struct {
 
 // EnrichmentMessage represents an enrichment message published to the enrichments stream
 type EnrichmentMessage struct {
-	EventID     string            `json:"event_id"`
-	Source      string            `json:"source"`
-	Type        string            `json:"type"`
-	Data        map[string]string `json:"data"`
-	Timestamp   int64             `json:"timestamp"`
-	PluginName  string            `json:"plugin_name"`
+	EventID    string            `json:"event_id"`
+	Source     string            `json:"source"`
+	Type       string            `json:"type"`
+	Data       map[string]string `json:"data"`
+	Timestamp  int64             `json:"timestamp"`
+	PluginName string            `json:"plugin_name"`
 }
 
 // StreamHandler is a function that processes stream messages
@@ -123,7 +123,7 @@ func (rb *RedisBus) PublishEnrichment(ctx context.Context, enrichmentMsg Enrichm
 		return fmt.Errorf("failed to publish enrichment: %w", err)
 	}
 
-	rb.logger.Printf("Published enrichment for event %s from plugin %s", 
+	rb.logger.Printf("Published enrichment for event %s from plugin %s",
 		enrichmentMsg.EventID, enrichmentMsg.PluginName)
 	return nil
 }
@@ -329,18 +329,18 @@ func (rb *RedisBus) GetStats(ctx context.Context) (map[string]interface{}, error
 	// Get events stream info
 	if eventsInfo, err := rb.GetStreamInfo(ctx, "events"); err == nil {
 		stats["events_stream"] = map[string]interface{}{
-			"length":          eventsInfo.Length,
-			"first_entry_id":  eventsInfo.FirstEntry.ID,
-			"last_entry_id":   eventsInfo.LastEntry.ID,
+			"length":         eventsInfo.Length,
+			"first_entry_id": eventsInfo.FirstEntry.ID,
+			"last_entry_id":  eventsInfo.LastEntry.ID,
 		}
 	}
 
 	// Get enrichments stream info
 	if enrichmentsInfo, err := rb.GetStreamInfo(ctx, "enrichments"); err == nil {
 		stats["enrichments_stream"] = map[string]interface{}{
-			"length":          enrichmentsInfo.Length,
-			"first_entry_id":  enrichmentsInfo.FirstEntry.ID,
-			"last_entry_id":   enrichmentsInfo.LastEntry.ID,
+			"length":         enrichmentsInfo.Length,
+			"first_entry_id": enrichmentsInfo.FirstEntry.ID,
+			"last_entry_id":  enrichmentsInfo.LastEntry.ID,
 		}
 	}
 

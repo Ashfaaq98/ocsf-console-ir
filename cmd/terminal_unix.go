@@ -22,7 +22,7 @@ func getTerminalSize() (int, int) {
 			}
 		}
 	}
-	
+
 	// Try syscall (Unix-like systems)
 	type winsize struct {
 		Row    uint16
@@ -30,17 +30,17 @@ func getTerminalSize() (int, int) {
 		Xpixel uint16
 		Ypixel uint16
 	}
-	
+
 	ws := &winsize{}
 	retCode, _, errno := syscall.Syscall(syscall.SYS_IOCTL,
 		os.Stdout.Fd(), // Use stdout instead of stdin
 		uintptr(syscall.TIOCGWINSZ),
 		uintptr(unsafe.Pointer(ws)))
-	
+
 	if int(retCode) == -1 {
 		_ = errno // Ignore error
 		return 0, 0
 	}
-	
+
 	return int(ws.Col), int(ws.Row)
 }

@@ -141,7 +141,7 @@ type IngestStats struct {
 // processEvents processes events from the input reader
 func processEvents(ctx context.Context, input io.Reader, parser *ingest.Parser,
 	store *store.Store, eventBus bus.Bus, logger *log.Logger) (*IngestStats, error) {
-	
+
 	startTime := time.Now()
 	stats := &IngestStats{}
 
@@ -199,12 +199,12 @@ func processEvents(ctx context.Context, input io.Reader, parser *ingest.Parser,
 // processBatch processes a batch of events
 func processBatch(ctx context.Context, batch [][]byte, parser *ingest.Parser,
 	store *store.Store, eventBus bus.Bus, logger *log.Logger, startLine int) *IngestStats {
-	
+
 	stats := &IngestStats{}
 
 	for i, eventData := range batch {
 		lineNumber := startLine + i
-		
+
 		if err := processEvent(ctx, eventData, parser, store, eventBus, lineNumber); err != nil {
 			stats.FailedEvents++
 			if skipInvalid {
@@ -216,7 +216,7 @@ func processBatch(ctx context.Context, batch [][]byte, parser *ingest.Parser,
 		} else {
 			stats.SuccessfulEvents++
 		}
-		
+
 		stats.TotalEvents++
 	}
 
@@ -226,7 +226,7 @@ func processBatch(ctx context.Context, batch [][]byte, parser *ingest.Parser,
 // processEvent processes a single event
 func processEvent(ctx context.Context, eventData []byte, parser *ingest.Parser,
 	store *store.Store, eventBus bus.Bus, lineNumber int) error {
-	
+
 	// Parse and route: Findings-category records and alertable events become
 	// findings; everything else stays an event.
 	rec, err := parser.Parse(eventData)
@@ -268,4 +268,3 @@ func updateStats(main, batch *IngestStats) {
 	main.FailedEvents += batch.FailedEvents
 	main.SkippedEvents += batch.SkippedEvents
 }
-
