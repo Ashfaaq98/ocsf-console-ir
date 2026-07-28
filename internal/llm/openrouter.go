@@ -74,7 +74,7 @@ func (o *OpenRouter) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, 
 		// Temperature, top_p etc can be added if needed
 	}
 	type orChoice struct {
-		Index        int   `json:"index"`
+		Index        int    `json:"index"`
 		FinishReason string `json:"finish_reason"`
 		Message      struct {
 			Role    string `json:"role"`
@@ -113,7 +113,7 @@ func (o *OpenRouter) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, 
 	if sp := GetSystemPrompt(req.Persona); sp != "" {
 		msgs = append([]orMsg{{Role: "system", Content: sp}}, msgs...)
 	}
-	
+
 	payload := orReq{
 		Model:     o.model,
 		Messages:  msgs,

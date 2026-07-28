@@ -19,15 +19,15 @@ type LLMProvider interface {
 
 // EventAnalysis represents the analysis of a set of events
 type EventAnalysis struct {
-	Summary           string            `json:"summary"`
-	KeyFindings       []string          `json:"key_findings"`
-	ThreatIndicators  []string          `json:"threat_indicators"`
-	AffectedAssets    []string          `json:"affected_assets"`
-	Timeline          []TimelineEntry   `json:"timeline"`
-	Severity          string            `json:"severity"`
-	Confidence        float64           `json:"confidence"`
-	IOCs              []IOC             `json:"iocs"`
-	AttackTechniques  []string          `json:"attack_techniques"`
+	Summary          string          `json:"summary"`
+	KeyFindings      []string        `json:"key_findings"`
+	ThreatIndicators []string        `json:"threat_indicators"`
+	AffectedAssets   []string        `json:"affected_assets"`
+	Timeline         []TimelineEntry `json:"timeline"`
+	Severity         string          `json:"severity"`
+	Confidence       float64         `json:"confidence"`
+	IOCs             []IOC           `json:"iocs"`
+	AttackTechniques []string        `json:"attack_techniques"`
 }
 
 // TimelineEntry represents an entry in the event timeline
@@ -72,16 +72,16 @@ func (ls *LocalStub) SummarizeCase(ctx context.Context, case_ store.Case, events
 
 	// Generate summary
 	var summary strings.Builder
-	
+
 	summary.WriteString(fmt.Sprintf("Case: %s\n", case_.Title))
 	summary.WriteString(fmt.Sprintf("Status: %s | Severity: %s\n", case_.Status, case_.Severity))
-	summary.WriteString(fmt.Sprintf("Events: %d | Timespan: %s\n\n", 
+	summary.WriteString(fmt.Sprintf("Events: %d | Timespan: %s\n\n",
 		len(events), ls.getTimespan(events)))
-	
+
 	summary.WriteString("EXECUTIVE SUMMARY:\n")
 	summary.WriteString(analysis.Summary)
 	summary.WriteString("\n\n")
-	
+
 	if len(analysis.KeyFindings) > 0 {
 		summary.WriteString("KEY FINDINGS:\n")
 		for i, finding := range analysis.KeyFindings {
@@ -89,7 +89,7 @@ func (ls *LocalStub) SummarizeCase(ctx context.Context, case_ store.Case, events
 		}
 		summary.WriteString("\n")
 	}
-	
+
 	if len(analysis.ThreatIndicators) > 0 {
 		summary.WriteString("THREAT INDICATORS:\n")
 		for _, indicator := range analysis.ThreatIndicators {
@@ -97,17 +97,17 @@ func (ls *LocalStub) SummarizeCase(ctx context.Context, case_ store.Case, events
 		}
 		summary.WriteString("\n")
 	}
-	
+
 	if len(analysis.IOCs) > 0 {
 		summary.WriteString("INDICATORS OF COMPROMISE:\n")
 		for _, ioc := range analysis.IOCs {
-			summary.WriteString(fmt.Sprintf("• %s: %s (confidence: %.1f%%)\n", 
+			summary.WriteString(fmt.Sprintf("• %s: %s (confidence: %.1f%%)\n",
 				strings.ToUpper(ioc.Type), ioc.Value, ioc.Confidence*100))
 		}
 		summary.WriteString("\n")
 	}
-	
-	summary.WriteString(fmt.Sprintf("Overall Assessment: %s severity with %.1f%% confidence\n", 
+
+	summary.WriteString(fmt.Sprintf("Overall Assessment: %s severity with %.1f%% confidence\n",
 		strings.ToUpper(analysis.Severity), analysis.Confidence*100))
 
 	return summary.String(), nil
@@ -144,10 +144,10 @@ func (ls *LocalStub) AnalyzeEvents(ctx context.Context, events []store.Event) (*
 	var highestSeverity string
 	severityOrder := map[string]int{
 		"informational": 1,
-		"low":          2,
-		"medium":       3,
-		"high":         4,
-		"critical":     5,
+		"low":           2,
+		"medium":        3,
+		"high":          4,
+		"critical":      5,
 	}
 	maxSeverityValue := 0
 
@@ -155,14 +155,14 @@ func (ls *LocalStub) AnalyzeEvents(ctx context.Context, events []store.Event) (*
 	for _, event := range events {
 		// Count event types
 		eventTypes[event.EventType]++
-		
+
 		// Count severities
 		severityCount[event.Severity]++
 		if severityOrder[event.Severity] > maxSeverityValue {
 			maxSeverityValue = severityOrder[event.Severity]
 			highestSeverity = event.Severity
 		}
-		
+
 		// Collect assets
 		if event.Host != "" {
 			hosts[event.Host] = true
@@ -288,10 +288,10 @@ func (ls *LocalStub) GenerateRecommendations(ctx context.Context, case_ store.Ca
 
 func (ls *LocalStub) generateSummary(eventCount int, eventTypes map[string]int, hosts, ips map[string]bool) string {
 	var summary strings.Builder
-	
-	summary.WriteString(fmt.Sprintf("Analysis of %d security events across %d hosts and %d IP addresses. ", 
+
+	summary.WriteString(fmt.Sprintf("Analysis of %d security events across %d hosts and %d IP addresses. ",
 		eventCount, len(hosts), len(ips)))
-	
+
 	if len(eventTypes) == 1 {
 		for eventType := range eventTypes {
 			summary.WriteString(fmt.Sprintf("All events are %s-related. ", eventType))
@@ -305,72 +305,72 @@ func (ls *LocalStub) generateSummary(eventCount int, eventTypes map[string]int, 
 		summary.WriteString(strings.Join(types, ", "))
 		summary.WriteString(". ")
 	}
-	
+
 	if len(ips) > 10 {
 		summary.WriteString("High number of unique IP addresses suggests potential scanning or lateral movement. ")
 	}
-	
+
 	return summary.String()
 }
 
-func (ls *LocalStub) generateKeyFindings(eventTypes map[string]int, severityCount map[string]int, 
+func (ls *LocalStub) generateKeyFindings(eventTypes map[string]int, severityCount map[string]int,
 	hosts, ips map[string]bool, processes map[string]bool) []string {
-	
+
 	findings := []string{}
-	
+
 	// Event distribution findings
 	if len(eventTypes) > 1 {
 		findings = append(findings, fmt.Sprintf("Multiple attack vectors detected: %d different event types", len(eventTypes)))
 	}
-	
+
 	// Severity findings
 	if severityCount["critical"] > 0 || severityCount["high"] > 0 {
 		findings = append(findings, "High-severity events detected requiring immediate attention")
 	}
-	
+
 	// Asset findings
 	if len(hosts) > 5 {
 		findings = append(findings, fmt.Sprintf("Multiple systems affected: %d unique hosts", len(hosts)))
 	}
-	
+
 	if len(ips) > 20 {
 		findings = append(findings, "Extensive network activity detected")
 	}
-	
+
 	// Process findings
 	if len(processes) > 10 {
 		findings = append(findings, "Multiple processes involved, possible process injection or lateral movement")
 	}
-	
+
 	return findings
 }
 
 func (ls *LocalStub) generateThreatIndicators(events []store.Event, eventTypes map[string]int) []string {
 	indicators := []string{}
-	
+
 	// Pattern-based indicators
 	if eventTypes["network"] > 50 {
 		indicators = append(indicators, "High volume network activity")
 	}
-	
+
 	if eventTypes["process"] > 20 {
 		indicators = append(indicators, "Suspicious process execution patterns")
 	}
-	
+
 	// Time-based indicators
 	timeWindows := make(map[string]int)
 	for _, event := range events {
 		hour := event.Timestamp.Format("2006-01-02-15")
 		timeWindows[hour]++
 	}
-	
+
 	for _, count := range timeWindows {
 		if count > 100 {
 			indicators = append(indicators, "Burst activity detected in short time window")
 			break
 		}
 	}
-	
+
 	return indicators
 }
 
@@ -378,7 +378,7 @@ func (ls *LocalStub) extractIOCs(events []store.Event) []IOC {
 	iocs := []IOC{}
 	ipSeen := make(map[string]bool)
 	hashSeen := make(map[string]bool)
-	
+
 	for _, event := range events {
 		// Extract IP addresses
 		if event.SrcIP != "" && !ipSeen[event.SrcIP] && ls.isSuspiciousIP(event.SrcIP) {
@@ -390,7 +390,7 @@ func (ls *LocalStub) extractIOCs(events []store.Event) []IOC {
 			})
 			ipSeen[event.SrcIP] = true
 		}
-		
+
 		if event.DstIP != "" && !ipSeen[event.DstIP] && ls.isSuspiciousIP(event.DstIP) {
 			iocs = append(iocs, IOC{
 				Type:        "ip",
@@ -400,7 +400,7 @@ func (ls *LocalStub) extractIOCs(events []store.Event) []IOC {
 			})
 			ipSeen[event.DstIP] = true
 		}
-		
+
 		// Extract file hashes
 		if event.FileHash != "" && !hashSeen[event.FileHash] {
 			iocs = append(iocs, IOC{
@@ -412,25 +412,25 @@ func (ls *LocalStub) extractIOCs(events []store.Event) []IOC {
 			hashSeen[event.FileHash] = true
 		}
 	}
-	
+
 	return iocs
 }
 
 func (ls *LocalStub) identifyAttackTechniques(eventTypes map[string]int, events []store.Event) []string {
 	techniques := []string{}
-	
+
 	if eventTypes["process"] > 0 {
 		techniques = append(techniques, "T1055 - Process Injection")
 	}
-	
+
 	if eventTypes["network"] > 0 {
 		techniques = append(techniques, "T1071 - Application Layer Protocol")
 	}
-	
+
 	if eventTypes["file"] > 0 {
 		techniques = append(techniques, "T1105 - Ingress Tool Transfer")
 	}
-	
+
 	// Check for specific patterns
 	for _, event := range events {
 		if strings.Contains(strings.ToLower(event.ProcessName), "powershell") {
@@ -438,7 +438,7 @@ func (ls *LocalStub) identifyAttackTechniques(eventTypes map[string]int, events 
 			break
 		}
 	}
-	
+
 	return techniques
 }
 
@@ -473,10 +473,10 @@ func (ls *LocalStub) getTimespan(events []store.Event) string {
 	if len(events) == 0 {
 		return "N/A"
 	}
-	
+
 	earliest := events[0].Timestamp
 	latest := events[0].Timestamp
-	
+
 	for _, event := range events {
 		if event.Timestamp.Before(earliest) {
 			earliest = event.Timestamp
@@ -485,7 +485,7 @@ func (ls *LocalStub) getTimespan(events []store.Event) string {
 			latest = event.Timestamp
 		}
 	}
-	
+
 	duration := latest.Sub(earliest)
 	if duration < time.Minute {
 		return "< 1 minute"
@@ -517,7 +517,7 @@ func (ls *LocalStub) calculateConfidence(events []store.Event) float64 {
 func (ls *LocalStub) isSuspiciousIP(ip string) bool {
 	// Simple heuristic: consider private IPs less suspicious
 	// In a real implementation, this would check against threat intelligence
-	return !strings.HasPrefix(ip, "192.168.") && 
-		   !strings.HasPrefix(ip, "10.") && 
-		   !strings.HasPrefix(ip, "172.16.")
+	return !strings.HasPrefix(ip, "192.168.") &&
+		!strings.HasPrefix(ip, "10.") &&
+		!strings.HasPrefix(ip, "172.16.")
 }

@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
-	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
-	"github.com/Ashfaaq98/ocsf-console-ir/internal/ui"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/ui"
+	"github.com/gdamore/tcell/v2"
 )
 
 // Type aliases for convenience
@@ -344,7 +344,7 @@ func TestKeyboardHandlerLogic(t *testing.T) {
 
 		for _, tc := range testCases {
 			event := tcell.NewEventKey(tc.key, tc.rune, tcell.ModNone)
-			
+
 			var action string
 			switch event.Key() {
 			case tcell.KeyRune:

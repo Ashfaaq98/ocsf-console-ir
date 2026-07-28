@@ -12,25 +12,25 @@ import (
 type CorePlugin interface {
 	// Name returns the plugin name
 	Name() string
-	
+
 	// Description returns a brief description of the plugin
 	Description() string
-	
+
 	// Version returns the plugin version
 	Version() string
-	
+
 	// Process processes an event and returns enrichments
 	Process(ctx context.Context, event bus.EventMessage) ([]store.Enrichment, error)
-	
+
 	// Start initializes the plugin
 	Start(ctx context.Context) error
-	
+
 	// Stop shuts down the plugin gracefully
 	Stop() error
-	
+
 	// HealthCheck returns the plugin's health status
 	HealthCheck(ctx context.Context) error
-	
+
 	// GetConfig returns the plugin's configuration requirements
 	GetConfig() PluginConfig
 }
@@ -46,17 +46,17 @@ type ExternalPlugin struct {
 	Enabled     bool              `json:"enabled"`
 	Description string            `json:"description,omitempty"`
 	Version     string            `json:"version,omitempty"`
-	
+
 	// Runtime state
 	process *PluginProcess `json:"-"`
 }
 
 // PluginConfig defines configuration requirements for a plugin
 type PluginConfig struct {
-	RequiredEnvVars []string          `json:"required_env_vars"`
-	OptionalEnvVars []string          `json:"optional_env_vars"`
-	ConfigFile      string            `json:"config_file,omitempty"`
-	Dependencies    []string          `json:"dependencies,omitempty"`
+	RequiredEnvVars []string             `json:"required_env_vars"`
+	OptionalEnvVars []string             `json:"optional_env_vars"`
+	ConfigFile      string               `json:"config_file,omitempty"`
+	Dependencies    []string             `json:"dependencies,omitempty"`
 	Resources       ResourceRequirements `json:"resources,omitempty"`
 }
 
@@ -79,41 +79,41 @@ type PluginProcess struct {
 
 // PluginStatus represents the status of a plugin
 type PluginStatus struct {
-	Name         string            `json:"name"`
-	Type         string            `json:"type"` // "core" or "external"
-	Status       string            `json:"status"` // "running", "stopped", "error", "starting"
-	LastActivity time.Time         `json:"last_activity"`
-	ProcessedEvents int64          `json:"processed_events"`
-	Errors       int64             `json:"errors"`
-	Uptime       time.Duration     `json:"uptime"`
-	MemoryUsage  int64             `json:"memory_usage,omitempty"`
-	CPUUsage     float64           `json:"cpu_usage,omitempty"`
-	Metadata     map[string]string `json:"metadata,omitempty"`
+	Name            string            `json:"name"`
+	Type            string            `json:"type"`   // "core" or "external"
+	Status          string            `json:"status"` // "running", "stopped", "error", "starting"
+	LastActivity    time.Time         `json:"last_activity"`
+	ProcessedEvents int64             `json:"processed_events"`
+	Errors          int64             `json:"errors"`
+	Uptime          time.Duration     `json:"uptime"`
+	MemoryUsage     int64             `json:"memory_usage,omitempty"`
+	CPUUsage        float64           `json:"cpu_usage,omitempty"`
+	Metadata        map[string]string `json:"metadata,omitempty"`
 }
 
 // PluginRegistry manages plugin registration and discovery
 type PluginRegistry interface {
 	// RegisterCorePlugin registers an internal Go plugin
 	RegisterCorePlugin(plugin CorePlugin) error
-	
+
 	// RegisterExternalPlugin registers an external executable plugin
 	RegisterExternalPlugin(plugin *ExternalPlugin) error
-	
+
 	// GetCorePlugin returns a core plugin by name
 	GetCorePlugin(name string) (CorePlugin, bool)
-	
+
 	// GetExternalPlugin returns an external plugin by name
 	GetExternalPlugin(name string) (*ExternalPlugin, bool)
-	
+
 	// ListCorePlugins returns all registered core plugins
 	ListCorePlugins() []CorePlugin
-	
+
 	// ListExternalPlugins returns all registered external plugins
 	ListExternalPlugins() []*ExternalPlugin
-	
+
 	// GetPluginStatus returns the status of a plugin
 	GetPluginStatus(name string) (*PluginStatus, error)
-	
+
 	// GetAllStatuses returns the status of all plugins
 	GetAllStatuses() ([]*PluginStatus, error)
 }
@@ -122,28 +122,28 @@ type PluginRegistry interface {
 type PluginManager interface {
 	// Start starts all enabled plugins
 	Start(ctx context.Context) error
-	
+
 	// Stop stops all running plugins
 	Stop() error
-	
+
 	// StartPlugin starts a specific plugin
 	StartPlugin(ctx context.Context, name string) error
-	
+
 	// StopPlugin stops a specific plugin
 	StopPlugin(name string) error
-	
+
 	// RestartPlugin restarts a specific plugin
 	RestartPlugin(ctx context.Context, name string) error
-	
+
 	// GetRegistry returns the plugin registry
 	GetRegistry() PluginRegistry
-	
+
 	// ProcessEvent processes an event through all applicable plugins
 	ProcessEvent(ctx context.Context, event bus.EventMessage) error
-	
+
 	// HealthCheck performs health checks on all plugins
 	HealthCheck(ctx context.Context) (map[string]error, error)
-	
+
 	// GetStats returns plugin statistics
 	GetStats() map[string]interface{}
 }
@@ -161,35 +161,35 @@ type PluginEvent struct {
 type PluginEventType string
 
 const (
-	PluginEventStarted    PluginEventType = "started"
-	PluginEventStopped    PluginEventType = "stopped"
-	PluginEventError      PluginEventType = "error"
-	PluginEventProcessed  PluginEventType = "processed"
-	PluginEventHealthy    PluginEventType = "healthy"
-	PluginEventUnhealthy  PluginEventType = "unhealthy"
-	PluginEventRestarted  PluginEventType = "restarted"
+	PluginEventStarted   PluginEventType = "started"
+	PluginEventStopped   PluginEventType = "stopped"
+	PluginEventError     PluginEventType = "error"
+	PluginEventProcessed PluginEventType = "processed"
+	PluginEventHealthy   PluginEventType = "healthy"
+	PluginEventUnhealthy PluginEventType = "unhealthy"
+	PluginEventRestarted PluginEventType = "restarted"
 )
 
 // EnrichmentType defines types of enrichments
 type EnrichmentType string
 
 const (
-	EnrichmentGeoIP       EnrichmentType = "geoip"
-	EnrichmentThreatIntel EnrichmentType = "threat_intel"
-	EnrichmentReputation  EnrichmentType = "reputation"
-	EnrichmentDNS         EnrichmentType = "dns"
-	EnrichmentWhois       EnrichmentType = "whois"
+	EnrichmentGeoIP        EnrichmentType = "geoip"
+	EnrichmentThreatIntel  EnrichmentType = "threat_intel"
+	EnrichmentReputation   EnrichmentType = "reputation"
+	EnrichmentDNS          EnrichmentType = "dns"
+	EnrichmentWhois        EnrichmentType = "whois"
 	EnrichmentFileAnalysis EnrichmentType = "file_analysis"
-	EnrichmentBehavioral  EnrichmentType = "behavioral"
-	EnrichmentCorrelation EnrichmentType = "correlation"
+	EnrichmentBehavioral   EnrichmentType = "behavioral"
+	EnrichmentCorrelation  EnrichmentType = "correlation"
 )
 
 // PluginCapability defines what a plugin can do
 type PluginCapability struct {
-	EventTypes     []string         `json:"event_types"`     // OCSF event types this plugin handles
+	EventTypes      []string         `json:"event_types"`      // OCSF event types this plugin handles
 	EnrichmentTypes []EnrichmentType `json:"enrichment_types"` // Types of enrichments this plugin provides
-	RequiresNetwork bool            `json:"requires_network"` // Whether plugin needs network access
-	RequiresStorage bool            `json:"requires_storage"` // Whether plugin needs persistent storage
-	Realtime       bool            `json:"realtime"`        // Whether plugin processes events in real-time
-	Batch          bool            `json:"batch"`           // Whether plugin supports batch processing
+	RequiresNetwork bool             `json:"requires_network"` // Whether plugin needs network access
+	RequiresStorage bool             `json:"requires_storage"` // Whether plugin needs persistent storage
+	Realtime        bool             `json:"realtime"`         // Whether plugin processes events in real-time
+	Batch           bool             `json:"batch"`            // Whether plugin supports batch processing
 }

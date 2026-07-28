@@ -113,7 +113,7 @@ func (g *Groq) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error)
 	if sp := GetSystemPrompt(req.Persona); sp != "" {
 		msgs = append([]groqMsg{{Role: "system", Content: sp}}, msgs...)
 	}
-	
+
 	payload := groqReq{
 		Model:     g.model,
 		Messages:  msgs,

@@ -113,7 +113,7 @@ func (s *Synthetic) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, e
 	if sp := GetSystemPrompt(req.Persona); sp != "" {
 		msgs = append([]synMsg{{Role: "system", Content: sp}}, msgs...)
 	}
-	
+
 	payload := synReq{
 		Model:     s.model,
 		Messages:  msgs,

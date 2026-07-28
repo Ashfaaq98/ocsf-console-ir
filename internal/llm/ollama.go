@@ -71,12 +71,12 @@ func (o *Ollama) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 			Content string `json:"content"`
 		} `json:"message"`
 		// Optional counters present in some builds of Ollama
-		EvalCount        int `json:"eval_count"`
-		PromptEvalCount  int `json:"prompt_eval_count"`
-		TotalDuration    int `json:"total_duration,omitempty"`
-		LoadDuration     int `json:"load_duration,omitempty"`
-		PromptEvalDur    int `json:"prompt_eval_duration,omitempty"`
-		EvalDuration     int `json:"eval_duration,omitempty"`
+		EvalCount       int `json:"eval_count"`
+		PromptEvalCount int `json:"prompt_eval_count"`
+		TotalDuration   int `json:"total_duration,omitempty"`
+		LoadDuration    int `json:"load_duration,omitempty"`
+		PromptEvalDur   int `json:"prompt_eval_duration,omitempty"`
+		EvalDuration    int `json:"eval_duration,omitempty"`
 	}
 
 	msgs := make([]ollamaMsg, 0, len(req.Messages))
@@ -90,14 +90,14 @@ func (o *Ollama) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, erro
 			Content: m.Content,
 		})
 	}
-	
+
 	// Prepend persona-specific system prompt when available.
 	// This ensures the LLM receives the correct system instruction for the chosen persona.
 	prompt := GetSystemPrompt(req.Persona)
 	if prompt != "" {
 		msgs = append([]ollamaMsg{{Role: "system", Content: prompt}}, msgs...)
 	}
-	
+
 	payload := chatReq{
 		Model:    o.model,
 		Messages: msgs,

@@ -91,7 +91,7 @@ func runReset(cmd *cobra.Command, args []string) error {
 	if resetRedis {
 		if err := resetRedisData(ctx); err != nil {
 			fmt.Printf("Warning: Failed to reset Redis data: %v\n", err)
-			
+
 			// If user requested both Redis and DB, offer to continue with just DB
 			resetBoth := !cmd.Flags().Changed("redis-only") && !cmd.Flags().Changed("db-only")
 			if resetBoth && resetDB && !confirmReset {

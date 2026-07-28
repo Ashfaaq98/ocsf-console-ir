@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	kernel32                = syscall.NewLazyDLL("kernel32.dll")
+	kernel32                       = syscall.NewLazyDLL("kernel32.dll")
 	procGetConsoleScreenBufferInfo = kernel32.NewProc("GetConsoleScreenBufferInfo")
 )
 
@@ -47,13 +47,13 @@ func getTerminalSize() (int, int) {
 			}
 		}
 	}
-	
+
 	// Try Windows API
 	var csbi consoleScreenBufferInfo
 	ret, _, _ := procGetConsoleScreenBufferInfo.Call(
 		uintptr(syscall.Stdout),
 		uintptr(unsafe.Pointer(&csbi)))
-	
+
 	if ret != 0 {
 		width := int(csbi.Window.Right - csbi.Window.Left + 1)
 		height := int(csbi.Window.Bottom - csbi.Window.Top + 1)
@@ -61,7 +61,7 @@ func getTerminalSize() (int, int) {
 			return width, height
 		}
 	}
-	
+
 	// Fallback: let tview handle terminal size detection
 	return 0, 0
 }

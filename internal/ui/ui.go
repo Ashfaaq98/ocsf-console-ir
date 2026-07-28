@@ -11,9 +11,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
@@ -29,19 +30,19 @@ import (
 // Theme defines UI color tokens used across widgets and text tags.
 type Theme struct {
 	// Widget colors
-	Bg            tcell.Color
-	Surface       tcell.Color
-	Border        tcell.Color
-	FocusBorder   tcell.Color
-	SelectionBg   tcell.Color
-	SelectionFg   tcell.Color
-	TextPrimary   tcell.Color
-	TextMuted     tcell.Color
-	Accent        tcell.Color
-	Success       tcell.Color
-	Warning       tcell.Color
-	Error         tcell.Color
-	Header        tcell.Color
+	Bg          tcell.Color
+	Surface     tcell.Color
+	Border      tcell.Color
+	FocusBorder tcell.Color
+	SelectionBg tcell.Color
+	SelectionFg tcell.Color
+	TextPrimary tcell.Color
+	TextMuted   tcell.Color
+	Accent      tcell.Color
+	Success     tcell.Color
+	Warning     tcell.Color
+	Error       tcell.Color
+	Header      tcell.Color
 
 	// Table colors
 	TableHeader   tcell.Color
@@ -59,17 +60,17 @@ type Theme struct {
 	SeverityInfo     tcell.Color
 
 	// Text tag colors (for tview dynamic color markup)
-	TagTextPrimary       string
-	TagMuted             string
-	TagAccent            string
-	TagSuccess           string
-	TagWarning           string
-	TagError             string
-	TagSeverityCritical  string
-	TagSeverityHigh      string
-	TagSeverityMedium    string
-	TagSeverityLow       string
-	TagSeverityInfo      string
+	TagTextPrimary      string
+	TagMuted            string
+	TagAccent           string
+	TagSuccess          string
+	TagWarning          string
+	TagError            string
+	TagSeverityCritical string
+	TagSeverityHigh     string
+	TagSeverityMedium   string
+	TagSeverityLow      string
+	TagSeverityInfo     string
 }
 
 // helpers
@@ -77,19 +78,19 @@ func hex(s string) tcell.Color { return tcell.GetColor(s) }
 
 func themeDark() Theme {
 	return Theme{
-		Bg:            hex("#0e1116"),
-		Surface:       hex("#12161e"),
-		Border:        hex("#2b3240"),
-		FocusBorder:   hex("#4aa8ff"),
-		SelectionBg:   hex("#2b3240"),
-		SelectionFg:   hex("#cfd8e3"),
-		TextPrimary:   hex("#e6edf3"),
-		TextMuted:     hex("#8a939f"),
-		Accent:        hex("#2dd4bf"),
-		Success:       hex("#22c55e"),
-		Warning:       hex("#f59e0b"),
-		Error:         hex("#ef4444"),
-		Header:        hex("#eab308"),
+		Bg:          hex("#0e1116"),
+		Surface:     hex("#12161e"),
+		Border:      hex("#2b3240"),
+		FocusBorder: hex("#4aa8ff"),
+		SelectionBg: hex("#2b3240"),
+		SelectionFg: hex("#cfd8e3"),
+		TextPrimary: hex("#e6edf3"),
+		TextMuted:   hex("#8a939f"),
+		Accent:      hex("#2dd4bf"),
+		Success:     hex("#22c55e"),
+		Warning:     hex("#f59e0b"),
+		Error:       hex("#ef4444"),
+		Header:      hex("#eab308"),
 
 		// Table colors
 		TableHeader:   hex("#eab308"),
@@ -121,19 +122,19 @@ func themeDark() Theme {
 
 func themeLight() Theme {
 	return Theme{
-		Bg:            hex("#f6f8fa"),
-		Surface:       hex("#ffffff"),
-		Border:        hex("#d0d7de"),
-		FocusBorder:   hex("#1f6feb"),
-		SelectionBg:   hex("#e2e8f0"),
-		SelectionFg:   hex("#111827"),
-		TextPrimary:   hex("#111827"),
-		TextMuted:     hex("#6b7280"),
-		Accent:        hex("#2563eb"),
-		Success:       hex("#15803d"),
-		Warning:       hex("#b45309"),
-		Error:         hex("#b91c1c"),
-		Header:        hex("#1f2937"),
+		Bg:          hex("#f6f8fa"),
+		Surface:     hex("#ffffff"),
+		Border:      hex("#d0d7de"),
+		FocusBorder: hex("#1f6feb"),
+		SelectionBg: hex("#e2e8f0"),
+		SelectionFg: hex("#111827"),
+		TextPrimary: hex("#111827"),
+		TextMuted:   hex("#6b7280"),
+		Accent:      hex("#2563eb"),
+		Success:     hex("#15803d"),
+		Warning:     hex("#b45309"),
+		Error:       hex("#b91c1c"),
+		Header:      hex("#1f2937"),
 
 		// Table colors
 		TableHeader:   hex("#1f2937"),
@@ -165,19 +166,19 @@ func themeLight() Theme {
 
 func themeHighContrast() Theme {
 	return Theme{
-		Bg:            hex("#000000"),
-		Surface:       hex("#000000"),
-		Border:        hex("#ffffff"),
-		FocusBorder:   hex("#ffff00"),
-		SelectionBg:   hex("#ffffff"),
-		SelectionFg:   hex("#000000"),
-		TextPrimary:   hex("#ffffff"),
-		TextMuted:     hex("#cccccc"),
-		Accent:        hex("#00ffff"),
-		Success:       hex("#00ff00"),
-		Warning:       hex("#ffff00"),
-		Error:         hex("#ff0000"),
-		Header:        hex("#ffffff"),
+		Bg:          hex("#000000"),
+		Surface:     hex("#000000"),
+		Border:      hex("#ffffff"),
+		FocusBorder: hex("#ffff00"),
+		SelectionBg: hex("#ffffff"),
+		SelectionFg: hex("#000000"),
+		TextPrimary: hex("#ffffff"),
+		TextMuted:   hex("#cccccc"),
+		Accent:      hex("#00ffff"),
+		Success:     hex("#00ff00"),
+		Warning:     hex("#ffff00"),
+		Error:       hex("#ff0000"),
+		Header:      hex("#ffffff"),
 
 		// Table colors
 		TableHeader:   hex("#ffffff"),
@@ -210,19 +211,19 @@ func themeHighContrast() Theme {
 func themeColorblindSafe() Theme {
 	// ColorBrewer-inspired RdYlBu-like palette (safe-ish)
 	return Theme{
-		Bg:            hex("#0e1116"),
-		Surface:       hex("#12161e"),
-		Border:        hex("#2b3240"),
-		FocusBorder:   hex("#4aa8ff"),
-		SelectionBg:   hex("#2b3240"),
-		SelectionFg:   hex("#e6edf3"),
-		TextPrimary:   hex("#e6edf3"),
-		TextMuted:     hex("#8a939f"),
-		Accent:        hex("#80b1d3"),
-		Success:       hex("#5ab4ac"),
-		Warning:       hex("#fdb863"),
-		Error:         hex("#d7191c"),
-		Header:        hex("#fee08b"),
+		Bg:          hex("#0e1116"),
+		Surface:     hex("#12161e"),
+		Border:      hex("#2b3240"),
+		FocusBorder: hex("#4aa8ff"),
+		SelectionBg: hex("#2b3240"),
+		SelectionFg: hex("#e6edf3"),
+		TextPrimary: hex("#e6edf3"),
+		TextMuted:   hex("#8a939f"),
+		Accent:      hex("#80b1d3"),
+		Success:     hex("#5ab4ac"),
+		Warning:     hex("#fdb863"),
+		Error:       hex("#d7191c"),
+		Header:      hex("#fee08b"),
 
 		// Table colors
 		TableHeader:   hex("#fee08b"),
@@ -257,19 +258,19 @@ func themeClaude() Theme {
 	// A palette of warm grays, ambers, and terracottas that's easy on the eyes
 	// during long incident response sessions while maintaining professionalism.
 	return Theme{
-		Bg:            hex("#1a1614"), // Deep warm charcoal
-		Surface:       hex("#252220"), // Warm gray surface
-		Border:        hex("#3d3835"), // Subtle warm border
-		FocusBorder:   hex("#d4976c"), // Warm amber focus
-		SelectionBg:   hex("#3d3835"), // Warm selection
-		SelectionFg:   hex("#f5f0eb"), // Warm off-white
-		TextPrimary:   hex("#f5f0eb"), // Warm cream text
-		TextMuted:     hex("#a89a8f"), // Warm muted gray
-		Accent:        hex("#d4976c"), // Signature warm amber - friendly yet professional
-		Success:       hex("#88b369"), // Warm sage green
-		Warning:       hex("#e0a564"), // Warm amber
-		Error:         hex("#d87c7c"), // Warm terracotta red
-		Header:        hex("#e0b882"), // Warm golden header
+		Bg:          hex("#1a1614"), // Deep warm charcoal
+		Surface:     hex("#252220"), // Warm gray surface
+		Border:      hex("#3d3835"), // Subtle warm border
+		FocusBorder: hex("#d4976c"), // Warm amber focus
+		SelectionBg: hex("#3d3835"), // Warm selection
+		SelectionFg: hex("#f5f0eb"), // Warm off-white
+		TextPrimary: hex("#f5f0eb"), // Warm cream text
+		TextMuted:   hex("#a89a8f"), // Warm muted gray
+		Accent:      hex("#d4976c"), // Signature warm amber - friendly yet professional
+		Success:     hex("#88b369"), // Warm sage green
+		Warning:     hex("#e0a564"), // Warm amber
+		Error:       hex("#d87c7c"), // Warm terracotta red
+		Header:      hex("#e0b882"), // Warm golden header
 
 		// Table colors - warm and readable
 		TableHeader:   hex("#e0b882"), // Warm gold
@@ -306,19 +307,19 @@ func themeGemini() Theme {
 	// Uses the core Google palette (Blue, Red, Yellow, Green) against a sleek dark background.
 	// This theme is designed to pop and feel distinctively "Google".
 	return Theme{
-		Bg:            hex("#000000"), // True Black for maximum contrast
-		Surface:       hex("#121212"), // Material Dark Surface
-		Border:        hex("#5f6368"), // Google Grey 600 (Subtle borders)
-		FocusBorder:   hex("#4285f4"), // Google Blue 500 (Focus pops)
-		SelectionBg:   hex("#4285f4"), // Google Blue 500
-		SelectionFg:   hex("#ffffff"), // White text on selection
-		TextPrimary:   hex("#ffffff"), // Pure White
-		TextMuted:     hex("#9aa0a6"), // Google Grey 400
-		Accent:        hex("#fbbc04"), // Google Yellow 500 (Accents)
-		Success:       hex("#34a853"), // Google Green 500
-		Warning:       hex("#fbbc04"), // Google Yellow 500
-		Error:         hex("#ea4335"), // Google Red 500
-		Header:        hex("#ea4335"), // Google Red 500 (Distinctive Header)
+		Bg:          hex("#000000"), // True Black for maximum contrast
+		Surface:     hex("#121212"), // Material Dark Surface
+		Border:      hex("#5f6368"), // Google Grey 600 (Subtle borders)
+		FocusBorder: hex("#4285f4"), // Google Blue 500 (Focus pops)
+		SelectionBg: hex("#4285f4"), // Google Blue 500
+		SelectionFg: hex("#ffffff"), // White text on selection
+		TextPrimary: hex("#ffffff"), // Pure White
+		TextMuted:   hex("#9aa0a6"), // Google Grey 400
+		Accent:      hex("#fbbc04"), // Google Yellow 500 (Accents)
+		Success:     hex("#34a853"), // Google Green 500
+		Warning:     hex("#fbbc04"), // Google Yellow 500
+		Error:       hex("#ea4335"), // Google Red 500
+		Header:      hex("#ea4335"), // Google Red 500 (Distinctive Header)
 
 		// Table colors
 		TableHeader:   hex("#ea4335"), // Red Header
@@ -371,32 +372,39 @@ type UI struct {
 	logger *log.Logger
 
 	// Layout components
-	layout      *tview.Flex
-	appTitle    *tview.TextView
-	allList     *tview.List
+	layout       *tview.Flex
+	appTitle     *tview.TextView
+	allList      *tview.List
 	allCasesInfo *tview.TextView
-	sidebar     *tview.List
-	mainPanel   *tview.Flex
-	eventList   *tview.Table
-	eventDetail *tview.TextView
-	statusBar   *tview.TextView
+	sidebar      *tview.List
+	mainPanel    *tview.Flex
+	eventList    *tview.Table
+	eventDetail  *tview.TextView
+	statusBar    *tview.TextView
 
-		// State
-		cases           []store.Case
-		selectedCaseID  string
-		events          []store.Event
-		selectedEventID string
-		selectedEventIDs map[string]bool // multi-select state for events
-		loadingEvents   int32 // atomic flag to prevent concurrent event loads
-		lastLoadStart   int64 // unix nano timestamp of last load start (for watchdog)
-		showAll         bool  // when true, sidebar selection is "ALL EVENTS"
-		queryStates     map[string]*EventQueryState // per-context (ALL or caseID) filter+pagination
+	// State
+	cases            []store.Case
+	selectedCaseID   string
+	events           []store.Event
+	selectedEventID  string
+	selectedEventIDs map[string]bool             // multi-select state for events
+	loadingEvents    int32                       // atomic flag to prevent concurrent event loads
+	lastLoadStart    int64                       // unix nano timestamp of last load start (for watchdog)
+	showAll          bool                        // when true, sidebar selection is "ALL EVENTS"
+	queryStates      map[string]*EventQueryState // per-context (ALL or caseID) filter+pagination
+
+	// Findings triage queue. Findings are the analyst's unit of work; ALL EVENTS
+	// remains available alongside it for raw-log triage.
+	showFindings      bool
+	findings          []store.Finding
+	selectedFindingID string
+	findingsOpenOnly  bool
 
 	// Theme state
-	theme        Theme
-	themeName    string
-	hasTrueColor bool
-	themeApplying int32
+	theme          Theme
+	themeName      string
+	hasTrueColor   bool
+	themeApplying  int32
 	filterApplying int32
 
 	// Filters (time window for events list)
@@ -415,9 +423,9 @@ type UI struct {
 	globalInputCapture func(*tcell.EventKey) *tcell.EventKey
 
 	// Multi-key shortcut state
-	shortcutBuffer    string
-	shortcutTimer     *time.Timer
-	shortcutTimeout   time.Duration
+	shortcutBuffer  string
+	shortcutTimer   *time.Timer
+	shortcutTimeout time.Duration
 
 	// Context for cancellation
 	ctx    context.Context
@@ -450,6 +458,9 @@ type EventQueryState struct {
 
 // getContextID resolves the current query context: ALL or a specific case ID.
 func (ui *UI) getContextID() string {
+	if ui.showFindings {
+		return contextFindings
+	}
 	if !ui.showAll && ui.selectedCaseID != "" {
 		return ui.selectedCaseID
 	}
@@ -489,6 +500,7 @@ func keysFromMap(m map[string]bool) []string {
 	sort.Strings(out)
 	return out
 }
+
 // Apply in-memory CASE filters (name substring on Title, status set, severity set).
 func (ui *UI) applyCaseFilters(in []store.Case) []store.Case {
 	// Fast path: no filters
@@ -605,8 +617,18 @@ func (ui *UI) Start(ctx context.Context) error {
 				// Focus the Events table directly (overview panel is non-selectable)
 				ui.app.SetFocus(ui.eventList)
 
+				// Land on the findings queue when there is triage work waiting;
+				// otherwise fall back to ALL EVENTS so a raw-log-only install is
+				// never greeted by an empty screen.
+				openFindings, cntErr := ui.store.CountFindings(ui.ctx, store.FindingFilter{OpenOnly: true})
+				if cntErr == nil && openFindings > 0 {
+					ui.jumpToFindings()
+					return
+				}
+
 				// Auto-load ALL EVENTS on startup
 				ui.showAll = true
+				ui.showFindings = false
 				ui.selectedCaseID = ""
 
 				// Immediate loading state in events table
@@ -740,17 +762,17 @@ func (ui *UI) setupLayout() {
 		ui.logger.Printf("DEBUG: allList created with %d items", ui.allList.GetItemCount())
 	}
 	ui.allList.SetSelectedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
-				// Load ALL EVENTS
-				ui.showAll = true
-				ui.selectedCaseID = ""
-		
-				// Reset pagination for ALL context
-				{
-					s := ui.getOrInitState(contextAll)
-					s.pageIndex = 0
-				}
-		
-				// Immediate loading state in events table
+		// Load ALL EVENTS
+		ui.showAll = true
+		ui.selectedCaseID = ""
+
+		// Reset pagination for ALL context
+		{
+			s := ui.getOrInitState(contextAll)
+			s.pageIndex = 0
+		}
+
+		// Immediate loading state in events table
 		ui.eventList.Clear()
 		headers := []string{"Time", "Type", "Severity", "Host", "Source", "Message"}
 		for col, header := range headers {
@@ -793,19 +815,19 @@ func (ui *UI) setupLayout() {
 
 	// Sidebar list remains for cases (below ALL EVENTS)
 	ui.sidebar.SetTitle(" Cases ")
-// Initialize ALL CASES info block (non-selectable)
-ui.allCasesInfo = tview.NewTextView().
-	SetDynamicColors(true).
-	SetTextAlign(tview.AlignLeft)
-ui.allCasesInfo.SetTitle(" OVERVIEW ")
-ui.allCasesInfo.SetBorder(true)
-ui.allCasesInfo.SetTitleAlign(tview.AlignCenter)
-ui.allCasesInfo.SetBackgroundColor(ui.theme.Surface)
-ui.allCasesInfo.SetTextColor(ui.theme.TextPrimary)
-ui.allCasesInfo.SetBorderColor(ui.theme.Border)
-// Default text until cases are loaded
-ui.allCasesInfo.SetText(fmt.Sprintf("[%s](A) EVENTS (0)[-]\n[%s](C) CASES (0)[-]\n[%s]OPEN[-] - 0  [%s]INVESTIGATING[-] - 0  [%s]CLOSED[-] - 0",
-	ui.theme.TagAccent, ui.theme.TagAccent, ui.theme.TagTextPrimary, ui.theme.TagTextPrimary, ui.theme.TagTextPrimary))
+	// Initialize ALL CASES info block (non-selectable)
+	ui.allCasesInfo = tview.NewTextView().
+		SetDynamicColors(true).
+		SetTextAlign(tview.AlignLeft)
+	ui.allCasesInfo.SetTitle(" OVERVIEW ")
+	ui.allCasesInfo.SetBorder(true)
+	ui.allCasesInfo.SetTitleAlign(tview.AlignCenter)
+	ui.allCasesInfo.SetBackgroundColor(ui.theme.Surface)
+	ui.allCasesInfo.SetTextColor(ui.theme.TextPrimary)
+	ui.allCasesInfo.SetBorderColor(ui.theme.Border)
+	// Default text until cases are loaded
+	ui.allCasesInfo.SetText(fmt.Sprintf("[%s](A) EVENTS (0)[-]\n[%s](C) CASES (0)[-]\n[%s]OPEN[-] - 0  [%s]INVESTIGATING[-] - 0  [%s]CLOSED[-] - 0",
+		ui.theme.TagAccent, ui.theme.TagAccent, ui.theme.TagTextPrimary, ui.theme.TagTextPrimary, ui.theme.TagTextPrimary))
 
 	// Build left column: Title → All → Cases
 	leftCol := tview.NewFlex().
@@ -881,6 +903,10 @@ func (ui *UI) setupEventHandlers() {
 
 	// Event list selection
 	ui.eventList.SetSelectedFunc(func(row, col int) {
+		if ui.showFindings {
+			ui.showFindingDetails()
+			return
+		}
 		if row > 0 && row-1 < len(ui.events) { // Skip header row
 			ui.selectedEventID = ui.events[row-1].ID
 			ui.showEventDetails()
@@ -889,6 +915,10 @@ func (ui *UI) setupEventHandlers() {
 
 	// Event list selection change
 	ui.eventList.SetSelectionChangedFunc(func(row, col int) {
+		if ui.showFindings {
+			ui.showFindingDetails()
+			return
+		}
 		if row > 0 && row-1 < len(ui.events) { // Skip header row
 			ui.selectedEventID = ui.events[row-1].ID
 			ui.showEventDetails()
@@ -902,6 +932,10 @@ func (ui *UI) setupEventHandlers() {
 			row, col := ui.eventList.GetSelection()
 			if ui.logger != nil {
 				ui.logger.Printf("EventList Enter: row=%d col=%d rows=%d", row, col, ui.eventList.GetRowCount())
+			}
+			if ui.showFindings {
+				ui.showFindingDetails()
+				return nil
 			}
 			if row > 0 && row-1 < len(ui.events) {
 				ui.selectedEventID = ui.events[row-1].ID
@@ -962,6 +996,7 @@ func (ui *UI) onSidebarSelect(index int) {
 	}
 
 	ui.showAll = false
+	ui.showFindings = false
 	ui.selectedCaseID = ui.cases[index].ID
 	// Reset pagination for this case context
 	{
@@ -1040,6 +1075,10 @@ func (ui *UI) setupKeybindings() {
 				ui.scheduleEventsReload("key:r")
 				return nil
 			case 's', 'S':
+				if ui.showFindings {
+					ui.showFindingStatusModal()
+					return nil
+				}
 				if ui.selectedCaseID != "" {
 					ui.showCaseSummary()
 				}
@@ -1146,6 +1185,10 @@ func (ui *UI) setupKeybindings() {
 				ui.setTheme(next)
 				return nil
 			case 'f':
+				if ui.showFindings {
+					ui.setStatusDirect("[%s]Findings: o toggles open/all • s status • v verdict[-:-:-]", ui.theme.TagAccent)
+					return nil
+				}
 				// Gated by focus: Cases sidebar opens CASE filter, otherwise open Events filter
 				if ui.app.GetFocus() == ui.sidebar {
 					ui.showCaseFilterModal()
@@ -1155,6 +1198,10 @@ func (ui *UI) setupKeybindings() {
 				}
 				return nil
 			case 'F':
+				if ui.showFindings {
+					ui.setStatusDirect("[%s]Findings: o toggles open/all • s status • v verdict[-:-:-]", ui.theme.TagAccent)
+					return nil
+				}
 				// Gated by focus: Cases sidebar clears CASE filters, otherwise clear Events filters
 				if ui.app.GetFocus() == ui.sidebar {
 					ui.clearCaseFilters()
@@ -1186,11 +1233,31 @@ func (ui *UI) setupKeybindings() {
 					ui.setStatusDirect("[%s]No events selected. Use Space to select events first. (Events: %d)[-:-:-]", ui.theme.TagWarning, len(ui.events))
 				}
 				return nil
+			case 'D':
+				// Quick-jump to the findings (detections) triage queue.
+				ui.jumpToFindings()
+				return nil
+			case 'v':
+				if ui.showFindings {
+					ui.showFindingVerdictModal()
+					return nil
+				}
+			case 'e':
+				if ui.showFindings {
+					ui.escalateFindingToCase()
+					return nil
+				}
+			case 'o':
+				if ui.showFindings {
+					ui.toggleFindingsScope()
+					return nil
+				}
 			case 'A':
 				// Quick-jump to ALL EVENTS from anywhere (overview panel is non-selectable)
 				ui.app.SetFocus(ui.eventList)
 
 				// Trigger same behavior as selecting ALL EVENTS
+				ui.showFindings = false
 				ui.showAll = true
 				ui.selectedCaseID = ""
 
@@ -1609,7 +1676,7 @@ func (ui *UI) updateEventsList() {
 		isSelected := ui.selectedEventIDs[event.ID]
 		var selectionIndicator string
 		var rowColor tcell.Color
-		
+
 		if isSelected {
 			selectionIndicator = "✓ "
 			rowColor = ui.theme.SelectionFg // Highlight selected rows
@@ -1901,6 +1968,15 @@ func (ui *UI) showHelp() {
 	addKV("Esc", "Clear status line")
 	addGap()
 
+	addSection("FINDINGS (TRIAGE)")
+	addKV("D", "Open the findings queue")
+	addKV("Enter", "Finding details: evidence, related events, observables")
+	addKV("s", "Set status (New / In Progress / Suppressed / Resolved / Archived)")
+	addKV("v", "Set verdict (True / False Positive, Suspicious, Benign, ...)")
+	addKV("e", "Escalate finding into a new or existing case")
+	addKV("o", "Toggle open-only / all findings")
+	row++
+
 	addSection("EVENT SELECTION")
 	addKV("Space", "Toggle event selection")
 	addKV("Ctrl+A", "Select all events")
@@ -1928,6 +2004,7 @@ func (ui *UI) showHelp() {
 	addGap()
 
 	addSection("QUICK ACTIONS")
+	addKV("D", "Jump to FINDINGS from anywhere")
 	addKV("A", "Jump to ALL EVENTS from anywhere")
 	addKV("r", "Refresh data")
 	addKV("h / H", "Show this help")
@@ -1986,19 +2063,19 @@ func (ui *UI) showModal(title, text string) {
 	modal.SetText(text)
 	modal.SetTitle(fmt.Sprintf(" %s ", title))
 	modal.AddButtons([]string{"Close"})
-	
+
 	// Set modal colors to match theme
 	modal.SetBackgroundColor(ui.theme.Surface)
 	modal.SetTextColor(ui.theme.TextPrimary)
 	modal.SetBorderColor(ui.theme.FocusBorder)
 	modal.SetButtonBackgroundColor(ui.theme.SelectionBg)
 	modal.SetButtonTextColor(ui.theme.SelectionFg)
-	
+
 	// Handle modal closure with multiple keys
 	modal.SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 		ui.restoreMainLayout()
 	})
-	
+
 	// Add input capture to handle Esc and other keys - this must come BEFORE SetRoot
 	modal.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if ui.logger != nil {
@@ -2207,6 +2284,7 @@ func (ui *UI) highlightFocus(focused tview.Primitive) {
 		ui.eventDetail.SetBorderColor(ui.theme.FocusBorder)
 	}
 }
+
 // startRedrawHeartbeat periodically requests a redraw to mitigate terminals that miss repaints
 func (ui *UI) startRedrawHeartbeat() {
 	go func() {
@@ -2225,6 +2303,7 @@ func (ui *UI) startRedrawHeartbeat() {
 		}
 	}()
 }
+
 // isDialogActive returns true when a dialog or the help view is focused to bypass global shortcuts.
 func (ui *UI) isDialogActive() bool {
 	if ui.helpActive {
@@ -2524,61 +2603,61 @@ func (ui *UI) GetStats() map[string]interface{} {
 
 // handleShortcutKey handles a number key press for case selection.
 // It supports multi-digit input with disambiguation:
-// - If typing this digit could still form a larger valid number (e.g., "1" when there are >=10 cases),
-//   we start a short timer and wait for the next digit before selecting.
-// - If no valid longer number can be formed (e.g., "7" when there are only 9 cases), we select immediately.
+//   - If typing this digit could still form a larger valid number (e.g., "1" when there are >=10 cases),
+//     we start a short timer and wait for the next digit before selecting.
+//   - If no valid longer number can be formed (e.g., "7" when there are only 9 cases), we select immediately.
 func (ui *UI) handleShortcutKey(digit rune) {
-// Cancel any existing timer
-if ui.shortcutTimer != nil {
-	ui.shortcutTimer.Stop()
-	ui.shortcutTimer = nil
-}
+	// Cancel any existing timer
+	if ui.shortcutTimer != nil {
+		ui.shortcutTimer.Stop()
+		ui.shortcutTimer = nil
+	}
 
-// Add digit to buffer
-ui.shortcutBuffer += string(digit)
+	// Add digit to buffer
+	ui.shortcutBuffer += string(digit)
 
-// Parse current buffer
-caseNum, err := strconv.Atoi(ui.shortcutBuffer)
-if err != nil || caseNum < 1 {
-	// Invalid prefix; reset
-	ui.shortcutBuffer = ""
-	return
-}
+	// Parse current buffer
+	caseNum, err := strconv.Atoi(ui.shortcutBuffer)
+	if err != nil || caseNum < 1 {
+		// Invalid prefix; reset
+		ui.shortcutBuffer = ""
+		return
+	}
 
-max := len(ui.cases)
-if max == 0 {
-	ui.shortcutBuffer = ""
-	return
-}
+	max := len(ui.cases)
+	if max == 0 {
+		ui.shortcutBuffer = ""
+		return
+	}
 
-// If current number is greater than max, no further digits can make it valid (numbers only grow).
-if caseNum > max {
-	ui.shortcutBuffer = ""
-	return
-}
+	// If current number is greater than max, no further digits can make it valid (numbers only grow).
+	if caseNum > max {
+		ui.shortcutBuffer = ""
+		return
+	}
 
-// At this point, caseNum is within [1..max].
-// Determine if a longer valid number could be formed by adding another digit.
-// If caseNum*10 <= max, there exists at least one valid extension (e.g., 1 -> 10..19).
-canExtendValid := (caseNum*10 <= max) && (len(ui.shortcutBuffer) < 3)
+	// At this point, caseNum is within [1..max].
+	// Determine if a longer valid number could be formed by adding another digit.
+	// If caseNum*10 <= max, there exists at least one valid extension (e.g., 1 -> 10..19).
+	canExtendValid := (caseNum*10 <= max) && (len(ui.shortcutBuffer) < 3)
 
-if canExtendValid {
-	// Wait briefly for an additional digit; on timeout, commit current caseNum.
-	ui.shortcutTimer = time.AfterFunc(ui.shortcutTimeout, func() {
-		ui.app.QueueUpdate(func() {
-			if num, err := strconv.Atoi(ui.shortcutBuffer); err == nil && num >= 1 && num <= len(ui.cases) {
-				ui.selectCaseByNumber(num)
-			}
-			ui.shortcutBuffer = ""
-			ui.shortcutTimer = nil
+	if canExtendValid {
+		// Wait briefly for an additional digit; on timeout, commit current caseNum.
+		ui.shortcutTimer = time.AfterFunc(ui.shortcutTimeout, func() {
+			ui.app.QueueUpdate(func() {
+				if num, err := strconv.Atoi(ui.shortcutBuffer); err == nil && num >= 1 && num <= len(ui.cases) {
+					ui.selectCaseByNumber(num)
+				}
+				ui.shortcutBuffer = ""
+				ui.shortcutTimer = nil
+			})
 		})
-	})
-	return
-}
+		return
+	}
 
-// No valid extension possible or buffer length cap reached; select immediately.
-ui.selectCaseByNumber(caseNum)
-ui.shortcutBuffer = ""
+	// No valid extension possible or buffer length cap reached; select immediately.
+	ui.selectCaseByNumber(caseNum)
+	ui.shortcutBuffer = ""
 }
 
 // selectCaseByNumber selects a case by its 1-based number
@@ -2633,7 +2712,7 @@ func (ui *UI) selectAllEvents() {
 		ui.setStatusDirect("[%s]No events to select[-:-:-]", ui.theme.TagWarning)
 		return
 	}
-	
+
 	for _, event := range ui.events {
 		ui.selectedEventIDs[event.ID] = true
 	}
@@ -2647,7 +2726,7 @@ func (ui *UI) deselectAllEvents() {
 		ui.setStatusDirect("[%s]No events selected[-:-:-]", ui.theme.TagWarning)
 		return
 	}
-	
+
 	count := len(ui.selectedEventIDs)
 	ui.selectedEventIDs = make(map[string]bool)
 	ui.updateEventsList()
@@ -2659,7 +2738,7 @@ func (ui *UI) showCreateCaseModal() {
 	form := tview.NewForm()
 	form.SetTitle(" Create New Case ")
 	form.SetBorder(true)
-	
+
 	// Apply theme colors
 	form.SetBackgroundColor(ui.theme.Surface)
 	form.SetFieldBackgroundColor(ui.theme.Surface)
@@ -2668,11 +2747,11 @@ func (ui *UI) showCreateCaseModal() {
 	form.SetButtonBackgroundColor(ui.theme.SelectionBg)
 	form.SetButtonTextColor(ui.theme.SelectionFg)
 	form.SetBorderColor(ui.theme.FocusBorder)
-	
+
 	// Form fields
 	var title, description, assignedTo string
 	severity := "medium"
-	
+
 	form.AddInputField("Title", "", 50, nil, func(text string) {
 		title = text
 	})
@@ -2685,7 +2764,7 @@ func (ui *UI) showCreateCaseModal() {
 	form.AddInputField("Assigned To", "", 30, nil, func(text string) {
 		assignedTo = text
 	})
-	
+
 	// Install input capture on Description TextArea to enable Tab-based navigation.
 	// Enter continues to insert newlines (multi-line), Tab moves next, Shift+Tab moves previous.
 	{
@@ -2722,7 +2801,7 @@ func (ui *UI) showCreateCaseModal() {
 			}
 		}
 	}
-	
+
 	// Buttons
 	form.AddButton("Create", func() {
 		if title == "" {
@@ -2735,7 +2814,7 @@ func (ui *UI) showCreateCaseModal() {
 	form.AddButton("Cancel", func() {
 		ui.restoreMainLayout()
 	})
-	
+
 	// Handle Esc key
 	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyEsc {
@@ -2744,7 +2823,7 @@ func (ui *UI) showCreateCaseModal() {
 		}
 		return event
 	})
-	
+
 	ui.lastFocus = ui.app.GetFocus()
 	ui.app.SetRoot(form, true)
 	ui.app.SetFocus(form)
@@ -2851,7 +2930,7 @@ func (ui *UI) showAddToExistingCaseModal() {
 // createCaseWithEvents creates a new case and assigns selected events to it
 func (ui *UI) createCaseWithEvents(title, description, severity, assignedTo string) {
 	ui.setStatusDirect("[%s]Creating case and assigning events...[-:-:-]", ui.theme.TagWarning)
-	
+
 	go func() {
 		// Create the case
 		newCase := store.Case{
@@ -2861,7 +2940,7 @@ func (ui *UI) createCaseWithEvents(title, description, severity, assignedTo stri
 			Status:      "open",
 			AssignedTo:  assignedTo,
 		}
-		
+
 		caseID, err := ui.store.CreateOrUpdateCase(ui.ctx, newCase)
 		if err != nil {
 			ui.app.QueueUpdate(func() {
@@ -2869,7 +2948,7 @@ func (ui *UI) createCaseWithEvents(title, description, severity, assignedTo stri
 			})
 			return
 		}
-		
+
 		// Assign selected events to the case
 		var successCount, errorCount int
 		for eventID := range ui.selectedEventIDs {
@@ -2882,14 +2961,14 @@ func (ui *UI) createCaseWithEvents(title, description, severity, assignedTo stri
 				successCount++
 			}
 		}
-		
+
 		// Update case event count
 		if err := ui.store.UpdateCaseEventCount(ui.ctx, caseID); err != nil {
 			if ui.logger != nil {
 				ui.logger.Printf("Error updating case event count: %v", err)
 			}
 		}
-		
+
 		// Refresh UI without blocking the UI goroutine on DB calls
 		// 1) Clear selections and show immediate status on UI thread
 		ui.app.QueueUpdate(func() {
@@ -2939,10 +3018,10 @@ func (ui *UI) addEventsToCase(caseNumberStr string) {
 		ui.setStatusDirect("[%s]Invalid case number. Enter 1-%d[-:-:-]", ui.theme.TagError, len(ui.cases))
 		return
 	}
-	
+
 	selectedCase := ui.cases[caseIndex-1]
 	ui.setStatusDirect("[%s]Adding events to case: %s...[-:-:-]", ui.theme.TagWarning, selectedCase.Title)
-	
+
 	go func() {
 		// Assign selected events to the case
 		var successCount, errorCount int
@@ -2956,14 +3035,14 @@ func (ui *UI) addEventsToCase(caseNumberStr string) {
 				successCount++
 			}
 		}
-		
+
 		// Update case event count
 		if err := ui.store.UpdateCaseEventCount(ui.ctx, selectedCase.ID); err != nil {
 			if ui.logger != nil {
 				ui.logger.Printf("Error updating case event count: %v", err)
 			}
 		}
-		
+
 		// Refresh UI without blocking the UI goroutine on DB calls
 		// 1) Clear selections and show immediate status on UI thread
 		ui.app.QueueUpdate(func() {
@@ -3004,22 +3083,23 @@ func (ui *UI) addEventsToCase(caseNumberStr string) {
 		}
 	}()
 }
+
 // Neon theme (formerly "Pride"): vibrant but accessible on a dark surface
 func themeNeon() Theme {
 	return Theme{
-		Bg:            hex("#0f0b14"),
-		Surface:       hex("#14111a"),
-		Border:        hex("#45385a"),
-		FocusBorder:   hex("#ff79c6"), // pink focus ring
-		SelectionBg:   hex("#2a1f3d"),
-		SelectionFg:   hex("#f8f5ff"),
-		TextPrimary:   hex("#f8f5ff"),
-		TextMuted:     hex("#b8a8c9"),
-		Accent:        hex("#ff6ac1"), // pink accent
-		Success:       hex("#00d084"), // green
-		Warning:       hex("#ffd166"), // amber
-		Error:         hex("#ff5555"), // red
-		Header:        hex("#ff79c6"), // header accent
+		Bg:          hex("#0f0b14"),
+		Surface:     hex("#14111a"),
+		Border:      hex("#45385a"),
+		FocusBorder: hex("#ff79c6"), // pink focus ring
+		SelectionBg: hex("#2a1f3d"),
+		SelectionFg: hex("#f8f5ff"),
+		TextPrimary: hex("#f8f5ff"),
+		TextMuted:   hex("#b8a8c9"),
+		Accent:      hex("#ff6ac1"), // pink accent
+		Success:     hex("#00d084"), // green
+		Warning:     hex("#ffd166"), // amber
+		Error:       hex("#ff5555"), // red
+		Header:      hex("#ff79c6"), // header accent
 
 		// Table colors
 		TableHeader:   hex("#ff79c6"),
@@ -3050,6 +3130,7 @@ func themeNeon() Theme {
 		TagSeverityInfo:     "#0a84ff",
 	}
 }
+
 // showCombinedFilterModal opens a structured, keyboard-friendly filter modal with dropdowns and sub-modals.
 func (ui *UI) showCombinedFilterModal() {
 	// Current context state
@@ -3113,8 +3194,8 @@ func (ui *UI) showCombinedFilterModal() {
 	customSev := map[string]bool{}
 	for k, v := range s.filterSeverities {
 		if v {
-		customSev[strings.ToLower(k)] = true
-	}
+			customSev[strings.ToLower(k)] = true
+		}
 	}
 	sevIdx := 0 // Any
 	if len(customSev) == 1 {
@@ -3155,8 +3236,10 @@ func (ui *UI) showCombinedFilterModal() {
 	sevDD.SetLabelColor(ui.theme.TextPrimary)
 	form.AddFormItem(sevDD)
 
-	// Type section
-	typeOptions := []string{"Any", "Network", "Process", "File", "Authentication", "Unknown", "Custom..."}
+	// Category section. Options are driven by the embedded OCSF registry rather
+	// than a hardcoded list, so every category is selectable and correctly named.
+	typeOptions, typeSlugs := ui.ocsfCategoryOptions()
+	customTypeIdx := len(typeOptions) - 1 // "Custom..." is always last
 	customType := map[string]bool{}
 	for k, v := range s.filterTypes {
 		if v {
@@ -3165,31 +3248,31 @@ func (ui *UI) showCombinedFilterModal() {
 	}
 	typeIdx := 0
 	if len(customType) == 1 {
-		switch {
-		case customType["network"]:
-			typeIdx = 1
-		case customType["process"]:
-			typeIdx = 2
-		case customType["file"]:
-			typeIdx = 3
-		case customType["authentication"]:
-			typeIdx = 4
-		case customType["unknown"]:
-			typeIdx = 5
+		for i, slug := range typeSlugs {
+			if slug != "" && customType[slug] {
+				typeIdx = i
+				break
+			}
 		}
 	} else if len(customType) > 1 {
-		typeIdx = 6 // Custom...
+		typeIdx = customTypeIdx
 	}
 	// Declare before use so the callback can reference it safely.
 	var typeDD *tview.DropDown
 	typeDD = tview.NewDropDown()
-	typeDD.SetLabel("Type")
+	typeDD.SetLabel("Category")
 	typeDD.SetOptions(typeOptions, func(text string, idx int) {
 		typeIdx = idx
 		if text == "Custom..." {
-			ui.showMultiSelectModal("Select Types", []string{"network", "process", "file", "authentication", "unknown"}, customType, form, func(sel map[string]bool) {
+			selectable := make([]string, 0, len(typeSlugs))
+			for _, slug := range typeSlugs {
+				if slug != "" {
+					selectable = append(selectable, slug)
+				}
+			}
+			ui.showMultiSelectModal("Select Categories", selectable, customType, form, func(sel map[string]bool) {
 				customType = sel
-				typeDD.SetCurrentOption(6)
+				typeDD.SetCurrentOption(customTypeIdx)
 				ui.app.SetRoot(form, true)
 				ui.app.SetFocus(form)
 			})
@@ -3273,26 +3356,20 @@ func (ui *UI) showCombinedFilterModal() {
 			}
 		}
 
-		// Compute types
+		// Compute categories
 		newTypes := map[string]bool{}
-		switch typeIdx {
-		case 0: // Any
+		switch {
+		case typeIdx == 0: // Any
 			// empty
-		case 1:
-			newTypes["network"] = true
-		case 2:
-			newTypes["process"] = true
-		case 3:
-			newTypes["file"] = true
-		case 4:
-			newTypes["authentication"] = true
-		case 5:
-			newTypes["unknown"] = true
-		case 6:
+		case typeIdx == customTypeIdx:
 			for k, v := range customType {
 				if v {
 					newTypes[k] = true
 				}
+			}
+		case typeIdx > 0 && typeIdx < len(typeSlugs):
+			if slug := typeSlugs[typeIdx]; slug != "" {
+				newTypes[slug] = true
 			}
 		}
 
@@ -3334,6 +3411,29 @@ func (ui *UI) showCombinedFilterModal() {
 }
 
 // clearCurrentContextFilters clears time, severities, and types for the current context and reloads.
+// ocsfCategoryOptions builds the Category dropdown from the embedded OCSF
+// registry. It returns the display labels and a parallel slice of the slug each
+// label filters on; index 0 ("Any") and the trailing "Custom..." entry both map
+// to an empty slug.
+func (ui *UI) ocsfCategoryOptions() (labels []string, slugs []string) {
+	cats := ocsf.Categories()
+	labels = make([]string, 0, len(cats)+3)
+	slugs = make([]string, 0, len(cats)+3)
+
+	labels = append(labels, "Any")
+	slugs = append(slugs, "")
+	for _, c := range cats {
+		labels = append(labels, c.Name)
+		slugs = append(slugs, c.Slug)
+	}
+	labels = append(labels, "Unknown")
+	slugs = append(slugs, string(ocsf.EventTypeUnknown))
+	labels = append(labels, "Custom...")
+	slugs = append(slugs, "")
+
+	return labels, slugs
+}
+
 func (ui *UI) clearCurrentContextFilters() {
 	id := ui.getContextID()
 	s := ui.getOrInitState(id)
@@ -3520,7 +3620,6 @@ func parseFlexibleTime(input string, now time.Time) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("unsupported time format %q", input)
 }
 
-
 // loadAllEvents loads all events across all cases (respects time filters if set)
 func (ui *UI) loadAllEvents() {
 	// Prevent concurrent loads
@@ -3673,6 +3772,7 @@ func (ui *UI) loadAllEvents() {
 		atomic.StoreInt32(&ui.filterApplying, 0)
 	})
 }
+
 // showDeleteCaseConfirm confirms and deletes the selected case, unassigning its events to ALL EVENTS.
 func (ui *UI) showDeleteCaseConfirm() {
 	if ui.selectedCaseID == "" || ui.showAll {
@@ -3764,6 +3864,7 @@ func (ui *UI) showDeleteCaseConfirm() {
 	ui.app.SetRoot(modal, true)
 	ui.app.SetFocus(modal)
 }
+
 // buildShortcutHints returns a colored, space-separated list of the most relevant
 // shortcuts based on current focus and UI state. It caps the list to a small,
 // readable set to avoid clutter. Ensures `h:help` is always shown and omits
@@ -3978,6 +4079,10 @@ func (ui *UI) updateOverview(eventsTotal, casesTotal, open, investigating, close
 	if ui.allCasesInfo == nil {
 		return
 	}
+	// Findings lead: they are the triage queue, and events are the corroboration
+	// layer beneath them.
+	openFindings, _ := ui.store.CountFindings(ui.ctx, store.FindingFilter{OpenOnly: true})
+	line0 := fmt.Sprintf("[%s](D) FINDINGS (%d open)[-]", ui.theme.TagAccent, openFindings)
 	line1 := fmt.Sprintf("[%s](A) EVENTS (%d)[-]", ui.theme.TagAccent, eventsTotal)
 	line2 := fmt.Sprintf("[%s](C) CASES (%d)[-]", ui.theme.TagAccent, casesTotal)
 	line3 := fmt.Sprintf("[%s]OPEN[-] - %d  [%s]INVESTIGATING[-] - %d  [%s]CLOSED[-] - %d",
@@ -3985,7 +4090,7 @@ func (ui *UI) updateOverview(eventsTotal, casesTotal, open, investigating, close
 		ui.theme.TagTextPrimary, investigating,
 		ui.theme.TagTextPrimary, closed,
 	)
-	ui.allCasesInfo.SetText(line1 + "\n" + line2 + "\n" + line3)
+	ui.allCasesInfo.SetText(line0 + "\n" + line1 + "\n" + line2 + "\n" + line3)
 }
 
 // showDeleteEventsConfirm shows a confirmation dialog and deletes the selected events upon approval.
@@ -4178,7 +4283,7 @@ func (ui *UI) showCaseFilterModal() {
 
 		// Restore layout first to close modal
 		ui.restoreMainLayout()
-		
+
 		// Update UI in background to avoid deadlock
 		go func() {
 			ui.app.QueueUpdateDraw(func() {

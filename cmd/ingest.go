@@ -141,7 +141,7 @@ type IngestStats struct {
 // processEvents processes events from the input reader
 func processEvents(ctx context.Context, input io.Reader, parser *ingest.Parser,
 	store *store.Store, eventBus bus.Bus, logger *log.Logger) (*IngestStats, error) {
-	
+
 	startTime := time.Now()
 	stats := &IngestStats{}
 
@@ -199,12 +199,12 @@ func processEvents(ctx context.Context, input io.Reader, parser *ingest.Parser,
 // processBatch processes a batch of events
 func processBatch(ctx context.Context, batch [][]byte, parser *ingest.Parser,
 	store *store.Store, eventBus bus.Bus, logger *log.Logger, startLine int) *IngestStats {
-	
+
 	stats := &IngestStats{}
 
 	for i, eventData := range batch {
 		lineNumber := startLine + i
-		
+
 		if err := processEvent(ctx, eventData, parser, store, eventBus, lineNumber); err != nil {
 			stats.FailedEvents++
 			if skipInvalid {
@@ -216,7 +216,7 @@ func processBatch(ctx context.Context, batch [][]byte, parser *ingest.Parser,
 		} else {
 			stats.SuccessfulEvents++
 		}
-		
+
 		stats.TotalEvents++
 	}
 
@@ -226,30 +226,36 @@ func processBatch(ctx context.Context, batch [][]byte, parser *ingest.Parser,
 // processEvent processes a single event
 func processEvent(ctx context.Context, eventData []byte, parser *ingest.Parser,
 	store *store.Store, eventBus bus.Bus, lineNumber int) error {
-	
-	// Parse the OCSF event
-	ocsfEvent, err := parser.ParseEvent(eventData)
+
+	// Parse and route: Findings-category records and alertable events become
+	// findings; everything else stays an event.
+	rec, err := parser.Parse(eventData)
 	if err != nil {
 		return fmt.Errorf("failed to parse OCSF event: %w", err)
 	}
 
 	// Save to database
-	eventID, err := store.SaveEvent(ctx, ocsfEvent)
+	saved, err := store.SaveRecord(ctx, rec)
 	if err != nil {
-		return fmt.Errorf("failed to save event to database: %w", err)
+		return fmt.Errorf("failed to save record to database: %w", err)
+	}
+
+	recordID := saved.EventID
+	if recordID == "" {
+		recordID = saved.FindingID
 	}
 
 	// Publish to Redis stream for plugin processing
 	eventMsg := bus.EventMessage{
-		EventID:   eventID,
-		EventType: string(ocsfEvent.GetEventType()),
+		EventID:   recordID,
+		EventType: rec.EventType(),
 		RawJSON:   string(eventData),
-		Timestamp: ocsfEvent.Time.Unix(),
+		Timestamp: rec.Timestamp(),
 	}
 
 	if err := eventBus.PublishEvent(ctx, eventMsg); err != nil {
 		// Log the error but don't fail the ingestion
-		log.Printf("Warning: failed to publish event %s to bus: %v", eventID, err)
+		log.Printf("Warning: failed to publish event %s to bus: %v", recordID, err)
 	}
 
 	return nil
@@ -262,4 +268,3 @@ func updateStats(main, batch *IngestStats) {
 	main.FailedEvents += batch.FailedEvents
 	main.SkippedEvents += batch.SkippedEvents
 }
-

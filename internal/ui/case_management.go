@@ -13,9 +13,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gdamore/tcell/v2"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 )
 
@@ -27,6 +28,13 @@ type IOCItem struct {
 	First           time.Time
 	Last            time.Time
 	RelatedEventIDs []string
+	// TypeID is the OCSF observable type_id backing this indicator, used to
+	// pivot on (type_id, value).
+	TypeID int
+	// Asserted records that the event source supplied this indicator, rather
+	// than Console-IR inferring it from text. An analyst should be able to tell
+	// the difference before acting on it.
+	Asserted bool
 }
 
 // CaseManagement represents the Case Management TUI screen
@@ -40,11 +48,11 @@ type CaseManagement struct {
 	ctx    context.Context
 
 	// Main case data
-	caseData    store.Case
-	events      []store.Event
-	baseEvents  []store.Event
-	auditLog    []store.AuditEntry
-	notes       []store.Note
+	caseData   store.Case
+	events     []store.Event
+	baseEvents []store.Event
+	auditLog   []store.AuditEntry
+	notes      []store.Note
 
 	// UI Layout components
 	layout            *tview.Flex
@@ -144,21 +152,21 @@ func NewCaseManagement(parentUI *UI, caseData store.Case) *CaseManagement {
 	}
 
 	cm := &CaseManagement{
-		app:                 parentUI.app,
-		store:               parentUI.store,
-		llm:                 chatLLM,
-		logger:              parentUI.logger,
-		theme:               parentUI.theme,
-		ctx:                 parentUI.ctx,
-		caseData:            caseData,
-		selectedEventIDs:    make(map[string]bool),
-		selectedEventIndex:  -1,
-		pinnedEvents:        make(map[string]bool),
-		chatHistory:         []llm.ChatMessage{},
-		currentPersona:      llm.PersonaSOC,
-		focusedPane:         FocusEvents,
-		timelineExpanded:    make(map[int]bool),
-		parentUI:            parentUI,
+		app:                parentUI.app,
+		store:              parentUI.store,
+		llm:                chatLLM,
+		logger:             parentUI.logger,
+		theme:              parentUI.theme,
+		ctx:                parentUI.ctx,
+		caseData:           caseData,
+		selectedEventIDs:   make(map[string]bool),
+		selectedEventIndex: -1,
+		pinnedEvents:       make(map[string]bool),
+		chatHistory:        []llm.ChatMessage{},
+		currentPersona:     llm.PersonaSOC,
+		focusedPane:        FocusEvents,
+		timelineExpanded:   make(map[int]bool),
+		parentUI:           parentUI,
 	}
 
 	cm.setupLayout()
@@ -288,7 +296,6 @@ func (cm *CaseManagement) setupCopilotPanel() {
 		cm.currentPersona = text
 		cm.updateStatus(fmt.Sprintf("Persona: %s", text))
 	})
-
 
 	// Chat transcript
 	cm.copilotTranscript = tview.NewTextView().
@@ -557,8 +564,8 @@ func (cm *CaseManagement) loadCaseData() {
 		// Ensure audit/notes tables are available
 		_ = cm.store.SetupAuditTables()
 
-
 		// Load events for this case
+		cm.reloadCaseRow()
 		events, err := cm.store.GetEventsByCase(cm.ctx, cm.caseData.ID)
 		if err != nil {
 			if strings.Contains(err.Error(), "database is closed") || cm.ctx.Err() != nil {
@@ -612,6 +619,17 @@ func (cm *CaseManagement) loadCaseData() {
 	}()
 }
 
+// reloadCaseRow re-reads the case so denormalized counts and analyst fields
+// stay accurate after membership changes.
+func (cm *CaseManagement) reloadCaseRow() {
+	if cm.store == nil || cm.caseData.ID == "" {
+		return
+	}
+	if c, err := cm.store.GetCase(cm.ctx, cm.caseData.ID); err == nil && c != nil {
+		cm.caseData = *c
+	}
+}
+
 func (cm *CaseManagement) refreshCaseData() {
 	cm.updateStatus("Refreshing case data...")
 	cm.loadCaseData()
@@ -634,13 +652,22 @@ func (cm *CaseManagement) updateMetadataBar() {
 		owner = "Unassigned"
 	}
 
+	verdict := cm.caseData.VerdictName()
+	if verdict == "" {
+		verdict = "—"
+	}
+
+	// Findings are what the case is about; events are the evidence supporting
+	// it. Showing one combined total hides that distinction.
 	line1 := fmt.Sprintf(
-		"[%s]Case ID:[-] [%s]%s[-]  [%s]Title:[-] [%s]%s[-]  [%s]Severity:[-] [%s]%s[-]  [%s]Owner:[-] [%s]%s[-]  [%s]Events:[-] [%s]%d[-]  [%s]Created:[-] [%s]%s[-]",
+		"[%s]Case ID:[-] [%s]%s[-]  [%s]Title:[-] [%s]%s[-]  [%s]Severity:[-] [%s]%s[-]  [%s]Owner:[-] [%s]%s[-]  [%s]Findings:[-] [%s]%d[-]  [%s]Evidence:[-] [%s]%d[-]  [%s]Verdict:[-] [%s]%s[-]  [%s]Created:[-] [%s]%s[-]",
 		lbl, val, shortID,
 		lbl, val, cm.caseData.Title,
 		lbl, val, cm.caseData.Severity,
 		lbl, val, owner,
+		lbl, val, cm.caseData.FindingCount,
 		lbl, val, cm.caseData.EventCount,
+		lbl, val, verdict,
 		lbl, val, cm.caseData.CreatedAt.Format("2006-01-02 15:04"),
 	)
 	// Hotkeys row: single color (accent) for all hints; exact phrasing requested
@@ -901,7 +928,7 @@ func (cm *CaseManagement) updateNotesText() {
 		cm.notesViewer.SetText("")
 		return
 	}
- 
+
 	var content strings.Builder
 	for _, note := range cm.notes {
 		// Exclude LLM summary notes from the Notes panel (summary is shown only in Overview)
@@ -913,7 +940,7 @@ func (cm *CaseManagement) updateNotesText() {
 		content.WriteString(note.Content)
 		content.WriteString("\n\n")
 	}
- 
+
 	cm.notesViewer.SetText(content.String())
 }
 
@@ -1075,7 +1102,10 @@ func (cm *CaseManagement) renderOverview() {
 		}
 	}
 	// Top 5 hosts
-	type kv struct{ k string; v int }
+	type kv struct {
+		k string
+		v int
+	}
 	var hosts []kv
 	for h, c := range topHostCount {
 		hosts = append(hosts, kv{h, c})
@@ -1196,11 +1226,11 @@ func (cm *CaseManagement) renderIOCs() {
 	// Build auto-extracted IOCs
 	cm.extractIOCs()
 	type orderedItem struct {
-		typ   string
-		item  IOCItem
+		typ  string
+		item IOCItem
 	}
 	var autos []orderedItem
-	for _, typ := range []string{"ip", "domain", "url", "hash"} {
+	for _, typ := range iocBuckets {
 		for _, it := range cm.iocIndex[typ] {
 			autos = append(autos, orderedItem{typ: typ, item: it})
 		}
@@ -1264,7 +1294,7 @@ func (cm *CaseManagement) renderIOCs() {
 			{fmt.Sprintf("%d", a.item.Count), cm.theme.TextPrimary},
 			{a.item.First.Format("2006-01-02 15:04"), cm.theme.TextPrimary},
 			{a.item.Last.Format("2006-01-02 15:04"), cm.theme.TextPrimary},
-			{"auto", cm.theme.TableRowMuted}, // we will add helper via tag color
+			{iocSourceLabel(a.item), iocSourceColor(cm.theme, a.item)},
 		}
 		for c, cell := range cells {
 			tc := tview.NewTableCell(cell.text).
@@ -1329,7 +1359,40 @@ func (cm *CaseManagement) renderIOCs() {
 	}
 }
 
-// extractIOCs aggregates IPs, domains, URLs, and file hashes across all case events.
+// iocBuckets is the display order of indicator groups in the IOCs tab.
+var iocBuckets = []string{"ip", "domain", "url", "hash", "file", "process", "user", "email"}
+
+// iocBucketFor maps an OCSF observable type_id onto a display bucket. Types that
+// are not useful as pivot indicators (ports, countries, ...) are skipped.
+func iocBucketFor(typeID int) (string, bool) {
+	switch typeID {
+	case ocsf.ObservableTypeIPAddress:
+		return "ip", true
+	case ocsf.ObservableTypeHostname:
+		return "domain", true
+	case ocsf.ObservableTypeURLString, ocsf.ObservableTypeURL:
+		return "url", true
+	case ocsf.ObservableTypeHash:
+		return "hash", true
+	case ocsf.ObservableTypeFileName:
+		return "file", true
+	case ocsf.ObservableTypeProcessName:
+		return "process", true
+	case ocsf.ObservableTypeUserName:
+		return "user", true
+	case ocsf.ObservableTypeEmail:
+		return "email", true
+	}
+	return "", false
+}
+
+// extractIOCs builds the case's indicator index.
+//
+// Indicators come from the observables table, which OCSF describes as "an
+// optional query optimization" existing precisely so consumers do not have to
+// rediscover indicators by scanning text. Regex scraping remains only as a
+// fallback for events that arrived without observables, and anything found that
+// way is marked as derived so it is distinguishable in the UI.
 func (cm *CaseManagement) extractIOCs() {
 	// Choose source: use full corpus if available
 	source := cm.baseEvents
@@ -1337,21 +1400,13 @@ func (cm *CaseManagement) extractIOCs() {
 		source = cm.events
 	}
 
-	index := map[string]map[string]*IOCItem{
-		"ip":     {},
-		"domain": {},
-		"url":    {},
-		"hash":   {},
+	index := map[string]map[string]*IOCItem{}
+	for _, b := range iocBuckets {
+		index[b] = map[string]*IOCItem{}
 	}
 
-	ipRe := regexp.MustCompile(`\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b`)
-	urlRe := regexp.MustCompile(`https?://[^\s]+`)
-	domainRe := regexp.MustCompile(`\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b`)
-	md5Re := regexp.MustCompile(`\b[a-fA-F0-9]{32}\b`)
-	sha1Re := regexp.MustCompile(`\b[a-fA-F0-9]{40}\b`)
-	sha256Re := regexp.MustCompile(`\b[a-fA-F0-9]{64}\b`)
-
-	add := func(typ, val, evID string, ts time.Time) {
+	add := func(typ, val, evID string, ts time.Time, typeID int, asserted bool) {
+		val = strings.TrimSpace(val)
 		if val == "" {
 			return
 		}
@@ -1364,83 +1419,66 @@ func (cm *CaseManagement) extractIOCs() {
 			item = &IOCItem{
 				Type:            typ,
 				Value:           val,
-				Count:           0,
 				First:           ts,
 				Last:            ts,
 				RelatedEventIDs: []string{},
+				TypeID:          typeID,
 			}
 			m[val] = item
 		}
-		// Increment once per event for de-duplication within same event
 		item.Count++
+		// An indicator the source vouched for stays marked as such even if the
+		// same value is also derived elsewhere.
+		if asserted {
+			item.Asserted = true
+		}
+		if typeID != ocsf.ObservableTypeUnknown && item.TypeID == ocsf.ObservableTypeUnknown {
+			item.TypeID = typeID
+		}
 		if ts.Before(item.First) {
 			item.First = ts
 		}
 		if ts.After(item.Last) {
 			item.Last = ts
 		}
-		// Track related event
 		if len(item.RelatedEventIDs) == 0 || item.RelatedEventIDs[len(item.RelatedEventIDs)-1] != evID {
 			item.RelatedEventIDs = append(item.RelatedEventIDs, evID)
 		}
 	}
 
-	for _, ev := range source {
-		ts := ev.Timestamp
-		evID := ev.ID
-		msg := ev.Message
-		host := ev.Host
-		if ip := strings.TrimSpace(ev.SrcIP); ip != "" {
-			add("ip", ip, evID, ts)
+	// One indexed query for the whole case rather than a query per event.
+	obsByEvent := map[string][]store.Observable{}
+	if cm.store != nil && len(source) > 0 {
+		ids := make([]string, 0, len(source))
+		for _, ev := range source {
+			ids = append(ids, ev.ID)
 		}
-		if ip := strings.TrimSpace(ev.DstIP); ip != "" {
-			add("ip", ip, evID, ts)
-		}
-		// From message
-		for _, u := range urlRe.FindAllString(msg, -1) {
-			add("url", u, evID, ts)
-			// extract domain from URL if present
-			if m := domainRe.FindString(u); m != "" && !ipRe.MatchString(m) {
-				add("domain", m, evID, ts)
+		loaded, err := cm.store.GetObservablesForEvents(cm.ctx, ids)
+		if err != nil {
+			if cm.logger != nil {
+				cm.logger.Printf("extractIOCs: observable lookup failed, falling back to text scan: %v", err)
 			}
-		}
-		for _, ip := range ipRe.FindAllString(msg, -1) {
-			add("ip", ip, evID, ts)
-		}
-		for _, d := range domainRe.FindAllString(msg, -1) {
-			if !ipRe.MatchString(d) { // avoid IP-as-domain
-				add("domain", d, evID, ts)
-			}
-		}
-		for _, h := range sha256Re.FindAllString(msg, -1) {
-			add("hash", strings.ToLower(h), evID, ts)
-		}
-		for _, h := range sha1Re.FindAllString(msg, -1) {
-			add("hash", strings.ToLower(h), evID, ts)
-		}
-		for _, h := range md5Re.FindAllString(msg, -1) {
-			add("hash", strings.ToLower(h), evID, ts)
-		}
-		// From host (domain)
-		if host != "" && domainRe.MatchString(host) && !ipRe.MatchString(host) {
-			add("domain", host, evID, ts)
-		}
-		// From filename (hash-like substrings)
-		if ev.FileName != "" {
-			for _, h := range sha256Re.FindAllString(ev.FileName, -1) {
-				add("hash", strings.ToLower(h), evID, ts)
-			}
-			for _, h := range sha1Re.FindAllString(ev.FileName, -1) {
-				add("hash", strings.ToLower(h), evID, ts)
-			}
-			for _, h := range md5Re.FindAllString(ev.FileName, -1) {
-				add("hash", strings.ToLower(h), evID, ts)
-			}
+		} else {
+			obsByEvent = loaded
 		}
 	}
 
-	// Convert to slices
-	out := make(map[string][]IOCItem, 4)
+	for _, ev := range source {
+		if obs := obsByEvent[ev.ID]; len(obs) > 0 {
+			for _, o := range obs {
+				bucket, ok := iocBucketFor(o.TypeID)
+				if !ok {
+					continue
+				}
+				add(bucket, o.Value, ev.ID, ev.Timestamp, o.TypeID, o.IsAsserted())
+			}
+			continue
+		}
+		// No observables recorded for this event — fall back to scraping text.
+		cm.scrapeIOCs(ev, add)
+	}
+
+	out := make(map[string][]IOCItem, len(index))
 	for typ, m := range index {
 		list := make([]IOCItem, 0, len(m))
 		for _, v := range m {
@@ -1451,6 +1489,65 @@ func (cm *CaseManagement) extractIOCs() {
 	cm.iocIndex = out
 }
 
+// Fallback matchers, used only for events with no recorded observables.
+var (
+	iocIPRe     = regexp.MustCompile(`\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b`)
+	iocURLRe    = regexp.MustCompile(`https?://[^\s]+`)
+	iocDomainRe = regexp.MustCompile(`\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b`)
+	iocMD5Re    = regexp.MustCompile(`\b[a-fA-F0-9]{32}\b`)
+	iocSHA1Re   = regexp.MustCompile(`\b[a-fA-F0-9]{40}\b`)
+	iocSHA256Re = regexp.MustCompile(`\b[a-fA-F0-9]{64}\b`)
+)
+
+// scrapeIOCs recovers indicators from an event's text for sources that supply no
+// observables. Everything it finds is reported as derived, never asserted.
+func (cm *CaseManagement) scrapeIOCs(ev store.Event, add func(typ, val, evID string, ts time.Time, typeID int, asserted bool)) {
+	ts := ev.Timestamp
+	evID := ev.ID
+	msg := ev.Message
+
+	if ip := strings.TrimSpace(ev.SrcIP); ip != "" {
+		add("ip", ip, evID, ts, ocsf.ObservableTypeIPAddress, false)
+	}
+	if ip := strings.TrimSpace(ev.DstIP); ip != "" {
+		add("ip", ip, evID, ts, ocsf.ObservableTypeIPAddress, false)
+	}
+
+	for _, u := range iocURLRe.FindAllString(msg, -1) {
+		add("url", u, evID, ts, ocsf.ObservableTypeURLString, false)
+		if m := iocDomainRe.FindString(u); m != "" && !iocIPRe.MatchString(m) {
+			add("domain", m, evID, ts, ocsf.ObservableTypeHostname, false)
+		}
+	}
+	for _, ip := range iocIPRe.FindAllString(msg, -1) {
+		add("ip", ip, evID, ts, ocsf.ObservableTypeIPAddress, false)
+	}
+	for _, d := range iocDomainRe.FindAllString(msg, -1) {
+		if !iocIPRe.MatchString(d) {
+			add("domain", d, evID, ts, ocsf.ObservableTypeHostname, false)
+		}
+	}
+	for _, h := range iocSHA256Re.FindAllString(msg, -1) {
+		add("hash", strings.ToLower(h), evID, ts, ocsf.ObservableTypeHash, false)
+	}
+	for _, h := range iocSHA1Re.FindAllString(msg, -1) {
+		add("hash", strings.ToLower(h), evID, ts, ocsf.ObservableTypeHash, false)
+	}
+	for _, h := range iocMD5Re.FindAllString(msg, -1) {
+		add("hash", strings.ToLower(h), evID, ts, ocsf.ObservableTypeHash, false)
+	}
+
+	if ev.Host != "" && iocDomainRe.MatchString(ev.Host) && !iocIPRe.MatchString(ev.Host) {
+		add("domain", ev.Host, evID, ts, ocsf.ObservableTypeHostname, false)
+	}
+	if ev.FileName != "" {
+		for _, re := range []*regexp.Regexp{iocSHA256Re, iocSHA1Re, iocMD5Re} {
+			for _, h := range re.FindAllString(ev.FileName, -1) {
+				add("hash", strings.ToLower(h), evID, ts, ocsf.ObservableTypeHash, false)
+			}
+		}
+	}
+}
 
 // Activity Log rendering
 func (cm *CaseManagement) renderActivityLog() {
@@ -1731,7 +1828,6 @@ func (cm *CaseManagement) toggleLeftRightFocus() {
 	}
 }
 
-
 // OnThemeChanged updates the Case Management theme live when the parent UI changes theme.
 func (cm *CaseManagement) OnThemeChanged(theme Theme) {
 	cm.theme = theme
@@ -1772,14 +1868,14 @@ func (cm *CaseManagement) updateStatus(message string) {
 
 	cm.statusBar.SetText(statusText)
 }
- 
+
 // setStatusDirect bypasses the default patterned status format and sets the status bar verbatim.
 func (cm *CaseManagement) setStatusDirect(text string) {
 	if cm.statusBar != nil {
 		cm.statusBar.SetText(text)
 	}
 }
- 
+
 // notesViewStatusText renders a Notes status line (view mode) using the global color theme.
 func (cm *CaseManagement) notesViewStatusText() string {
 	ts := time.Now().Format("15:04:05")
@@ -1811,7 +1907,7 @@ func (cm *CaseManagement) notesEditStatusText() string {
 		sep,
 	)
 }
- 
+
 // switchToNotesView switches Notes to view mode, focuses viewer, and sets the exact status hint.
 func (cm *CaseManagement) switchToNotesView() {
 	cm.isEditingNotes = false
@@ -1824,7 +1920,7 @@ func (cm *CaseManagement) switchToNotesView() {
 	cm.setStatusDirect(cm.notesViewStatusText())
 	cm.updateFocusStyles()
 }
- 
+
 // switchToNotesEdit switches Notes to edit mode, focuses editor, and shows an edit-oriented status line.
 func (cm *CaseManagement) switchToNotesEdit() {
 	cm.isEditingNotes = true
@@ -2471,13 +2567,13 @@ func (cm *CaseManagement) saveNotes() {
 		cm.updateStatus("No notes to save")
 		return
 	}
- 
+
 	note := store.Note{
 		CaseID:  cm.caseData.ID,
 		Content: content,
 		Author:  cm.getCurrentAnalyst(),
 	}
- 
+
 	go func() {
 		_, err := cm.store.AddNote(cm.ctx, note)
 		cm.app.QueueUpdate(func() {
@@ -2485,12 +2581,12 @@ func (cm *CaseManagement) saveNotes() {
 				cm.updateStatus(fmt.Sprintf("Error saving notes: %v", err))
 				return
 			}
- 
+
 			cm.updateStatus("Notes saved successfully")
 			// Log the action
 			go cm.store.LogCaseAction(cm.ctx, cm.caseData.ID, "note_added", cm.getCurrentAnalyst(),
 				map[string]interface{}{"content_length": len(content)})
- 
+
 			// Return to view mode and refresh notes
 			cm.switchToNotesView()
 			cm.refreshCaseData()
@@ -2853,9 +2949,9 @@ func (cm *CaseManagement) exportCase() {
 	cm.updateStatus("Exporting case...")
 	go func() {
 		payload := struct {
-			Case        store.Case   `json:"case"`
-			Events      []store.Event`json:"events"`
-			GeneratedAt time.Time    `json:"generated_at"`
+			Case        store.Case    `json:"case"`
+			Events      []store.Event `json:"events"`
+			GeneratedAt time.Time     `json:"generated_at"`
 		}{
 			Case:        cm.caseData,
 			Events:      cm.events,
@@ -2956,14 +3052,14 @@ func (cm *CaseManagement) updateFocusStyles() {
 	cm.timelineView.SetBorderColor(cm.theme.Border)
 	cm.timelineView.SetTitleColor(cm.theme.TextPrimary)
 	cm.copilotPanel.SetBorderColor(cm.theme.Border)
-		cm.copilotPanel.SetTitleColor(cm.theme.TextPrimary)
-		if cm.notesViewer != nil {
-			cm.notesViewer.SetBorderColor(cm.theme.Border)
-			cm.notesViewer.SetTitleColor(cm.theme.TextPrimary)
-		}
-		if cm.notesEditor != nil {
-			cm.notesEditor.SetBorderColor(cm.theme.Border)
-		}
+	cm.copilotPanel.SetTitleColor(cm.theme.TextPrimary)
+	if cm.notesViewer != nil {
+		cm.notesViewer.SetBorderColor(cm.theme.Border)
+		cm.notesViewer.SetTitleColor(cm.theme.TextPrimary)
+	}
+	if cm.notesEditor != nil {
+		cm.notesEditor.SetBorderColor(cm.theme.Border)
+	}
 	// Additional tab views
 	if cm.overviewView != nil {
 		cm.overviewView.SetBorderColor(cm.theme.Border)
@@ -3025,7 +3121,7 @@ func (cm *CaseManagement) showStatusChangeModal() {
 	form.SetBorder(true)
 	cm.applyModalTheme(form)
 
-	statuses := []string{"open", "investigating", "contained", "closed"}
+	statuses := store.CaseStatuses()
 	current := 0
 	for i, s := range statuses {
 		if strings.EqualFold(s, cm.caseData.Status) {
@@ -3077,7 +3173,7 @@ func (cm *CaseManagement) showStatusChangeModal() {
 }
 
 func (cm *CaseManagement) quickCycleStatus() {
-	statuses := []string{"open", "investigating", "contained", "closed"}
+	statuses := store.CaseStatuses()
 	current := 0
 	for i, s := range statuses {
 		if strings.EqualFold(s, cm.caseData.Status) {
@@ -3112,7 +3208,6 @@ func (cm *CaseManagement) quickCycleStatus() {
 		})
 	}()
 }
-
 
 // Show mounts the Case Management screen as the current root and focuses the Events pane.
 func (cm *CaseManagement) Show() {
@@ -3172,15 +3267,15 @@ func (cm *CaseManagement) showLLMSettingsModal() {
 	form.SetTitle(" LLM Settings ")
 	form.SetBorder(true)
 	cm.applyModalTheme(form)
-// Predeclare form fields so callbacks can reference them safely
-var endpointIF *tview.InputField
-var modelDD *tview.DropDown
-var apiKeyIF *tview.InputField
-var modelOptions []string
-// Predeclare model discovery so provider callback can invoke it
-var refreshModels func()
-// Guard to prevent concurrent refreshes that can lock up the UI
-var refreshing int32
+	// Predeclare form fields so callbacks can reference them safely
+	var endpointIF *tview.InputField
+	var modelDD *tview.DropDown
+	var apiKeyIF *tview.InputField
+	var modelOptions []string
+	// Predeclare model discovery so provider callback can invoke it
+	var refreshModels func()
+	// Guard to prevent concurrent refreshes that can lock up the UI
+	var refreshing int32
 
 	// Provider dropdown
 	provOptions := []string{"ollama", "openrouter", "groq", "synthetic"}
@@ -3223,27 +3318,27 @@ var refreshing int32
 				// Reset model dropdown options; we auto-load models (no refresh button).
 				if modelDD != nil {
 					switch provider {
-				case "openrouter":
-					if strings.TrimSpace(apiKeyIF.GetText()) == "" && strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")) == "" {
-						modelOptions = []string{"(requires api key)"}
-					} else {
+					case "openrouter":
+						if strings.TrimSpace(apiKeyIF.GetText()) == "" && strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")) == "" {
+							modelOptions = []string{"(requires api key)"}
+						} else {
+							modelOptions = []string{"(loading...)"}
+						}
+					case "groq":
+						if strings.TrimSpace(apiKeyIF.GetText()) == "" && strings.TrimSpace(os.Getenv("GROQ_API_KEY")) == "" {
+							modelOptions = []string{"(requires api key)"}
+						} else {
+							modelOptions = []string{"(loading...)"}
+						}
+					case "synthetic":
+						if strings.TrimSpace(apiKeyIF.GetText()) == "" && strings.TrimSpace(os.Getenv("SYNTHETIC_API_KEY")) == "" {
+							modelOptions = []string{"(requires api key)"}
+						} else {
+							modelOptions = []string{"(loading...)"}
+						}
+					default:
 						modelOptions = []string{"(loading...)"}
 					}
-				case "groq":
-					if strings.TrimSpace(apiKeyIF.GetText()) == "" && strings.TrimSpace(os.Getenv("GROQ_API_KEY")) == "" {
-						modelOptions = []string{"(requires api key)"}
-					} else {
-						modelOptions = []string{"(loading...)"}
-					}
-				case "synthetic":
-					if strings.TrimSpace(apiKeyIF.GetText()) == "" && strings.TrimSpace(os.Getenv("SYNTHETIC_API_KEY")) == "" {
-						modelOptions = []string{"(requires api key)"}
-					} else {
-						modelOptions = []string{"(loading...)"}
-					}
-				default:
-					modelOptions = []string{"(loading...)"}
-				}
 					modelDD.SetOptions(modelOptions, nil)
 					modelDD.SetCurrentOption(0)
 				}
@@ -3265,11 +3360,11 @@ var refreshing int32
 				strings.TrimSpace(apiKeyIF.GetText()) == "" &&
 				strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")) == "") ||
 				(strings.EqualFold(provider, "groq") &&
-				strings.TrimSpace(apiKeyIF.GetText()) == "" &&
-				strings.TrimSpace(os.Getenv("GROQ_API_KEY")) == "") ||
+					strings.TrimSpace(apiKeyIF.GetText()) == "" &&
+					strings.TrimSpace(os.Getenv("GROQ_API_KEY")) == "") ||
 				(strings.EqualFold(provider, "synthetic") &&
-				strings.TrimSpace(apiKeyIF.GetText()) == "" &&
-				strings.TrimSpace(os.Getenv("SYNTHETIC_API_KEY")) == "")) {
+					strings.TrimSpace(apiKeyIF.GetText()) == "" &&
+					strings.TrimSpace(os.Getenv("SYNTHETIC_API_KEY")) == "")) {
 				refreshModels()
 			}
 		}()
@@ -3292,61 +3387,61 @@ var refreshing int32
 	endpointIF.SetFieldBackgroundColor(cm.theme.Surface).SetFieldTextColor(cm.theme.TextPrimary).SetLabelColor(cm.theme.TextPrimary)
 	form.AddFormItem(endpointIF)
 
-		// Model dropdown (single control). Start with persisted model or placeholder; options updated by discovery.
-		initialModel := strings.TrimSpace(model)
-		if initialModel == "" {
-			modelOptions = []string{"(refresh to load)"}
-		} else {
-			modelOptions = []string{initialModel}
-		}
-		modelDD = tview.NewDropDown().
-			SetLabel("Model").
-			SetOptions(modelOptions, func(text string, idx int) {
-				// selection handled on Save
-			})
-		modelDD.SetFieldBackgroundColor(cm.theme.Surface).SetFieldTextColor(cm.theme.TextPrimary).SetLabelColor(cm.theme.TextPrimary)
-		form.AddFormItem(modelDD)
+	// Model dropdown (single control). Start with persisted model or placeholder; options updated by discovery.
+	initialModel := strings.TrimSpace(model)
+	if initialModel == "" {
+		modelOptions = []string{"(refresh to load)"}
+	} else {
+		modelOptions = []string{initialModel}
+	}
+	modelDD = tview.NewDropDown().
+		SetLabel("Model").
+		SetOptions(modelOptions, func(text string, idx int) {
+			// selection handled on Save
+		})
+	modelDD.SetFieldBackgroundColor(cm.theme.Surface).SetFieldTextColor(cm.theme.TextPrimary).SetLabelColor(cm.theme.TextPrimary)
+	form.AddFormItem(modelDD)
 
-		// API Key (for OpenRouter)
-		apiKey := settings.Active.APIKey
-		apiKeyIF = tview.NewInputField().SetLabel("API Key (OpenRouter/Groq)").SetText(apiKey)
-		apiKeyIF.SetMaskCharacter('*')
-		apiKeyIF.SetFieldBackgroundColor(cm.theme.Surface).SetFieldTextColor(cm.theme.TextPrimary).SetLabelColor(cm.theme.TextPrimary)
-		form.AddFormItem(apiKeyIF)
-	
-		// (Removed) separate discovered models dropdown — using single Model dropdown above.
-	
-		// Helper to refresh model list from current Provider/Endpoint
-		refreshModels = func() {
-			// Concurrency guard: prevent overlapping refreshes which can deadlock the UI.
-			if !atomic.CompareAndSwapInt32(&refreshing, 0, 1) {
-				// Use non-blocking QueueUpdate from UI goroutine to avoid draw re-entrancy
-				cm.app.QueueUpdate(func() {
-					cm.updateStatus("Model refresh already in progress")
-				})
-				return
-			}
+	// API Key (for OpenRouter)
+	apiKey := settings.Active.APIKey
+	apiKeyIF = tview.NewInputField().SetLabel("API Key (OpenRouter/Groq)").SetText(apiKey)
+	apiKeyIF.SetMaskCharacter('*')
+	apiKeyIF.SetFieldBackgroundColor(cm.theme.Surface).SetFieldTextColor(cm.theme.TextPrimary).SetLabelColor(cm.theme.TextPrimary)
+	form.AddFormItem(apiKeyIF)
 
-			// Show immediate loading placeholder in the Model dropdown (non-blocking UI update)
+	// (Removed) separate discovered models dropdown — using single Model dropdown above.
+
+	// Helper to refresh model list from current Provider/Endpoint
+	refreshModels = func() {
+		// Concurrency guard: prevent overlapping refreshes which can deadlock the UI.
+		if !atomic.CompareAndSwapInt32(&refreshing, 0, 1) {
+			// Use non-blocking QueueUpdate from UI goroutine to avoid draw re-entrancy
 			cm.app.QueueUpdate(func() {
-				modelOptions = []string{"(refreshing...)"}
-				if modelDD != nil {
-					modelDD.SetOptions(modelOptions, nil)
-					modelDD.SetCurrentOption(0)
-				}
+				cm.updateStatus("Model refresh already in progress")
 			})
+			return
+		}
 
-			// Snapshot current provider/endpoint/key at click time (on UI goroutine)
-			prov := strings.ToLower(strings.TrimSpace(provider))
-			ep := strings.TrimSpace(endpointIF.GetText())
-			key := strings.TrimSpace(apiKeyIF.GetText())
-
-			if cm.logger != nil {
-				cm.logger.Printf("LLM Settings: refreshModels start provider=%s endpoint=%s key_len=%d", prov, ep, len(key))
+		// Show immediate loading placeholder in the Model dropdown (non-blocking UI update)
+		cm.app.QueueUpdate(func() {
+			modelOptions = []string{"(refreshing...)"}
+			if modelDD != nil {
+				modelDD.SetOptions(modelOptions, nil)
+				modelDD.SetCurrentOption(0)
 			}
+		})
 
-			// If OpenRouter selected without an API key, don't attempt network calls; show helpful placeholder.
-			if (prov == "openrouter" && key == "" && strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")) == "") ||
+		// Snapshot current provider/endpoint/key at click time (on UI goroutine)
+		prov := strings.ToLower(strings.TrimSpace(provider))
+		ep := strings.TrimSpace(endpointIF.GetText())
+		key := strings.TrimSpace(apiKeyIF.GetText())
+
+		if cm.logger != nil {
+			cm.logger.Printf("LLM Settings: refreshModels start provider=%s endpoint=%s key_len=%d", prov, ep, len(key))
+		}
+
+		// If OpenRouter selected without an API key, don't attempt network calls; show helpful placeholder.
+		if (prov == "openrouter" && key == "" && strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")) == "") ||
 			(prov == "groq" && key == "" && strings.TrimSpace(os.Getenv("GROQ_API_KEY")) == "") ||
 			(prov == "synthetic" && key == "" && strings.TrimSpace(os.Getenv("SYNTHETIC_API_KEY")) == "") {
 			// Non-blocking UI update to avoid deadlock in button callback path
@@ -3363,144 +3458,144 @@ var refreshing int32
 				} else {
 					cm.updateStatus("OpenRouter requires an API key to list models")
 				}
+				atomic.StoreInt32(&refreshing, 0)
+			})
+			return
+		}
+
+		// Determine current model selection (if any)
+		curModel := ""
+		if modelDD != nil && len(modelOptions) > 0 {
+			if idx, _ := modelDD.GetCurrentOption(); idx >= 0 && idx < len(modelOptions) {
+				curModel = strings.TrimSpace(modelOptions[idx])
+			}
+		}
+
+		// Build a provider (model not required for discovery)
+		cfg := llm.ProviderConfig{
+			Provider: prov,
+			Endpoint: ep,
+			Model:    curModel,
+			APIKey:   key,
+		}
+
+		go func() {
+			start := time.Now()
+			// Use a short, per-refresh timeout when building the provider to avoid
+			// blocking indefinitely on network or DNS during provider init.
+			buildTimeout := 3 * time.Second
+			if strings.EqualFold(prov, "openrouter") {
+				buildTimeout = 8 * time.Second
+			}
+			buildCtx, buildCancel := context.WithTimeout(cm.ctx, buildTimeout)
+			defer buildCancel()
+
+			p, err := llm.Build(buildCtx, cfg, cm.logger)
+			if err != nil {
+				if cm.logger != nil {
+					cm.logger.Printf("LLM Settings: provider build failed provider=%s err=%v", prov, err)
+				}
+				// Use QueueUpdate from background goroutine to avoid potential QueueUpdateDraw deadlocks.
+				cm.app.QueueUpdate(func() {
+					modelOptions = []string{"(error)"}
+					if modelDD != nil {
+						modelDD.SetOptions(modelOptions, nil)
+					}
+					cm.updateStatus(fmt.Sprintf("Model list error: %v", err))
 					atomic.StoreInt32(&refreshing, 0)
 				})
 				return
 			}
 
-			// Determine current model selection (if any)
-			curModel := ""
-			if modelDD != nil && len(modelOptions) > 0 {
-				if idx, _ := modelDD.GetCurrentOption(); idx >= 0 && idx < len(modelOptions) {
-					curModel = strings.TrimSpace(modelOptions[idx])
-				}
+			timeout := 3 * time.Second
+			if strings.EqualFold(prov, "openrouter") {
+				timeout = 8 * time.Second
 			}
+			ctx, cancel := context.WithTimeout(cm.ctx, timeout)
+			defer cancel()
+			list, err := llm.TryListModels(ctx, p)
+			duration := time.Since(start)
 
-			// Build a provider (model not required for discovery)
-			cfg := llm.ProviderConfig{
-				Provider: prov,
-				Endpoint: ep,
-				Model:    curModel,
-				APIKey:   key,
-			}
-
-			go func() {
-				start := time.Now()
-				// Use a short, per-refresh timeout when building the provider to avoid
-				// blocking indefinitely on network or DNS during provider init.
-				buildTimeout := 3 * time.Second
-				if strings.EqualFold(prov, "openrouter") {
-					buildTimeout = 8 * time.Second
-				}
-				buildCtx, buildCancel := context.WithTimeout(cm.ctx, buildTimeout)
-				defer buildCancel()
-	
-				p, err := llm.Build(buildCtx, cfg, cm.logger)
+			// Use QueueUpdate (not QueueUpdateDraw) from background goroutine to avoid blocking the UI draw thread.
+			cm.app.QueueUpdate(func() {
 				if err != nil {
-					if cm.logger != nil {
-						cm.logger.Printf("LLM Settings: provider build failed provider=%s err=%v", prov, err)
-					}
-					// Use QueueUpdate from background goroutine to avoid potential QueueUpdateDraw deadlocks.
-					cm.app.QueueUpdate(func() {
+					// Detect context timeout
+					timedOut := ctx.Err() == context.DeadlineExceeded
+					if timedOut {
+						modelOptions = []string{"(timeout)"}
+						cm.updateStatus(fmt.Sprintf("Model discovery timed out after %s", timeout))
+					} else {
 						modelOptions = []string{"(error)"}
-						if modelDD != nil {
-							modelDD.SetOptions(modelOptions, nil)
-						}
 						cm.updateStatus(fmt.Sprintf("Model list error: %v", err))
-						atomic.StoreInt32(&refreshing, 0)
-					})
-					return
-				}
-	
-				timeout := 3 * time.Second
-				if strings.EqualFold(prov, "openrouter") {
-					timeout = 8 * time.Second
-				}
-				ctx, cancel := context.WithTimeout(cm.ctx, timeout)
-				defer cancel()
-				list, err := llm.TryListModels(ctx, p)
-				duration := time.Since(start)
-	
-				// Use QueueUpdate (not QueueUpdateDraw) from background goroutine to avoid blocking the UI draw thread.
-				cm.app.QueueUpdate(func() {
-					if err != nil {
-						// Detect context timeout
-						timedOut := ctx.Err() == context.DeadlineExceeded
-						if timedOut {
-							modelOptions = []string{"(timeout)"}
-							cm.updateStatus(fmt.Sprintf("Model discovery timed out after %s", timeout))
-						} else {
-							modelOptions = []string{"(error)"}
-							cm.updateStatus(fmt.Sprintf("Model list error: %v", err))
-						}
-						if modelDD != nil {
-							modelDD.SetOptions(modelOptions, nil)
-						}
-						if cm.logger != nil {
-							cm.logger.Printf("LLM Settings: list models failed provider=%s duration=%s err=%v", prov, duration, err)
-						}
-						atomic.StoreInt32(&refreshing, 0)
-						return
 					}
-					if len(list) == 0 {
-						modelOptions = []string{"(none found)"}
-						if modelDD != nil {
-							modelDD.SetOptions(modelOptions, nil)
-						}
-						cm.updateStatus("No models discovered")
-						if cm.logger != nil {
-							cm.logger.Printf("LLM Settings: list models returned 0 models provider=%s duration=%s", prov, duration)
-						}
-						atomic.StoreInt32(&refreshing, 0)
-						return
-					}
-					sort.Strings(list)
-					modelOptions = list
-					// Rebind with selection callback
 					if modelDD != nil {
-						modelDD.SetOptions(modelOptions, func(text string, idx int) {
-							// selection handled on Save
-						})
-						// Select current model if present
-						sel := 0
-						cur := strings.TrimSpace(curModel)
-						for i, m := range modelOptions {
-							if strings.EqualFold(strings.TrimSpace(m), cur) {
-								sel = i
-								break
-							}
-						}
-						modelDD.SetCurrentOption(sel)
+						modelDD.SetOptions(modelOptions, nil)
 					}
-					cm.updateStatus(fmt.Sprintf("Discovered %d models in %s", len(list), duration.Truncate(time.Millisecond)))
 					if cm.logger != nil {
-						cm.logger.Printf("LLM Settings: discovered %d models provider=%s duration=%s", len(list), prov, duration)
+						cm.logger.Printf("LLM Settings: list models failed provider=%s duration=%s err=%v", prov, duration, err)
 					}
 					atomic.StoreInt32(&refreshing, 0)
-				})
-			}()
-		}
-	
-		// Removed Refresh Models button; models load automatically on provider change.
-	
-		// Kick off initial discovery shortly after modal opens (non-blocking), when feasible.
-		// Skip auto-discovery for OpenRouter/Groq without an API key to avoid the "(requires api key)" churn.
-		go func() {
-			time.Sleep(150 * time.Millisecond)
-			if !((strings.EqualFold(provider, "openrouter") &&
-				strings.TrimSpace(apiKeyIF.GetText()) == "" &&
-				strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")) == "") ||
-				(strings.EqualFold(provider, "groq") &&
+					return
+				}
+				if len(list) == 0 {
+					modelOptions = []string{"(none found)"}
+					if modelDD != nil {
+						modelDD.SetOptions(modelOptions, nil)
+					}
+					cm.updateStatus("No models discovered")
+					if cm.logger != nil {
+						cm.logger.Printf("LLM Settings: list models returned 0 models provider=%s duration=%s", prov, duration)
+					}
+					atomic.StoreInt32(&refreshing, 0)
+					return
+				}
+				sort.Strings(list)
+				modelOptions = list
+				// Rebind with selection callback
+				if modelDD != nil {
+					modelDD.SetOptions(modelOptions, func(text string, idx int) {
+						// selection handled on Save
+					})
+					// Select current model if present
+					sel := 0
+					cur := strings.TrimSpace(curModel)
+					for i, m := range modelOptions {
+						if strings.EqualFold(strings.TrimSpace(m), cur) {
+							sel = i
+							break
+						}
+					}
+					modelDD.SetCurrentOption(sel)
+				}
+				cm.updateStatus(fmt.Sprintf("Discovered %d models in %s", len(list), duration.Truncate(time.Millisecond)))
+				if cm.logger != nil {
+					cm.logger.Printf("LLM Settings: discovered %d models provider=%s duration=%s", len(list), prov, duration)
+				}
+				atomic.StoreInt32(&refreshing, 0)
+			})
+		}()
+	}
+
+	// Removed Refresh Models button; models load automatically on provider change.
+
+	// Kick off initial discovery shortly after modal opens (non-blocking), when feasible.
+	// Skip auto-discovery for OpenRouter/Groq without an API key to avoid the "(requires api key)" churn.
+	go func() {
+		time.Sleep(150 * time.Millisecond)
+		if !((strings.EqualFold(provider, "openrouter") &&
+			strings.TrimSpace(apiKeyIF.GetText()) == "" &&
+			strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")) == "") ||
+			(strings.EqualFold(provider, "groq") &&
 				strings.TrimSpace(apiKeyIF.GetText()) == "" &&
 				strings.TrimSpace(os.Getenv("GROQ_API_KEY")) == "") ||
-				(strings.EqualFold(provider, "synthetic") &&
+			(strings.EqualFold(provider, "synthetic") &&
 				strings.TrimSpace(apiKeyIF.GetText()) == "" &&
 				strings.TrimSpace(os.Getenv("SYNTHETIC_API_KEY")) == "")) {
-				refreshModels()
-			}
-		}()
-	
-		// Buttons
+			refreshModels()
+		}
+	}()
+
+	// Buttons
 
 	form.AddButton("Search Model", func() {
 		// Open a searchable modal over the current modelOptions. The selection will be applied to the Model dropdown.
@@ -3871,7 +3966,6 @@ func (cm *CaseManagement) popModalRoot() {
 	}
 }
 
-
 // truncate returns a shortened string with ellipsis when len(s) > max.
 func truncate(s string, max int) string {
 	if max <= 0 {
@@ -3885,18 +3979,19 @@ func truncate(s string, max int) string {
 	}
 	return s[:max-3] + "..."
 }
+
 // Searchable modal for selecting a model from the discovered list.
 // Opens an Input + List filter UI, and invokes onSelect with the chosen model.
 func (cm *CaseManagement) showModelSearchModal(options []string, onSelect func(string)) {
 	// Normalize and filter out placeholder entries
 	placeholderSet := map[string]bool{
-		"(refresh to load)": true,
-		"(none found)":      true,
-		"(error)":           true,
-		"(refreshing...)":   true,
-		"(not required)":    true,
+		"(refresh to load)":  true,
+		"(none found)":       true,
+		"(error)":            true,
+		"(refreshing...)":    true,
+		"(not required)":     true,
 		"(requires api key)": true,
-		"(timeout)":         true,
+		"(timeout)":          true,
 	}
 	cleaned := make([]string, 0, len(options))
 	seen := make(map[string]bool)
@@ -4050,4 +4145,20 @@ func (cm *CaseManagement) showModelSearchModal(options []string, onSelect func(s
 	cm.pushModalRoot(container)
 	updateList("")
 	cm.app.SetFocus(input)
+}
+
+// iocSourceLabel distinguishes indicators the event source asserted from those
+// Console-IR inferred, so an analyst knows how much to trust one at a glance.
+func iocSourceLabel(it IOCItem) string {
+	if it.Asserted {
+		return "asserted"
+	}
+	return "derived"
+}
+
+func iocSourceColor(theme Theme, it IOCItem) tcell.Color {
+	if it.Asserted {
+		return theme.Accent
+	}
+	return theme.TableRowMuted
 }
