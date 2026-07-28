@@ -163,6 +163,12 @@ func (p *Parser) parseCoreFields(rawEvent map[string]interface{}, event *ocsf.Ev
 func (p *Parser) parseMetadata(metadata map[string]interface{}) ocsf.Metadata {
 	meta := ocsf.Metadata{}
 
+	if uid, ok := metadata["uid"].(string); ok {
+		meta.UID = uid
+	}
+	if correlationUID, ok := metadata["correlation_uid"].(string); ok {
+		meta.CorrelationUID = correlationUID
+	}
 	if eventCode, ok := metadata["event_code"].(string); ok {
 		meta.EventCode = eventCode
 	}

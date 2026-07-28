@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
+	"github.com/google/uuid"
 )
 
 // Store represents the SQLite storage implementation
@@ -41,8 +41,18 @@ func (s *Store) ensureCaseExists(ctx context.Context, caseID string) error {
 
 // Event represents a stored event
 type Event struct {
-	ID          string    `json:"id"`
-	CaseID      string    `json:"case_id,omitempty"`
+	ID     string `json:"id"`
+	CaseID string `json:"case_id,omitempty"`
+
+	// OCSF identity. class_uid is authoritative; EventType is the coarse
+	// category grouping derived from it for display and filtering.
+	ClassUID    int    `json:"class_uid,omitempty"`
+	CategoryUID int    `json:"category_uid,omitempty"`
+	ActivityID  int    `json:"activity_id,omitempty"`
+	TypeUID     int    `json:"type_uid,omitempty"`
+	SeverityID  int    `json:"severity_id,omitempty"`
+	MetadataUID string `json:"metadata_uid,omitempty"`
+
 	Timestamp   time.Time `json:"timestamp"`
 	EventType   string    `json:"event_type"`
 	Severity    string    `json:"severity"`
@@ -59,6 +69,35 @@ type Event struct {
 	RawJSON     string    `json:"raw_json"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// ClassName returns the OCSF caption for the event's class, e.g. "Detection Finding".
+func (e Event) ClassName() string { return ocsf.ClassName(e.ClassUID) }
+
+// CategoryName returns the OCSF caption for the event's category.
+func (e Event) CategoryName() string { return ocsf.CategoryName(e.CategoryUID) }
+
+// IsFinding reports whether the event belongs to the OCSF Findings category.
+func (e Event) IsFinding() bool { return e.CategoryUID == ocsf.CategoryFindings }
+
+// eventColumns is the canonical SELECT list for the events table. Every query
+// returning rows into scanEvents must use it so the two stay in lockstep.
+const eventColumns = `id, case_id, timestamp, event_type, severity, message, host,
+	src_ip, dst_ip, src_port, dst_port, process_name, file_name,
+	file_hash, user_name, raw_json, created_at, updated_at,
+	class_uid, category_uid, activity_id, type_uid, severity_id, metadata_uid`
+
+// eventColumnsWithAlias renders eventColumns with a table alias applied to every
+// column, for queries that join (notably the FTS search path). Deriving it from
+// the same const is what stops the two lists drifting out of sync — a mismatch
+// only surfaces on the driver that actually compiles FTS5 in, so it is easy to
+// miss locally.
+func eventColumnsWithAlias(alias string) string {
+	parts := strings.Split(eventColumns, ",")
+	for i, p := range parts {
+		parts[i] = alias + "." + strings.TrimSpace(p)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // Case represents an incident case
@@ -111,7 +150,7 @@ func NewStore(dbPath string) (*Store, error) {
 	}
 
 	store := &Store{db: db}
-	
+
 	if err := store.migrate(); err != nil {
 		return nil, fmt.Errorf("failed to migrate database: %w", err)
 	}
@@ -144,7 +183,7 @@ func (s *Store) migrate() error {
 			created_at INTEGER NOT NULL,
 			updated_at INTEGER NOT NULL
 		)`,
-		
+
 		// Events table
 		`CREATE TABLE IF NOT EXISTS events (
 			id TEXT PRIMARY KEY,
@@ -167,7 +206,7 @@ func (s *Store) migrate() error {
 			updated_at INTEGER NOT NULL,
 			FOREIGN KEY (case_id) REFERENCES cases(id) ON DELETE SET NULL
 		)`,
-		
+
 		// Enrichments table
 		`CREATE TABLE IF NOT EXISTS enrichments (
 			id TEXT PRIMARY KEY,
@@ -178,7 +217,7 @@ func (s *Store) migrate() error {
 			created_at INTEGER NOT NULL,
 			FOREIGN KEY (event_id) REFERENCES events(id)
 		)`,
-		
+
 		// Indexes for performance
 		`CREATE INDEX IF NOT EXISTS idx_events_id ON events(id)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_case_id ON events(case_id)`,
@@ -188,12 +227,12 @@ func (s *Store) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_events_src_ip ON events(src_ip)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_dst_ip ON events(dst_ip)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_host ON events(host)`,
-		
+
 		`CREATE INDEX IF NOT EXISTS idx_cases_id ON cases(id)`,
 		`CREATE INDEX IF NOT EXISTS idx_cases_status ON cases(status)`,
 		`CREATE INDEX IF NOT EXISTS idx_cases_severity ON cases(severity)`,
 		`CREATE INDEX IF NOT EXISTS idx_cases_created_at ON cases(created_at)`,
-		
+
 		`CREATE INDEX IF NOT EXISTS idx_enrichments_event_id ON enrichments(event_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_enrichments_source ON enrichments(source)`,
 		`CREATE INDEX IF NOT EXISTS idx_enrichments_type ON enrichments(type)`,
@@ -206,9 +245,147 @@ func (s *Store) migrate() error {
 		}
 	}
 
+	// Additive schema evolution for databases created by earlier versions.
+	if err := s.migrateEventsOCSFColumns(); err != nil {
+		return err
+	}
+
 	// Try to set up FTS (optional)
 	s.setupFTS()
 
+	return nil
+}
+
+// ocsfEventColumns are the OCSF identity columns added to the events table after
+// v0.1.1. They are nullable and backfilled from raw_json, so upgrading an
+// existing database neither loses nor invents data.
+var ocsfEventColumns = []struct {
+	name string
+	sql  string
+}{
+	{"class_uid", "ALTER TABLE events ADD COLUMN class_uid INTEGER"},
+	{"category_uid", "ALTER TABLE events ADD COLUMN category_uid INTEGER"},
+	{"activity_id", "ALTER TABLE events ADD COLUMN activity_id INTEGER"},
+	{"type_uid", "ALTER TABLE events ADD COLUMN type_uid INTEGER"},
+	{"severity_id", "ALTER TABLE events ADD COLUMN severity_id INTEGER"},
+	{"metadata_uid", "ALTER TABLE events ADD COLUMN metadata_uid TEXT"},
+}
+
+// migrateEventsOCSFColumns adds the OCSF identity columns and backfills them for
+// rows written before they existed. Idempotent and safe to re-run.
+func (s *Store) migrateEventsOCSFColumns() error {
+	for _, col := range ocsfEventColumns {
+		var colCount int
+		checkSQL := fmt.Sprintf("SELECT COUNT(*) FROM pragma_table_info('events') WHERE name='%s'", col.name)
+		if err := s.db.QueryRow(checkSQL).Scan(&colCount); err != nil {
+			return fmt.Errorf("failed to check events column %s: %w", col.name, err)
+		}
+		if colCount == 0 {
+			if _, err := s.db.Exec(col.sql); err != nil {
+				return fmt.Errorf("failed to add events column %s: %w", col.name, err)
+			}
+		}
+	}
+
+	indexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_events_class_uid ON events(class_uid)`,
+		`CREATE INDEX IF NOT EXISTS idx_events_category_uid ON events(category_uid)`,
+		`CREATE INDEX IF NOT EXISTS idx_events_metadata_uid ON events(metadata_uid)`,
+	}
+	for _, idx := range indexes {
+		if _, err := s.db.Exec(idx); err != nil {
+			return fmt.Errorf("failed to create index: %w", err)
+		}
+	}
+
+	return s.backfillOCSFColumns()
+}
+
+// ocsfIdentity is the minimal projection of an OCSF event needed to backfill the
+// identity columns. It deliberately omits `time`: OCSF encodes timestamps as Unix
+// integers, which encoding/json cannot unmarshal into a time.Time, so decoding a
+// full ocsf.Event here would fail for every real event and silently backfill
+// nothing. The ingest path avoids this with its own parseTime; the backfill
+// avoids it by not needing the field at all.
+type ocsfIdentity struct {
+	ClassUID    int `json:"class_uid"`
+	CategoryUID int `json:"category_uid"`
+	ActivityID  int `json:"activity_id"`
+	TypeUID     int `json:"type_uid"`
+	SeverityID  int `json:"severity_id"`
+	Metadata    struct {
+		UID string `json:"uid"`
+	} `json:"metadata"`
+}
+
+// backfillOCSFColumns reparses raw_json for rows predating the OCSF identity
+// columns. raw_json has always held the complete original event, so the backfill
+// is lossless. It also rewrites event_type, because rows written by earlier
+// versions carry values from the incorrect class mapping (Findings were stored
+// as "file", File System Activity as "process").
+func (s *Store) backfillOCSFColumns() error {
+	rows, err := s.db.Query(`SELECT id, raw_json FROM events WHERE class_uid IS NULL`)
+	if err != nil {
+		return fmt.Errorf("failed to scan events for backfill: %w", err)
+	}
+
+	type pending struct {
+		id    string
+		ident ocsfIdentity
+	}
+	var todo []pending
+
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			rows.Close()
+			return fmt.Errorf("failed to read event for backfill: %w", err)
+		}
+		var ident ocsfIdentity
+		if err := json.Unmarshal([]byte(raw), &ident); err != nil {
+			// Unparseable raw_json: leave the row untouched rather than guessing.
+			continue
+		}
+		todo = append(todo, pending{id: id, ident: ident})
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("failed to iterate events for backfill: %w", err)
+	}
+	rows.Close()
+
+	if len(todo) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin backfill transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stmt, err := tx.Prepare(`UPDATE events
+		SET class_uid = ?, category_uid = ?, activity_id = ?, type_uid = ?,
+		    severity_id = ?, metadata_uid = ?, event_type = ?
+		WHERE id = ?`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare backfill statement: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, p := range todo {
+		ev := ocsf.Event{ClassUID: p.ident.ClassUID, CategoryUID: p.ident.CategoryUID}
+		if _, err := stmt.Exec(
+			p.ident.ClassUID, ev.GetCategoryUID(), p.ident.ActivityID, p.ident.TypeUID,
+			p.ident.SeverityID, p.ident.Metadata.UID, string(ev.GetEventType()), p.id,
+		); err != nil {
+			return fmt.Errorf("failed to backfill event %s: %w", p.id, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit backfill: %w", err)
+	}
 	return nil
 }
 
@@ -271,32 +448,35 @@ func (s *Store) SaveEvent(ctx context.Context, ocsfEvent *ocsf.Event) (string, e
 		}
 		caseIDParam = event.CaseID
 	}
-	
+
 	// Serialize raw JSON
 	rawJSON, err := json.Marshal(ocsfEvent)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal raw JSON: %w", err)
 	}
 	event.RawJSON = string(rawJSON)
-	
+
 	query := `INSERT INTO events (
 		id, case_id, timestamp, event_type, severity, message, host,
 		src_ip, dst_ip, src_port, dst_port, process_name, file_name,
-		file_hash, user_name, raw_json, created_at, updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-	
+		file_hash, user_name, raw_json, created_at, updated_at,
+		class_uid, category_uid, activity_id, type_uid, severity_id, metadata_uid
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
 	now := time.Now().Unix()
 	_, err = s.db.ExecContext(ctx, query,
 		event.ID, caseIDParam, event.Timestamp.Unix(), event.EventType,
 		event.Severity, event.Message, event.Host, event.SrcIP, event.DstIP,
 		event.SrcPort, event.DstPort, event.ProcessName, event.FileName,
 		event.FileHash, event.UserName, event.RawJSON, now, now,
+		event.ClassUID, event.CategoryUID, event.ActivityID, event.TypeUID,
+		event.SeverityID, event.MetadataUID,
 	)
-	
+
 	if err != nil {
 		return "", fmt.Errorf("failed to save event: %w", err)
 	}
-	
+
 	return eventID, nil
 }
 
@@ -349,11 +529,11 @@ func (s *Store) CreateOrUpdateCase(ctx context.Context, case_ Case) (string, err
 		case_.Status, case_.AssignedTo, case_.EventCount,
 		case_.CreatedAt.Unix(), case_.UpdatedAt.Unix(),
 	)
-	
+
 	if err != nil {
 		return "", fmt.Errorf("failed to save case: %w", err)
 	}
-	
+
 	return case_.ID, nil
 }
 
@@ -361,74 +541,68 @@ func (s *Store) CreateOrUpdateCase(ctx context.Context, case_ Case) (string, err
 func (s *Store) ListCases(ctx context.Context) ([]Case, error) {
 	query := `SELECT id, title, description, severity, status, assigned_to, 
 		event_count, created_at, updated_at FROM cases ORDER BY created_at DESC`
-	
+
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query cases: %w", err)
 	}
 	defer rows.Close()
-	
+
 	var cases []Case
 	for rows.Next() {
 		var case_ Case
 		var createdAt, updatedAt int64
-		
+
 		err := rows.Scan(&case_.ID, &case_.Title, &case_.Description,
 			&case_.Severity, &case_.Status, &case_.AssignedTo,
 			&case_.EventCount, &createdAt, &updatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan case: %w", err)
 		}
-		
+
 		case_.CreatedAt = time.Unix(createdAt, 0)
 		case_.UpdatedAt = time.Unix(updatedAt, 0)
 		cases = append(cases, case_)
 	}
-	
+
 	return cases, nil
 }
 
 // GetEventsByCase returns events for a specific case
 func (s *Store) GetEventsByCase(ctx context.Context, caseID string) ([]Event, error) {
-	query := `SELECT id, case_id, timestamp, event_type, severity, message, host,
-		src_ip, dst_ip, src_port, dst_port, process_name, file_name,
-		file_hash, user_name, raw_json, created_at, updated_at
+	query := `SELECT ` + eventColumns + `
 		FROM events WHERE case_id = ? ORDER BY timestamp DESC`
-	
+
 	rows, err := s.db.QueryContext(ctx, query, caseID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query events: %w", err)
 	}
 	defer rows.Close()
-	
+
 	return s.scanEvents(rows)
 }
 
 // GetAllEvents returns all events ordered by timestamp
 func (s *Store) GetAllEvents(ctx context.Context, limit int) ([]Event, error) {
-	query := `SELECT id, case_id, timestamp, event_type, severity, message, host,
-		src_ip, dst_ip, src_port, dst_port, process_name, file_name,
-		file_hash, user_name, raw_json, created_at, updated_at
+	query := `SELECT ` + eventColumns + `
 		FROM events ORDER BY timestamp DESC`
-	
+
 	if limit > 0 {
 		query += fmt.Sprintf(" LIMIT %d", limit)
 	}
-	
+
 	rows, err := s.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query events: %w", err)
 	}
 	defer rows.Close()
-	
+
 	return s.scanEvents(rows)
 }
 
 // GetEventsByTimeRange returns events filtered by optional case and time range
 func (s *Store) GetEventsByTimeRange(ctx context.Context, caseID string, start, end time.Time, limit int) ([]Event, error) {
-	base := `SELECT id, case_id, timestamp, event_type, severity, message, host,
-		src_ip, dst_ip, src_port, dst_port, process_name, file_name,
-		file_hash, user_name, raw_json, created_at, updated_at
+	base := `SELECT ` + eventColumns + `
 		FROM events WHERE 1=1`
 	args := []interface{}{}
 
@@ -459,62 +633,82 @@ func (s *Store) GetEventsByTimeRange(ctx context.Context, caseID string, start, 
 	return s.scanEvents(rows)
 }
 
-/*
-GetEventsFiltered returns events filtered by optional case, time range, severity list,
-type list, with pagination via limit/offset. Results are ordered by timestamp DESC.
-When limit is 0, all matching rows are returned (no LIMIT/OFFSET).
-*/
-func (s *Store) GetEventsFiltered(
-	ctx context.Context,
-	caseID string,
-	start, end time.Time,
-	severities []string,
-	types []string,
-	limit, offset int,
-) ([]Event, error) {
-	base := `SELECT id, case_id, timestamp, event_type, severity, message, host,
-		src_ip, dst_ip, src_port, dst_port, process_name, file_name,
-		file_hash, user_name, raw_json, created_at, updated_at
-		FROM events WHERE 1=1`
+// EventFilter describes the optional constraints applied to an events query.
+// The zero value matches everything.
+type EventFilter struct {
+	CaseID string
+	Start  time.Time
+	End    time.Time
+	// Severities matches events.severity (case-insensitive).
+	Severities []string
+	// Categories matches events.event_type, the coarse OCSF category slug.
+	Categories []string
+	// Classes matches events.class_uid exactly, e.g. 2004 for Detection Findings.
+	Classes []int
+
+	Limit  int
+	Offset int
+}
+
+// where builds the shared WHERE clause and bound arguments for an EventFilter.
+func (f EventFilter) where() (string, []interface{}) {
+	clause := ""
 	args := []interface{}{}
 
-	if caseID != "" {
-		base += " AND case_id = ?"
-		args = append(args, caseID)
+	if f.CaseID != "" {
+		clause += " AND case_id = ?"
+		args = append(args, f.CaseID)
 	}
-	if !start.IsZero() {
-		base += " AND timestamp >= ?"
-		args = append(args, start.Unix())
+	if !f.Start.IsZero() {
+		clause += " AND timestamp >= ?"
+		args = append(args, f.Start.Unix())
 	}
-	if !end.IsZero() {
-		base += " AND timestamp <= ?"
-		args = append(args, end.Unix())
+	if !f.End.IsZero() {
+		clause += " AND timestamp <= ?"
+		args = append(args, f.End.Unix())
 	}
-	if len(severities) > 0 {
-		placeholders := make([]string, 0, len(severities))
-		for _, sev := range severities {
+	if len(f.Severities) > 0 {
+		placeholders := make([]string, 0, len(f.Severities))
+		for _, sev := range f.Severities {
 			placeholders = append(placeholders, "?")
 			// normalize to lowercase to match stored values
 			args = append(args, strings.ToLower(sev))
 		}
-		base += " AND severity IN (" + strings.Join(placeholders, ",") + ")"
+		clause += " AND severity IN (" + strings.Join(placeholders, ",") + ")"
 	}
-	if len(types) > 0 {
-		placeholders := make([]string, 0, len(types))
-		for _, typ := range types {
+	if len(f.Categories) > 0 {
+		placeholders := make([]string, 0, len(f.Categories))
+		for _, typ := range f.Categories {
 			placeholders = append(placeholders, "?")
 			args = append(args, strings.ToLower(typ))
 		}
-		base += " AND event_type IN (" + strings.Join(placeholders, ",") + ")"
+		clause += " AND event_type IN (" + strings.Join(placeholders, ",") + ")"
+	}
+	if len(f.Classes) > 0 {
+		placeholders := make([]string, 0, len(f.Classes))
+		for _, c := range f.Classes {
+			placeholders = append(placeholders, "?")
+			args = append(args, c)
+		}
+		clause += " AND class_uid IN (" + strings.Join(placeholders, ",") + ")"
 	}
 
-	base += " ORDER BY timestamp DESC"
-	if limit > 0 {
+	return clause, args
+}
+
+// GetEvents returns events matching the filter, ordered by timestamp DESC.
+// When Limit is 0, all matching rows are returned.
+func (s *Store) GetEvents(ctx context.Context, f EventFilter) ([]Event, error) {
+	clause, args := f.where()
+	base := `SELECT ` + eventColumns + `
+		FROM events WHERE 1=1` + clause + " ORDER BY timestamp DESC"
+
+	if f.Limit > 0 {
 		base += " LIMIT ?"
-		args = append(args, limit)
-		if offset > 0 {
+		args = append(args, f.Limit)
+		if f.Offset > 0 {
 			base += " OFFSET ?"
-			args = append(args, offset)
+			args = append(args, f.Offset)
 		}
 	}
 
@@ -526,7 +720,48 @@ func (s *Store) GetEventsFiltered(
 	return s.scanEvents(rows)
 }
 
+// CountEvents returns the number of events matching the filter, ignoring
+// Limit/Offset.
+func (s *Store) CountEvents(ctx context.Context, f EventFilter) (int, error) {
+	clause, args := f.where()
+	base := `SELECT COUNT(1) FROM events WHERE 1=1` + clause
+
+	var total int
+	if err := s.db.QueryRowContext(ctx, base, args...).Scan(&total); err != nil {
+		return 0, fmt.Errorf("failed to count filtered events: %w", err)
+	}
+	return total, nil
+}
+
+/*
+GetEventsFiltered returns events filtered by optional case, time range, severity list,
+type list, with pagination via limit/offset. Results are ordered by timestamp DESC.
+When limit is 0, all matching rows are returned (no LIMIT/OFFSET).
+
+Deprecated: use GetEvents with an EventFilter, which also supports class_uid.
+*/
+func (s *Store) GetEventsFiltered(
+	ctx context.Context,
+	caseID string,
+	start, end time.Time,
+	severities []string,
+	types []string,
+	limit, offset int,
+) ([]Event, error) {
+	return s.GetEvents(ctx, EventFilter{
+		CaseID:     caseID,
+		Start:      start,
+		End:        end,
+		Severities: severities,
+		Categories: types,
+		Limit:      limit,
+		Offset:     offset,
+	})
+}
+
 // CountEventsFiltered returns the total count of events matching the same filters as GetEventsFiltered.
+//
+// Deprecated: use CountEvents with an EventFilter, which also supports class_uid.
 func (s *Store) CountEventsFiltered(
 	ctx context.Context,
 	caseID string,
@@ -534,43 +769,13 @@ func (s *Store) CountEventsFiltered(
 	severities []string,
 	types []string,
 ) (int, error) {
-	base := `SELECT COUNT(1) FROM events WHERE 1=1`
-	args := []interface{}{}
-
-	if caseID != "" {
-		base += " AND case_id = ?"
-		args = append(args, caseID)
-	}
-	if !start.IsZero() {
-		base += " AND timestamp >= ?"
-		args = append(args, start.Unix())
-	}
-	if !end.IsZero() {
-		base += " AND timestamp <= ?"
-		args = append(args, end.Unix())
-	}
-	if len(severities) > 0 {
-		placeholders := make([]string, 0, len(severities))
-		for _, sev := range severities {
-			placeholders = append(placeholders, "?")
-			args = append(args, strings.ToLower(sev))
-		}
-		base += " AND severity IN (" + strings.Join(placeholders, ",") + ")"
-	}
-	if len(types) > 0 {
-		placeholders := make([]string, 0, len(types))
-		for _, typ := range types {
-			placeholders = append(placeholders, "?")
-			args = append(args, strings.ToLower(typ))
-		}
-		base += " AND event_type IN (" + strings.Join(placeholders, ",") + ")"
-	}
-
-	var total int
-	if err := s.db.QueryRowContext(ctx, base, args...).Scan(&total); err != nil {
-		return 0, fmt.Errorf("failed to count filtered events: %w", err)
-	}
-	return total, nil
+	return s.CountEvents(ctx, EventFilter{
+		CaseID:     caseID,
+		Start:      start,
+		End:        end,
+		Severities: severities,
+		Categories: types,
+	})
 }
 
 // ApplyEnrichment applies enrichment data to an event
@@ -580,28 +785,28 @@ func (s *Store) ApplyEnrichment(ctx context.Context, eventID string, enrichment 
 	}
 	enrichment.EventID = eventID
 	enrichment.CreatedAt = time.Now()
-	
+
 	dataJSON, err := json.Marshal(enrichment.Data)
 	if err != nil {
 		return fmt.Errorf("failed to marshal enrichment data: %w", err)
 	}
-	
+
 	query := `INSERT INTO enrichments (id, event_id, source, type, data, created_at)
 		VALUES (?, ?, ?, ?, ?, ?)`
-	
+
 	_, err = s.db.ExecContext(ctx, query,
 		enrichment.ID, enrichment.EventID, enrichment.Source,
 		enrichment.Type, string(dataJSON), enrichment.CreatedAt.Unix(),
 	)
-	
+
 	if err != nil {
 		return fmt.Errorf("failed to save enrichment: %w", err)
 	}
-	
+
 	return nil
 }
 
-	// GetEnrichmentsByEvent returns all enrichments associated with an event (newest first)
+// GetEnrichmentsByEvent returns all enrichments associated with an event (newest first)
 func (s *Store) GetEnrichmentsByEvent(ctx context.Context, eventID string) ([]Enrichment, error) {
 	query := `SELECT id, event_id, source, type, data, created_at
 		FROM enrichments
@@ -675,9 +880,7 @@ func (s *Store) SearchEvents(ctx context.Context, query string, limit int) ([]Ev
 	sanitized := sanitizeFTSQuery(query)
 
 	// Try FTS first
-	ftsQuery := `SELECT e.id, e.case_id, e.timestamp, e.event_type, e.severity, e.message, e.host,
-		e.src_ip, e.dst_ip, e.src_port, e.dst_port, e.process_name, e.file_name,
-		e.file_hash, e.user_name, e.raw_json, e.created_at, e.updated_at
+	ftsQuery := `SELECT ` + eventColumnsWithAlias("e") + `
 		FROM events e
 		JOIN events_fts fts ON e.id = fts.id
 		WHERE events_fts MATCH ?
@@ -691,9 +894,7 @@ func (s *Store) SearchEvents(ctx context.Context, query string, limit int) ([]Ev
 	}
 
 	// Fall back to LIKE search if FTS is not available
-	likeQuery := `SELECT id, case_id, timestamp, event_type, severity, message, host,
-		src_ip, dst_ip, src_port, dst_port, process_name, file_name,
-		file_hash, user_name, raw_json, created_at, updated_at
+	likeQuery := `SELECT ` + eventColumns + `
 		FROM events
 		WHERE message LIKE ? ESCAPE '\' OR host LIKE ? ESCAPE '\' OR process_name LIKE ? ESCAPE '\' OR file_name LIKE ? ESCAPE '\' OR user_name LIKE ? ESCAPE '\'
 		ORDER BY timestamp DESC
@@ -712,15 +913,21 @@ func (s *Store) SearchEvents(ctx context.Context, query string, limit int) ([]Ev
 // ocsfToStoreEvent converts an OCSF event to a store event
 func (s *Store) ocsfToStoreEvent(ocsfEvent *ocsf.Event, eventID string) Event {
 	event := Event{
-		ID:        eventID,
-		Timestamp: ocsfEvent.Time,
-		EventType: string(ocsfEvent.GetEventType()),
-		Severity:  ocsfEvent.GetSeverityLevel(),
-		Message:   ocsfEvent.Message,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		ID:          eventID,
+		Timestamp:   ocsfEvent.Time,
+		EventType:   string(ocsfEvent.GetEventType()),
+		Severity:    ocsfEvent.GetSeverityLevel(),
+		Message:     ocsfEvent.Message,
+		ClassUID:    ocsfEvent.ClassUID,
+		CategoryUID: ocsfEvent.GetCategoryUID(),
+		ActivityID:  ocsfEvent.ActivityID,
+		TypeUID:     ocsfEvent.TypeUID,
+		SeverityID:  ocsfEvent.SeverityID,
+		MetadataUID: ocsfEvent.Metadata.UID,
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
 	}
-	
+
 	// Extract host information
 	if ocsfEvent.Device != nil {
 		event.Host = ocsfEvent.Device.Hostname
@@ -728,7 +935,7 @@ func (s *Store) ocsfToStoreEvent(ocsfEvent *ocsf.Event, eventID string) Event {
 			event.Host = ocsfEvent.Device.Name
 		}
 	}
-	
+
 	// Extract network information
 	if ocsfEvent.SrcEndpoint != nil {
 		event.SrcIP = ocsfEvent.SrcEndpoint.IP
@@ -738,7 +945,7 @@ func (s *Store) ocsfToStoreEvent(ocsfEvent *ocsf.Event, eventID string) Event {
 		event.DstIP = ocsfEvent.DstEndpoint.IP
 		event.DstPort = ocsfEvent.DstEndpoint.Port
 	}
-	
+
 	// Extract process information
 	if ocsfEvent.Process != nil {
 		event.ProcessName = ocsfEvent.Process.Name
@@ -746,7 +953,7 @@ func (s *Store) ocsfToStoreEvent(ocsfEvent *ocsf.Event, eventID string) Event {
 			event.UserName = ocsfEvent.Process.User.Name
 		}
 	}
-	
+
 	// Extract file information
 	if ocsfEvent.File != nil {
 		event.FileName = ocsfEvent.File.Name
@@ -779,12 +986,12 @@ func (s *Store) ocsfToStoreEvent(ocsfEvent *ocsf.Event, eventID string) Event {
 			}
 		}
 	}
-	
+
 	// Extract user information
 	if ocsfEvent.User != nil && event.UserName == "" {
 		event.UserName = ocsfEvent.User.Name
 	}
-	
+
 	return event
 }
 
@@ -796,19 +1003,41 @@ func (s *Store) scanEvents(rows *sql.Rows) ([]Event, error) {
 		var timestamp, createdAt, updatedAt int64
 		var caseID, srcIP, dstIP, processName, fileName, fileHash, userName sql.NullString
 		var srcPort, dstPort sql.NullInt64
-		
+		var metadataUID sql.NullString
+		var classUID, categoryUID, activityID, typeUID, severityID sql.NullInt64
+
 		err := rows.Scan(&event.ID, &caseID, &timestamp, &event.EventType,
 			&event.Severity, &event.Message, &event.Host, &srcIP, &dstIP,
 			&srcPort, &dstPort, &processName, &fileName, &fileHash,
-			&userName, &event.RawJSON, &createdAt, &updatedAt)
+			&userName, &event.RawJSON, &createdAt, &updatedAt,
+			&classUID, &categoryUID, &activityID, &typeUID, &severityID, &metadataUID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan event: %w", err)
 		}
-		
+
+		if classUID.Valid {
+			event.ClassUID = int(classUID.Int64)
+		}
+		if categoryUID.Valid {
+			event.CategoryUID = int(categoryUID.Int64)
+		}
+		if activityID.Valid {
+			event.ActivityID = int(activityID.Int64)
+		}
+		if typeUID.Valid {
+			event.TypeUID = int(typeUID.Int64)
+		}
+		if severityID.Valid {
+			event.SeverityID = int(severityID.Int64)
+		}
+		if metadataUID.Valid {
+			event.MetadataUID = metadataUID.String
+		}
+
 		event.Timestamp = time.Unix(timestamp, 0)
 		event.CreatedAt = time.Unix(createdAt, 0)
 		event.UpdatedAt = time.Unix(updatedAt, 0)
-		
+
 		if caseID.Valid {
 			event.CaseID = caseID.String
 		}
@@ -836,12 +1065,13 @@ func (s *Store) scanEvents(rows *sql.Rows) ([]Event, error) {
 		if userName.Valid {
 			event.UserName = userName.String
 		}
-		
+
 		events = append(events, event)
 	}
-	
+
 	return events, nil
 }
+
 // Added helpers to assign events to cases and sync event_count
 
 // AssignEventToCase sets the case_id for a given event.
@@ -867,6 +1097,7 @@ func (s *Store) UpdateCaseEventCount(ctx context.Context, caseID string) error {
 	}
 	return nil
 }
+
 // DeleteCaseAndUnassign deletes a case and unassigns all its events (sets events.case_id=NULL).
 // This keeps events accessible under ALL EVENTS after the case is removed.
 func (s *Store) DeleteCaseAndUnassign(ctx context.Context, caseID string) error {

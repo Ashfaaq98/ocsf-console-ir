@@ -455,16 +455,34 @@ func TestEventTypeMapping(t *testing.T) {
 
 	ctx := context.Background()
 
+	// event_type is the OCSF category slug resolved through the class registry.
+	// class_uid is authoritative: a class is mapped by the category it actually
+	// belongs to, not by the category_uid the producer happens to declare.
 	testCases := []struct {
 		name         string
 		classUID     int
+		categoryUID  int
 		expectedType string
 	}{
-		{"Network Activity", 4001, "network"},
-		{"Process Activity", 1001, "process"},
-		{"File Activity", 2001, "file"},
-		{"Authentication", 3001, "authentication"},
-		{"Unknown", 9999, "unknown"},
+		{"Network Activity", 4001, 4, "network"},
+		{"SSH Activity", 4007, 4, "network"},
+		{"File System Activity", 1001, 1, "system"},
+		{"Process Activity", 1007, 1, "system"},
+		{"Scheduled Job Activity", 1006, 1, "system"},
+		{"Security Finding (deprecated)", 2001, 2, "findings"},
+		{"Detection Finding", 2004, 2, "findings"},
+		{"Incident Finding", 2005, 2, "findings"},
+		{"Account Change", 3001, 3, "iam"},
+		{"Authentication", 3002, 3, "iam"},
+		{"Group Management", 3006, 3, "iam"},
+		{"Device Inventory Info", 5001, 5, "discovery"},
+		{"API Activity", 6003, 6, "application"},
+		{"Remediation Activity", 7001, 7, "remediation"},
+		{"Drone Flights Activity", 8001, 8, "unmanned"},
+		// Unknown class with a declared category falls back to that category.
+		{"Unknown class, known category", 4999, 4, "network"},
+		// Unknown class with no category is genuinely unknown.
+		{"Unknown class, no category", 9999, 0, "unknown"},
 	}
 
 	for _, tc := range testCases {
@@ -472,7 +490,7 @@ func TestEventTypeMapping(t *testing.T) {
 			ocsfEvent := &ocsf.Event{
 				Time:        time.Now(),
 				ClassUID:    tc.classUID,
-				CategoryUID: 1,
+				CategoryUID: tc.categoryUID,
 				ActivityID:  1,
 				TypeUID:     tc.classUID*100 + 1,
 				SeverityID:  2,
@@ -502,12 +520,15 @@ func TestSeverityMapping(t *testing.T) {
 		severityID       int
 		expectedSeverity string
 	}{
+		{0, "unknown"},
 		{1, "informational"},
 		{2, "low"},
 		{3, "medium"},
 		{4, "high"},
 		{5, "critical"},
-		{99, "unknown"},
+		{6, "fatal"},
+		{99, "other"},
+		{123, "unknown"}, // outside the enum
 	}
 
 	for _, tc := range testCases {
@@ -544,10 +565,10 @@ func TestComplexEventMapping(t *testing.T) {
 	// Create a complex OCSF event with multiple fields
 	ocsfEvent := &ocsf.Event{
 		Time:        time.Now(),
-		ClassUID:    1001, // Process Activity
+		ClassUID:    1007, // Process Activity (category 1, System Activity)
 		CategoryUID: 1,
 		ActivityID:  1,
-		TypeUID:     100101,
+		TypeUID:     100701,
 		SeverityID:  4, // High
 		Message:     "Suspicious process execution detected",
 		Device: &ocsf.Device{
@@ -593,14 +614,14 @@ func TestComplexEventMapping(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, eventID, savedEvent.ID)
-	assert.Equal(t, "process", savedEvent.EventType)
+	assert.Equal(t, "system", savedEvent.EventType)
 	assert.Equal(t, "high", savedEvent.Severity)
 	assert.Equal(t, "Suspicious process execution detected", savedEvent.Message)
 	assert.Equal(t, "compromised-host", savedEvent.Host)
 	assert.Equal(t, "malware.exe", savedEvent.ProcessName)
 	assert.Equal(t, "malware.exe", savedEvent.FileName)
 	assert.Equal(t, "deadbeefcafebabe1234567890abcdef", savedEvent.FileHash) // SHA256 preferred
-	assert.Equal(t, "victim-user", savedEvent.UserName) // Process user preferred over event user
+	assert.Equal(t, "victim-user", savedEvent.UserName)                      // Process user preferred over event user
 }
 
 func TestDatabaseIndexes(t *testing.T) {
@@ -720,6 +741,7 @@ func BenchmarkSearchEvents(b *testing.B) {
 		require.NoError(b, err)
 	}
 }
+
 // --- Added tests for filtered queries and pagination ---
 
 func TestGetEventsFilteredAndCount(t *testing.T) {
@@ -766,22 +788,22 @@ func TestGetEventsFilteredAndCount(t *testing.T) {
 
 	// Dataset:
 	// ALL (no case)
-	_ = mk(40, 4001, 4, "all_net_high_t1", "")        // network, high (t1)
-	_ = mk(50, 1001, 5, "all_proc_critical_t2", "")   // process, critical (t2)
-	_ = mk(10, 2001, 2, "all_file_low_t0", "")        // file, low (t0) -- excluded by severity/type in main filter
+	_ = mk(40, 4001, 4, "all_net_high_t1", "")      // network, high (t1)
+	_ = mk(50, 1007, 5, "all_proc_critical_t2", "") // system, critical (t2)
+	_ = mk(10, 2004, 2, "all_finding_low_t0", "")   // findings, low (t0) -- excluded by severity/category
 
 	// Case 1
 	_ = mk(40, 4001, 3, "case1_net_medium_t1", case1ID) // network, medium (excluded by severity)
-	_ = mk(50, 1001, 4, "case1_proc_high_t2", case1ID)  // process, high (included)
+	_ = mk(50, 1007, 4, "case1_proc_high_t2", case1ID)  // system, high (included)
 
 	// Case 2
-	_ = mk(50, 3001, 4, "case2_auth_high_t2", case2ID) // authentication, high (excluded by type)
+	_ = mk(50, 3002, 4, "case2_auth_high_t2", case2ID) // iam, high (excluded by category)
 
-	// Filter: time window [t1..t2], severities {high,critical}, types {network,process}
+	// Filter: time window [t1..t2], severities {high,critical}, categories {network,system}
 	start := base.Add(30 * time.Minute)
 	end := base.Add(60 * time.Minute)
 	severities := []string{"high", "critical"}
-	types := []string{"network", "process"}
+	types := []string{"network", "system"}
 
 	// ALL contexts (caseID="")
 	totalAll, err := store.CountEventsFiltered(ctx, "", start, end, severities, types)
@@ -798,7 +820,7 @@ func TestGetEventsFilteredAndCount(t *testing.T) {
 		gotMsgs[e.Message] = true
 		// Ensure every event is within the requested time window and types/severities
 		assert.True(t, (e.Timestamp.Equal(start) || e.Timestamp.After(start)) && (e.Timestamp.Equal(end) || e.Timestamp.Before(end)))
-		assert.Contains(t, []string{"network", "process"}, e.EventType)
+		assert.Contains(t, []string{"network", "system"}, e.EventType)
 		assert.Contains(t, []string{"high", "critical"}, e.Severity)
 	}
 	assert.True(t, gotMsgs["all_net_high_t1"])
@@ -815,7 +837,7 @@ func TestGetEventsFilteredAndCount(t *testing.T) {
 	require.Len(t, rowsCase1, 1)
 	assert.Equal(t, "case1_proc_high_t2", rowsCase1[0].Message)
 
-	// Case 2 only (should be 0 because type is authentication)
+	// Case 2 only (should be 0 because the category is iam)
 	totalCase2, err := store.CountEventsFiltered(ctx, case2ID, start, end, severities, types)
 	require.NoError(t, err)
 	assert.Equal(t, 0, totalCase2)
@@ -837,11 +859,11 @@ func TestGetEventsFiltered_Pagination(t *testing.T) {
 	mk := func(minOffset int, msg string) {
 		ev := &ocsf.Event{
 			Time:        base.Add(time.Duration(minOffset) * time.Minute),
-			ClassUID:    4001,                   // network
+			ClassUID:    4001, // network
 			CategoryUID: 4,
 			ActivityID:  1,
 			TypeUID:     4001*100 + 1,
-			SeverityID:  4,                      // high
+			SeverityID:  4, // high
 			Message:     msg,
 		}
 		_, err := store.SaveEvent(ctx, ev)
@@ -853,8 +875,8 @@ func TestGetEventsFiltered_Pagination(t *testing.T) {
 	mk(3, "p3")
 	mk(4, "p4")
 
-	start := base.Add(-1 * time.Minute)   // include from slightly before first
-	end := base.Add(10 * time.Minute)     // include beyond last
+	start := base.Add(-1 * time.Minute) // include from slightly before first
+	end := base.Add(10 * time.Minute)   // include beyond last
 	severities := []string{"high"}
 	types := []string{"network"}
 
@@ -888,89 +910,89 @@ func TestGetEventsFiltered_Pagination(t *testing.T) {
 	require.Len(t, rows, 0)
 }
 func TestDeleteEvents_RemovesEnrichmentsAndUpdatesCounts(t *testing.T) {
-store, err := NewStore(":memory:")
-require.NoError(t, err)
-defer store.Close()
+	store, err := NewStore(":memory:")
+	require.NoError(t, err)
+	defer store.Close()
 
-ctx := context.Background()
+	ctx := context.Background()
 
-// Create a case
-caseID, err := store.CreateOrUpdateCase(ctx, Case{
-Title:    "Case A",
-Severity: "medium",
-Status:   "open",
-})
-require.NoError(t, err)
-require.NotEmpty(t, caseID)
+	// Create a case
+	caseID, err := store.CreateOrUpdateCase(ctx, Case{
+		Title:    "Case A",
+		Severity: "medium",
+		Status:   "open",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, caseID)
 
-// Helper to create an event with deterministic mapping
-mk := func(classUID, severityID int, msg string) string {
-ev := &ocsf.Event{
-Time:        time.Now(),
-ClassUID:    classUID,
-CategoryUID: 1,
-ActivityID:  1,
-TypeUID:     classUID*100 + 1,
-SeverityID:  severityID,
-Message:     msg,
-}
-id, err := store.SaveEvent(ctx, ev)
-require.NoError(t, err)
-return id
-}
+	// Helper to create an event with deterministic mapping
+	mk := func(classUID, severityID int, msg string) string {
+		ev := &ocsf.Event{
+			Time:        time.Now(),
+			ClassUID:    classUID,
+			CategoryUID: 1,
+			ActivityID:  1,
+			TypeUID:     classUID*100 + 1,
+			SeverityID:  severityID,
+			Message:     msg,
+		}
+		id, err := store.SaveEvent(ctx, ev)
+		require.NoError(t, err)
+		return id
+	}
 
-// Create three events: two assigned to the case, one unassigned
-e1 := mk(4001, 3, "e1_caseA") // network, medium
-e2 := mk(1001, 4, "e2_caseA") // process, high
-e3 := mk(2001, 2, "e3_all")   // file, low (unassigned)
+	// Create three events: two assigned to the case, one unassigned
+	e1 := mk(4001, 3, "e1_caseA") // network, medium
+	e2 := mk(1001, 4, "e2_caseA") // process, high
+	e3 := mk(2001, 2, "e3_all")   // file, low (unassigned)
 
-// Assign e1, e2 to case
-require.NoError(t, store.AssignEventToCase(ctx, e1, caseID))
-require.NoError(t, store.AssignEventToCase(ctx, e2, caseID))
+	// Assign e1, e2 to case
+	require.NoError(t, store.AssignEventToCase(ctx, e1, caseID))
+	require.NoError(t, store.AssignEventToCase(ctx, e2, caseID))
 
-// Add enrichments for all three events
-for _, id := range []string{e1, e2, e3} {
-require.NoError(t, store.ApplyEnrichment(ctx, id, Enrichment{
-Source: "test",
-Type:   "check",
-Data:   map[string]string{"k": "v"},
-}))
-}
+	// Add enrichments for all three events
+	for _, id := range []string{e1, e2, e3} {
+		require.NoError(t, store.ApplyEnrichment(ctx, id, Enrichment{
+			Source: "test",
+			Type:   "check",
+			Data:   map[string]string{"k": "v"},
+		}))
+	}
 
-// Initialize event_count for the case
-require.NoError(t, store.UpdateCaseEventCount(ctx, caseID))
-var cntBefore int
-require.NoError(t, store.db.QueryRow("SELECT event_count FROM cases WHERE id = ?", caseID).Scan(&cntBefore))
-assert.Equal(t, 2, cntBefore)
+	// Initialize event_count for the case
+	require.NoError(t, store.UpdateCaseEventCount(ctx, caseID))
+	var cntBefore int
+	require.NoError(t, store.db.QueryRow("SELECT event_count FROM cases WHERE id = ?", caseID).Scan(&cntBefore))
+	assert.Equal(t, 2, cntBefore)
 
-// Act: delete e1 and e2
-require.NoError(t, store.DeleteEvents(ctx, []string{e1, e2}))
+	// Act: delete e1 and e2
+	require.NoError(t, store.DeleteEvents(ctx, []string{e1, e2}))
 
-// Events e1, e2 removed; e3 remains
-var removedCount int
-require.NoError(t, store.db.QueryRow("SELECT COUNT(1) FROM events WHERE id IN (?,?)", e1, e2).Scan(&removedCount))
-assert.Equal(t, 0, removedCount)
+	// Events e1, e2 removed; e3 remains
+	var removedCount int
+	require.NoError(t, store.db.QueryRow("SELECT COUNT(1) FROM events WHERE id IN (?,?)", e1, e2).Scan(&removedCount))
+	assert.Equal(t, 0, removedCount)
 
-var remainingCount int
-require.NoError(t, store.db.QueryRow("SELECT COUNT(1) FROM events WHERE id = ?", e3).Scan(&remainingCount))
-assert.Equal(t, 1, remainingCount)
+	var remainingCount int
+	require.NoError(t, store.db.QueryRow("SELECT COUNT(1) FROM events WHERE id = ?", e3).Scan(&remainingCount))
+	assert.Equal(t, 1, remainingCount)
 
-// Enrichments for e1, e2 removed; enrichment for e3 remains
-var enrRemoved int
-require.NoError(t, store.db.QueryRow("SELECT COUNT(1) FROM enrichments WHERE event_id IN (?,?)", e1, e2).Scan(&enrRemoved))
-assert.Equal(t, 0, enrRemoved)
+	// Enrichments for e1, e2 removed; enrichment for e3 remains
+	var enrRemoved int
+	require.NoError(t, store.db.QueryRow("SELECT COUNT(1) FROM enrichments WHERE event_id IN (?,?)", e1, e2).Scan(&enrRemoved))
+	assert.Equal(t, 0, enrRemoved)
 
-var enrRemain int
-require.NoError(t, store.db.QueryRow("SELECT COUNT(1) FROM enrichments WHERE event_id = ?", e3).Scan(&enrRemain))
-assert.Equal(t, 1, enrRemain)
+	var enrRemain int
+	require.NoError(t, store.db.QueryRow("SELECT COUNT(1) FROM enrichments WHERE event_id = ?", e3).Scan(&enrRemain))
+	assert.Equal(t, 1, enrRemain)
 
-// Case event_count updated (was 2, now 0 after deletion)
-var cntAfter int
-require.NoError(t, store.db.QueryRow("SELECT event_count FROM cases WHERE id = ?", caseID).Scan(&cntAfter))
-assert.Equal(t, 0, cntAfter)
+	// Case event_count updated (was 2, now 0 after deletion)
+	var cntAfter int
+	require.NoError(t, store.db.QueryRow("SELECT event_count FROM cases WHERE id = ?", caseID).Scan(&cntAfter))
+	assert.Equal(t, 0, cntAfter)
 
-// FTS rows for deleted events should also be gone (trigger-backed compatibility always exists)
-var ftsCount int
-require.NoError(t, store.db.QueryRow("SELECT COUNT(1) FROM events_fts WHERE id IN (?,?)", e1, e2).Scan(&ftsCount))
-assert.Equal(t, 0, ftsCount)
+	// FTS rows for deleted events should also be gone (trigger-backed compatibility always exists)
+	var ftsCount int
+	require.NoError(t, store.db.QueryRow("SELECT COUNT(1) FROM events_fts WHERE id IN (?,?)", e1, e2).Scan(&ftsCount))
+	assert.Equal(t, 0, ftsCount)
 }
