@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 )
 
@@ -271,5 +272,98 @@ func TestFormatActionDescriptionCaseSummary(t *testing.T) {
 	got := cm.formatActionDescription("case_summary", nil)
 	if !strings.Contains(got, "Case summary") {
 		t.Fatalf("expected friendly description for case_summary, got: %q", got)
+	}
+}
+
+// TestExtractIOCsUsesObservables verifies the IOC view reads the observables
+// table rather than re-deriving indicators by scraping message text, and that
+// producer-asserted indicators are distinguishable from inferred ones.
+func TestExtractIOCsUsesObservables(t *testing.T) {
+	tmp := "./test_cm_observables.db"
+	_ = os.Remove(tmp)
+	defer os.Remove(tmp)
+
+	st, err := store.NewStore(tmp)
+	if err != nil {
+		t.Fatalf("store.NewStore: %v", err)
+	}
+	defer st.Close()
+
+	ctx := context.Background()
+
+	// The message deliberately contains NO indicators: everything found must
+	// have come from the observables table.
+	ev := &ocsf.Event{
+		Time:        time.Now(),
+		ClassUID:    4001,
+		SeverityID:  3,
+		Message:     "connection established",
+		SrcEndpoint: &ocsf.Endpoint{IP: "192.168.1.100"},
+		Device:      &ocsf.Device{Hostname: "workstation-07"},
+		Observables: []ocsf.Observable{
+			{Name: "dst_endpoint.ip", TypeID: ocsf.ObservableTypeIPAddress, Value: "8.8.8.8"},
+		},
+	}
+	ev.Metadata.UID = "meta-ui-1"
+
+	eventID, err := st.SaveEvent(ctx, ev)
+	if err != nil {
+		t.Fatalf("SaveEvent: %v", err)
+	}
+
+	stored, err := st.GetAllEvents(ctx, 10)
+	if err != nil || len(stored) != 1 {
+		t.Fatalf("GetAllEvents: %v (n=%d)", err, len(stored))
+	}
+
+	logger := log.New(os.Stdout, "[TEST] ", 0)
+	ui := NewUI(ctx, st, &mockLLM{}, logger, "test")
+	cm := NewCaseManagement(ui, store.Case{ID: "case-obs", Title: "Obs", Severity: "medium", Status: "open"})
+	cm.baseEvents = stored
+	cm.extractIOCs()
+
+	find := func(typ, val string) (IOCItem, bool) {
+		for _, it := range cm.iocIndex[typ] {
+			if it.Value == val {
+				return it, true
+			}
+		}
+		return IOCItem{}, false
+	}
+
+	// Asserted by the producer.
+	dst, ok := find("ip", "8.8.8.8")
+	if !ok {
+		t.Fatalf("expected asserted observable 8.8.8.8 to appear; message text contains no indicators")
+	}
+	if !dst.Asserted {
+		t.Errorf("8.8.8.8 should be marked asserted")
+	}
+	if dst.TypeID != ocsf.ObservableTypeIPAddress {
+		t.Errorf("expected type_id %d, got %d", ocsf.ObservableTypeIPAddress, dst.TypeID)
+	}
+
+	// Derived by Console-IR from a structured field.
+	src, ok := find("ip", "192.168.1.100")
+	if !ok {
+		t.Fatalf("expected derived observable 192.168.1.100")
+	}
+	if src.Asserted {
+		t.Errorf("192.168.1.100 was not asserted by the source and must not be marked as such")
+	}
+
+	if host, ok := find("domain", "workstation-07"); !ok {
+		t.Errorf("expected device.hostname in the domain bucket")
+	} else if host.Asserted {
+		t.Errorf("workstation-07 should be derived, not asserted")
+	}
+
+	// The indicator pivot resolves back to the event.
+	hits, err := st.FindEventsByObservable(ctx, ocsf.ObservableTypeIPAddress, "8.8.8.8", 0)
+	if err != nil {
+		t.Fatalf("FindEventsByObservable: %v", err)
+	}
+	if len(hits) != 1 || hits[0].ID != eventID {
+		t.Fatalf("expected pivot to return the source event, got %d hits", len(hits))
 	}
 }

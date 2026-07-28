@@ -74,13 +74,12 @@ func (p *Parser) ParseEvent(rawJSON []byte) (*ocsf.Event, error) {
 		event.Actor = p.parseActor(actor)
 	}
 
-	// Parse observables
+	// Parse observables. These are the producer's own assertions and are kept
+	// separate from the ones Console-IR derives, so provenance survives to
+	// storage — an analyst should be able to tell the two apart.
 	if observables, ok := rawEvent["observables"].([]interface{}); ok {
-		event.Observables = p.parseObservables(observables)
+		event.Observables = p.parseObservables(observables, event)
 	}
-
-	// Auto-extract additional observables
-	event.Observables = append(event.Observables, event.ExtractObservables()...)
 
 	return event, nil
 }
@@ -464,34 +463,89 @@ func (p *Parser) parseActor(actor map[string]interface{}) *ocsf.Actor {
 	return a
 }
 
-// parseObservables parses observable information
-func (p *Parser) parseObservables(observables []interface{}) []ocsf.Observable {
+// parseObservables parses the producer-asserted observables array.
+//
+// type_id is the only required attribute of the OCSF observable object, so it is
+// recovered from the type caption when a producer omits it. reputation is an
+// OBJECT in OCSF — decoding it as a bare integer (as this previously did) makes
+// the conversion fail silently and drops the provider and score entirely.
+func (p *Parser) parseObservables(observables []interface{}, event *ocsf.Event) []ocsf.Observable {
 	var obs []ocsf.Observable
 
 	for _, observable := range observables {
-		if obsMap, ok := observable.(map[string]interface{}); ok {
-			o := ocsf.Observable{}
-
-			if name, ok := obsMap["name"].(string); ok {
-				o.Name = name
-			}
-			if obsType, ok := obsMap["type"].(string); ok {
-				o.Type = obsType
-			}
-			if value, ok := obsMap["value"].(string); ok {
-				o.Value = value
-			}
-			if reputation, ok := obsMap["reputation"]; ok {
-				if repInt, err := p.toInt(reputation); err == nil {
-					o.Reputation = repInt
-				}
-			}
-
-			obs = append(obs, o)
+		obsMap, ok := observable.(map[string]interface{})
+		if !ok {
+			continue
 		}
+		o := ocsf.Observable{}
+
+		if name, ok := obsMap["name"].(string); ok {
+			o.Name = name
+		}
+		if obsType, ok := obsMap["type"].(string); ok {
+			o.Type = obsType
+		}
+		if typeID, ok := obsMap["type_id"]; ok {
+			if id, err := p.toInt(typeID); err == nil {
+				o.TypeID = id
+			}
+		}
+		if value, ok := obsMap["value"].(string); ok {
+			o.Value = value
+		}
+		if eventUID, ok := obsMap["event_uid"].(string); ok {
+			o.EventUID = eventUID
+		}
+		if reputation, ok := obsMap["reputation"].(map[string]interface{}); ok {
+			o.Reputation = p.parseReputation(reputation)
+		}
+
+		obs = append(obs, event.NormalizeObservable(o))
 	}
 
 	return obs
+}
+
+// parseReputation parses the OCSF reputation object.
+func (p *Parser) parseReputation(rep map[string]interface{}) *ocsf.Reputation {
+	r := &ocsf.Reputation{}
+
+	if provider, ok := rep["provider"].(string); ok {
+		r.Provider = provider
+	}
+	if score, ok := rep["score"].(string); ok {
+		r.Score = score
+	}
+	if scoreID, ok := rep["score_id"]; ok {
+		if id, err := p.toInt(scoreID); err == nil {
+			r.ScoreID = id
+		}
+	}
+	if baseScore, ok := rep["base_score"]; ok {
+		if f, err := p.toFloat64(baseScore); err == nil {
+			r.BaseScore = f
+		}
+	}
+
+	return r
+}
+
+// toFloat64 converts various numeric types to float64.
+func (p *Parser) toFloat64(value interface{}) (float64, error) {
+	switch v := value.(type) {
+	case float64:
+		return v, nil
+	case float32:
+		return float64(v), nil
+	case int:
+		return float64(v), nil
+	case int64:
+		return float64(v), nil
+	case string:
+		return strconv.ParseFloat(v, 64)
+	default:
+		return 0, fmt.Errorf("cannot convert %T to float64", v)
+	}
 }
 
 // parseTime parses various time formats into time.Time

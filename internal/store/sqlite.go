@@ -132,8 +132,9 @@ func NewStore(dbPath string) (*Store, error) {
 		}
 	}
 
-	// Enable WAL for concurrency and enforce foreign keys for cascades.
-	dsn := dbPath + "?_journal_mode=WAL&_foreign_keys=on"
+	// Enable WAL for concurrency and enforce foreign keys for cascades. The DSN
+	// spelling is driver-specific; see sqliteDSNParams.
+	dsn := dbPath + sqliteDSNParams
 	db, err := sql.Open(sqliteDriver, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
@@ -247,6 +248,9 @@ func (s *Store) migrate() error {
 
 	// Additive schema evolution for databases created by earlier versions.
 	if err := s.migrateEventsOCSFColumns(); err != nil {
+		return err
+	}
+	if err := s.migrateObservables(); err != nil {
 		return err
 	}
 
@@ -463,8 +467,16 @@ func (s *Store) SaveEvent(ctx context.Context, ocsfEvent *ocsf.Event) (string, e
 		class_uid, category_uid, activity_id, type_uid, severity_id, metadata_uid
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
+	// The event and its observables are written together: an event whose
+	// indicators are missing would be silently invisible to the pivot.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	now := time.Now().Unix()
-	_, err = s.db.ExecContext(ctx, query,
+	_, err = tx.ExecContext(ctx, query,
 		event.ID, caseIDParam, event.Timestamp.Unix(), event.EventType,
 		event.Severity, event.Message, event.Host, event.SrcIP, event.DstIP,
 		event.SrcPort, event.DstPort, event.ProcessName, event.FileName,
@@ -472,9 +484,18 @@ func (s *Store) SaveEvent(ctx context.Context, ocsfEvent *ocsf.Event) (string, e
 		event.ClassUID, event.CategoryUID, event.ActivityID, event.TypeUID,
 		event.SeverityID, event.MetadataUID,
 	)
-
 	if err != nil {
 		return "", fmt.Errorf("failed to save event: %w", err)
+	}
+
+	// ocsfEvent.Observables holds only what the producer asserted; the rest are
+	// derived from the event's structured fields.
+	if err := insertObservables(tx, observablesFor(eventID, ocsfEvent, nil)); err != nil {
+		return "", err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("failed to commit event: %w", err)
 	}
 
 	return eventID, nil

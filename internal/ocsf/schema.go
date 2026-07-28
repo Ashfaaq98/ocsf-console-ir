@@ -2,6 +2,7 @@ package ocsf
 
 import (
 	"encoding/json"
+	"strconv"
 	"time"
 )
 
@@ -169,12 +170,43 @@ type Session struct {
 	IsRemote    bool      `json:"is_remote,omitempty"`
 }
 
-// Observable represents an observable artifact or IOC
+// Observable represents an observable artifact or IOC.
+//
+// Per the OCSF docs, observables are "a pivot element that contains related
+// information found in many places in the event" — they reference data that
+// already exists elsewhere in the event, as a query optimization. Name is
+// therefore a pointer to the source attribute (e.g. "src_endpoint.ip"), not a
+// human label.
 type Observable struct {
-	Name       string `json:"name"`
-	Type       string `json:"type"`
-	Value      string `json:"value"`
-	Reputation int    `json:"reputation,omitempty"`
+	Name string `json:"name"`
+	Type string `json:"type,omitempty"`
+	// TypeID is the only required attribute of the OCSF observable object.
+	TypeID int    `json:"type_id"`
+	Value  string `json:"value,omitempty"`
+	// EventUID is metadata.uid of the event this observable was extracted from.
+	EventUID   string      `json:"event_uid,omitempty"`
+	Reputation *Reputation `json:"reputation,omitempty"`
+}
+
+// Reputation describes the reputation/risk score of an entity. OCSF models this
+// as an object; treating it as a bare integer silently discards the provider and
+// the normalized score.
+type Reputation struct {
+	BaseScore float64 `json:"base_score,omitempty"`
+	Provider  string  `json:"provider,omitempty"`
+	Score     string  `json:"score,omitempty"`
+	ScoreID   int     `json:"score_id,omitempty"`
+}
+
+// newObservable builds an observable with its type caption resolved from the
+// vendored enum, so Type and TypeID never disagree.
+func newObservable(name string, typeID int, value string) Observable {
+	return Observable{
+		Name:   name,
+		Type:   ObservableTypeName(typeID),
+		TypeID: typeID,
+		Value:  value,
+	}
 }
 
 // GetEventType returns the coarse category grouping for the event.
@@ -237,49 +269,136 @@ func (e *Event) GetSeverityLevel() string {
 	}
 }
 
-// ExtractObservables extracts potential observables from the event
-func (e *Event) ExtractObservables() []Observable {
+// DeriveObservables builds observables from the event's structured fields.
+//
+// It returns ONLY the derived set — it deliberately excludes e.Observables, which
+// are the producer's own assertions. Keeping the two apart matters: an analyst
+// should be able to tell an indicator the source vouched for from one this tool
+// inferred.
+//
+// Names follow the OCSF convention of pointing at the source attribute, so a
+// derived observable is shaped like an asserted one.
+func (e *Event) DeriveObservables() []Observable {
 	var observables []Observable
 
-	// Add existing observables
-	observables = append(observables, e.Observables...)
-
-	// Extract IP addresses
-	if e.SrcEndpoint != nil && e.SrcEndpoint.IP != "" {
-		observables = append(observables, Observable{
-			Name:  "source_ip",
-			Type:  "ip",
-			Value: e.SrcEndpoint.IP,
-		})
+	if e.SrcEndpoint != nil {
+		if e.SrcEndpoint.IP != "" {
+			observables = append(observables, newObservable("src_endpoint.ip", ObservableTypeIPAddress, e.SrcEndpoint.IP))
+		}
+		if e.SrcEndpoint.Hostname != "" {
+			observables = append(observables, newObservable("src_endpoint.hostname", ObservableTypeHostname, e.SrcEndpoint.Hostname))
+		}
 	}
-
-	if e.DstEndpoint != nil && e.DstEndpoint.IP != "" {
-		observables = append(observables, Observable{
-			Name:  "destination_ip",
-			Type:  "ip",
-			Value: e.DstEndpoint.IP,
-		})
-	}
-
-	// Extract file hashes
-	if e.File != nil && e.File.Hashes != nil {
-		for hashType, hashValue := range e.File.Hashes {
-			observables = append(observables, Observable{
-				Name:  "file_hash",
-				Type:  hashType,
-				Value: hashValue,
-			})
+	if e.DstEndpoint != nil {
+		if e.DstEndpoint.IP != "" {
+			observables = append(observables, newObservable("dst_endpoint.ip", ObservableTypeIPAddress, e.DstEndpoint.IP))
+		}
+		if e.DstEndpoint.Hostname != "" {
+			observables = append(observables, newObservable("dst_endpoint.hostname", ObservableTypeHostname, e.DstEndpoint.Hostname))
 		}
 	}
 
-	// Extract hostnames
-	if e.Device != nil && e.Device.Hostname != "" {
-		observables = append(observables, Observable{
-			Name:  "hostname",
-			Type:  "hostname",
-			Value: e.Device.Hostname,
-		})
+	if e.File != nil {
+		if e.File.Name != "" {
+			observables = append(observables, newObservable("file.name", ObservableTypeFileName, e.File.Name))
+		}
+		for hashType, hashValue := range e.File.Hashes {
+			if hashValue != "" {
+				observables = append(observables, newObservable("file.hashes."+hashType, ObservableTypeHash, hashValue))
+			}
+		}
+	}
+
+	if e.Process != nil {
+		if e.Process.Name != "" {
+			observables = append(observables, newObservable("process.name", ObservableTypeProcessName, e.Process.Name))
+		}
+		if e.Process.File != nil {
+			for hashType, hashValue := range e.Process.File.Hashes {
+				if hashValue != "" {
+					observables = append(observables, newObservable("process.file.hashes."+hashType, ObservableTypeHash, hashValue))
+				}
+			}
+		}
+	}
+
+	if e.Device != nil {
+		if e.Device.Hostname != "" {
+			observables = append(observables, newObservable("device.hostname", ObservableTypeHostname, e.Device.Hostname))
+		}
+		if e.Device.IP != "" {
+			observables = append(observables, newObservable("device.ip", ObservableTypeIPAddress, e.Device.IP))
+		}
+	}
+
+	if e.User != nil {
+		if e.User.Name != "" {
+			observables = append(observables, newObservable("user.name", ObservableTypeUserName, e.User.Name))
+		}
+		if e.User.Email != "" {
+			observables = append(observables, newObservable("user.email", ObservableTypeEmail, e.User.Email))
+		}
+	}
+
+	// Stamp the source event so a pivot can navigate back to it.
+	if e.Metadata.UID != "" {
+		for i := range observables {
+			observables[i].EventUID = e.Metadata.UID
+		}
 	}
 
 	return observables
+}
+
+// NormalizeObservable fills in whichever of Type/TypeID the producer omitted, so
+// the two never disagree and pivot queries can rely on TypeID.
+func (e *Event) NormalizeObservable(o Observable) Observable {
+	if o.TypeID == ObservableTypeUnknown && o.Type != "" {
+		if id, ok := ObservableTypeIDFor(o.Type); ok {
+			o.TypeID = id
+		}
+	}
+	// Keep the caption in step with the id. Informal spellings ("ip", "sha256")
+	// resolve to a type_id, and storing the canonical caption alongside it stops
+	// the two disagreeing. Unknown/Other keep whatever the producer supplied,
+	// since that is where vendor-specific detail lives.
+	switch o.TypeID {
+	case ObservableTypeUnknown, ObservableTypeOther:
+	default:
+		o.Type = ObservableTypeName(o.TypeID)
+	}
+	if o.EventUID == "" {
+		o.EventUID = e.Metadata.UID
+	}
+	return o
+}
+
+// ExtractObservables returns the producer-asserted observables followed by the
+// derived ones, deduplicated on (type_id, value) with asserted entries winning.
+func (e *Event) ExtractObservables() []Observable {
+	out := make([]Observable, 0, len(e.Observables))
+	seen := make(map[string]bool, len(e.Observables))
+
+	key := func(o Observable) string {
+		return strconv.Itoa(o.TypeID) + "\x00" + o.Value
+	}
+
+	for _, o := range e.Observables {
+		o = e.NormalizeObservable(o)
+		if seen[key(o)] {
+			continue
+		}
+		seen[key(o)] = true
+		out = append(out, o)
+	}
+
+	for _, o := range e.DeriveObservables() {
+		if seen[key(o)] {
+			continue
+		}
+		seen[key(o)] = true
+		out = append(out, o)
+	}
+
+	return out
 }
