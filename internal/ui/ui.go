@@ -1968,6 +1968,15 @@ func (ui *UI) showHelp() {
 	addKV("Esc", "Clear status line")
 	addGap()
 
+	addSection("FINDINGS (TRIAGE)")
+	addKV("D", "Open the findings queue")
+	addKV("Enter", "Finding details: evidence, related events, observables")
+	addKV("s", "Set status (New / In Progress / Suppressed / Resolved / Archived)")
+	addKV("v", "Set verdict (True / False Positive, Suspicious, Benign, ...)")
+	addKV("e", "Escalate finding into a new or existing case")
+	addKV("o", "Toggle open-only / all findings")
+	row++
+
 	addSection("EVENT SELECTION")
 	addKV("Space", "Toggle event selection")
 	addKV("Ctrl+A", "Select all events")
@@ -1995,6 +2004,7 @@ func (ui *UI) showHelp() {
 	addGap()
 
 	addSection("QUICK ACTIONS")
+	addKV("D", "Jump to FINDINGS from anywhere")
 	addKV("A", "Jump to ALL EVENTS from anywhere")
 	addKV("r", "Refresh data")
 	addKV("h / H", "Show this help")
