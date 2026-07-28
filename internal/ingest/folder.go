@@ -380,28 +380,38 @@ func (fi *FolderIngestor) processJSONFile(ctx context.Context, path string) erro
 }
 
 func (fi *FolderIngestor) processEventJSON(ctx context.Context, raw []byte) error {
-	ocsfEvent, err := fi.parser.ParseEvent(raw)
+	rec, err := fi.parser.Parse(raw)
 	if err != nil {
 		return err
 	}
 
-	eventID, err := fi.store.SaveEvent(ctx, ocsfEvent)
+	saved, err := fi.store.SaveRecord(ctx, rec)
 	if err != nil {
 		return err
 	}
 
 	// Assign to the ingest case when configured
 	if fi.caseID != "" {
-		if err := fi.store.AssignEventToCase(ctx, eventID, fi.caseID); err != nil {
-			return err
+		if saved.EventID != "" {
+			if err := fi.store.AssignEventToCase(ctx, saved.EventID, fi.caseID); err != nil {
+				return err
+			}
+		}
+		if saved.FindingID != "" {
+			if err := fi.store.AssignFindingToCase(ctx, saved.FindingID, fi.caseID); err != nil {
+				return err
+			}
 		}
 	}
 
 	msg := bus.EventMessage{
-		EventID:   eventID,
-		EventType: string(ocsfEvent.GetEventType()),
+		EventID:   saved.EventID,
+		EventType: rec.EventType(),
 		RawJSON:   string(raw),
-		Timestamp: ocsfEvent.Time.Unix(),
+		Timestamp: rec.Timestamp(),
+	}
+	if msg.EventID == "" {
+		msg.EventID = saved.FindingID
 	}
 	// Best-effort publish to bus (optional, no-op on NullBus)
 	_ = fi.bus.PublishEvent(ctx, msg)

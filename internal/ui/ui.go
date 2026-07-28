@@ -393,6 +393,13 @@ type UI struct {
 	showAll          bool                        // when true, sidebar selection is "ALL EVENTS"
 	queryStates      map[string]*EventQueryState // per-context (ALL or caseID) filter+pagination
 
+	// Findings triage queue. Findings are the analyst's unit of work; ALL EVENTS
+	// remains available alongside it for raw-log triage.
+	showFindings      bool
+	findings          []store.Finding
+	selectedFindingID string
+	findingsOpenOnly  bool
+
 	// Theme state
 	theme          Theme
 	themeName      string
@@ -451,6 +458,9 @@ type EventQueryState struct {
 
 // getContextID resolves the current query context: ALL or a specific case ID.
 func (ui *UI) getContextID() string {
+	if ui.showFindings {
+		return contextFindings
+	}
 	if !ui.showAll && ui.selectedCaseID != "" {
 		return ui.selectedCaseID
 	}
@@ -607,8 +617,18 @@ func (ui *UI) Start(ctx context.Context) error {
 				// Focus the Events table directly (overview panel is non-selectable)
 				ui.app.SetFocus(ui.eventList)
 
+				// Land on the findings queue when there is triage work waiting;
+				// otherwise fall back to ALL EVENTS so a raw-log-only install is
+				// never greeted by an empty screen.
+				openFindings, cntErr := ui.store.CountFindings(ui.ctx, store.FindingFilter{OpenOnly: true})
+				if cntErr == nil && openFindings > 0 {
+					ui.jumpToFindings()
+					return
+				}
+
 				// Auto-load ALL EVENTS on startup
 				ui.showAll = true
+				ui.showFindings = false
 				ui.selectedCaseID = ""
 
 				// Immediate loading state in events table
@@ -883,6 +903,10 @@ func (ui *UI) setupEventHandlers() {
 
 	// Event list selection
 	ui.eventList.SetSelectedFunc(func(row, col int) {
+		if ui.showFindings {
+			ui.showFindingDetails()
+			return
+		}
 		if row > 0 && row-1 < len(ui.events) { // Skip header row
 			ui.selectedEventID = ui.events[row-1].ID
 			ui.showEventDetails()
@@ -891,6 +915,10 @@ func (ui *UI) setupEventHandlers() {
 
 	// Event list selection change
 	ui.eventList.SetSelectionChangedFunc(func(row, col int) {
+		if ui.showFindings {
+			ui.showFindingDetails()
+			return
+		}
 		if row > 0 && row-1 < len(ui.events) { // Skip header row
 			ui.selectedEventID = ui.events[row-1].ID
 			ui.showEventDetails()
@@ -904,6 +932,10 @@ func (ui *UI) setupEventHandlers() {
 			row, col := ui.eventList.GetSelection()
 			if ui.logger != nil {
 				ui.logger.Printf("EventList Enter: row=%d col=%d rows=%d", row, col, ui.eventList.GetRowCount())
+			}
+			if ui.showFindings {
+				ui.showFindingDetails()
+				return nil
 			}
 			if row > 0 && row-1 < len(ui.events) {
 				ui.selectedEventID = ui.events[row-1].ID
@@ -964,6 +996,7 @@ func (ui *UI) onSidebarSelect(index int) {
 	}
 
 	ui.showAll = false
+	ui.showFindings = false
 	ui.selectedCaseID = ui.cases[index].ID
 	// Reset pagination for this case context
 	{
@@ -1042,6 +1075,10 @@ func (ui *UI) setupKeybindings() {
 				ui.scheduleEventsReload("key:r")
 				return nil
 			case 's', 'S':
+				if ui.showFindings {
+					ui.showFindingStatusModal()
+					return nil
+				}
 				if ui.selectedCaseID != "" {
 					ui.showCaseSummary()
 				}
@@ -1148,6 +1185,10 @@ func (ui *UI) setupKeybindings() {
 				ui.setTheme(next)
 				return nil
 			case 'f':
+				if ui.showFindings {
+					ui.setStatusDirect("[%s]Findings: o toggles open/all • s status • v verdict[-:-:-]", ui.theme.TagAccent)
+					return nil
+				}
 				// Gated by focus: Cases sidebar opens CASE filter, otherwise open Events filter
 				if ui.app.GetFocus() == ui.sidebar {
 					ui.showCaseFilterModal()
@@ -1157,6 +1198,10 @@ func (ui *UI) setupKeybindings() {
 				}
 				return nil
 			case 'F':
+				if ui.showFindings {
+					ui.setStatusDirect("[%s]Findings: o toggles open/all • s status • v verdict[-:-:-]", ui.theme.TagAccent)
+					return nil
+				}
 				// Gated by focus: Cases sidebar clears CASE filters, otherwise clear Events filters
 				if ui.app.GetFocus() == ui.sidebar {
 					ui.clearCaseFilters()
@@ -1188,11 +1233,26 @@ func (ui *UI) setupKeybindings() {
 					ui.setStatusDirect("[%s]No events selected. Use Space to select events first. (Events: %d)[-:-:-]", ui.theme.TagWarning, len(ui.events))
 				}
 				return nil
+			case 'D':
+				// Quick-jump to the findings (detections) triage queue.
+				ui.jumpToFindings()
+				return nil
+			case 'v':
+				if ui.showFindings {
+					ui.showFindingVerdictModal()
+					return nil
+				}
+			case 'o':
+				if ui.showFindings {
+					ui.toggleFindingsScope()
+					return nil
+				}
 			case 'A':
 				// Quick-jump to ALL EVENTS from anywhere (overview panel is non-selectable)
 				ui.app.SetFocus(ui.eventList)
 
 				// Trigger same behavior as selecting ALL EVENTS
+				ui.showFindings = false
 				ui.showAll = true
 				ui.selectedCaseID = ""
 
@@ -4004,6 +4064,10 @@ func (ui *UI) updateOverview(eventsTotal, casesTotal, open, investigating, close
 	if ui.allCasesInfo == nil {
 		return
 	}
+	// Findings lead: they are the triage queue, and events are the corroboration
+	// layer beneath them.
+	openFindings, _ := ui.store.CountFindings(ui.ctx, store.FindingFilter{OpenOnly: true})
+	line0 := fmt.Sprintf("[%s](D) FINDINGS (%d open)[-]", ui.theme.TagAccent, openFindings)
 	line1 := fmt.Sprintf("[%s](A) EVENTS (%d)[-]", ui.theme.TagAccent, eventsTotal)
 	line2 := fmt.Sprintf("[%s](C) CASES (%d)[-]", ui.theme.TagAccent, casesTotal)
 	line3 := fmt.Sprintf("[%s]OPEN[-] - %d  [%s]INVESTIGATING[-] - %d  [%s]CLOSED[-] - %d",
@@ -4011,7 +4075,7 @@ func (ui *UI) updateOverview(eventsTotal, casesTotal, open, investigating, close
 		ui.theme.TagTextPrimary, investigating,
 		ui.theme.TagTextPrimary, closed,
 	)
-	ui.allCasesInfo.SetText(line1 + "\n" + line2 + "\n" + line3)
+	ui.allCasesInfo.SetText(line0 + "\n" + line1 + "\n" + line2 + "\n" + line3)
 }
 
 // showDeleteEventsConfirm shows a confirmation dialog and deletes the selected events upon approval.

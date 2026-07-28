@@ -24,7 +24,8 @@ const (
 // "have I seen this indicator before?" an indexed lookup rather than a scan.
 type Observable struct {
 	ID         string           `json:"id"`
-	EventID    string           `json:"event_id"`
+	EventID    string           `json:"event_id,omitempty"`
+	FindingID  string           `json:"finding_id,omitempty"`
 	TypeID     int              `json:"type_id"`
 	Type       string           `json:"type,omitempty"`
 	Name       string           `json:"name,omitempty"`
@@ -38,7 +39,7 @@ type Observable struct {
 // to Console-IR deriving it from the event's fields.
 func (o Observable) IsAsserted() bool { return o.Source == ObservableSourceAsserted }
 
-const observableColumns = `id, event_id, type_id, type, name, value, source, reputation_json, created_at`
+const observableColumns = `id, event_id, finding_id, type_id, type, name, value, source, reputation_json, created_at`
 
 // migrateObservables creates the observables table and its indexes, then
 // backfills rows for events ingested before it existed.
@@ -46,7 +47,8 @@ func (s *Store) migrateObservables() error {
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS observables (
 			id TEXT PRIMARY KEY,
-			event_id TEXT NOT NULL,
+			event_id TEXT,
+			finding_id TEXT,
 			type_id INTEGER NOT NULL,
 			type TEXT,
 			name TEXT,
@@ -54,9 +56,16 @@ func (s *Store) migrateObservables() error {
 			source TEXT NOT NULL DEFAULT 'asserted',
 			reputation_json TEXT,
 			created_at INTEGER NOT NULL,
-			UNIQUE(event_id, type_id, value),
-			FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE
+			FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE CASCADE,
+			FOREIGN KEY (finding_id) REFERENCES findings(id) ON DELETE CASCADE
 		)`,
+		// NULLs compare distinct in SQLite, so a plain UNIQUE across both owner
+		// columns would not deduplicate. Partial unique indexes per owner do.
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_observables_event_uniq
+			ON observables(event_id, type_id, value) WHERE event_id IS NOT NULL`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_observables_finding_uniq
+			ON observables(finding_id, type_id, value) WHERE finding_id IS NOT NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_observables_finding_id ON observables(finding_id)`,
 		// The pivot query is "every event touching this indicator", so
 		// (type_id, value) is the index that matters. The value-only index
 		// supports searching without knowing the type.
@@ -254,12 +263,18 @@ type execer interface {
 	Exec(query string, args ...interface{}) (sql.Result, error)
 }
 
+// insertObservablesTx is the context-aware form used on the write paths.
+func insertObservablesTx(ctx context.Context, tx *sql.Tx, obs []Observable) error {
+	_ = ctx
+	return insertObservables(tx, obs)
+}
+
 func insertObservables(tx execer, obs []Observable) error {
 	if len(obs) == 0 {
 		return nil
 	}
 	stmt := `INSERT OR IGNORE INTO observables (` + observableColumns + `)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	for _, o := range obs {
 		var repJSON interface{}
@@ -270,8 +285,8 @@ func insertObservables(tx execer, obs []Observable) error {
 			}
 			repJSON = string(b)
 		}
-		if _, err := tx.Exec(stmt, o.ID, o.EventID, o.TypeID, o.Type, o.Name,
-			o.Value, o.Source, repJSON, o.CreatedAt.Unix()); err != nil {
+		if _, err := tx.Exec(stmt, o.ID, nullableString(o.EventID), nullableString(o.FindingID),
+			o.TypeID, o.Type, o.Name, o.Value, o.Source, repJSON, o.CreatedAt.Unix()); err != nil {
 			return fmt.Errorf("failed to insert observable: %w", err)
 		}
 	}
@@ -283,11 +298,17 @@ func scanObservables(rows *sql.Rows) ([]Observable, error) {
 	for rows.Next() {
 		var o Observable
 		var createdAt int64
-		var obsType, name, source, repJSON sql.NullString
+		var eventID, findingID, obsType, name, source, repJSON sql.NullString
 
-		if err := rows.Scan(&o.ID, &o.EventID, &o.TypeID, &obsType, &name,
+		if err := rows.Scan(&o.ID, &eventID, &findingID, &o.TypeID, &obsType, &name,
 			&o.Value, &source, &repJSON, &createdAt); err != nil {
 			return nil, fmt.Errorf("failed to scan observable: %w", err)
+		}
+		if eventID.Valid {
+			o.EventID = eventID.String
+		}
+		if findingID.Valid {
+			o.FindingID = findingID.String
 		}
 		if obsType.Valid {
 			o.Type = obsType.String
@@ -364,6 +385,69 @@ func (s *Store) GetObservablesForEvents(ctx context.Context, eventIDs []string) 
 	}
 
 	return out, nil
+}
+
+// observablesForFinding builds the rows to persist for a finding. Its
+// observables are the highest-value indicators in the system, so they must be
+// pivotable alongside event-derived ones.
+func observablesForFinding(findingID string, f *ocsf.Finding) []Observable {
+	obs := observablesFor("", &f.Event, nil)
+	for i := range obs {
+		obs[i].EventID = ""
+		obs[i].FindingID = findingID
+	}
+	return obs
+}
+
+// GetObservablesByFinding returns every observable recorded for a finding.
+func (s *Store) GetObservablesByFinding(ctx context.Context, findingID string) ([]Observable, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT `+observableColumns+` FROM observables WHERE finding_id = ? ORDER BY type_id, value`, findingID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query finding observables: %w", err)
+	}
+	defer rows.Close()
+	return scanObservables(rows)
+}
+
+// CountFindingsByObservable reports how many findings carry an indicator.
+func (s *Store) CountFindingsByObservable(ctx context.Context, typeID int, value string) (int, error) {
+	query := `SELECT COUNT(DISTINCT finding_id) FROM observables WHERE finding_id IS NOT NULL AND value = ?`
+	args := []interface{}{value}
+	if typeID != ocsf.ObservableTypeUnknown {
+		query += " AND type_id = ?"
+		args = append(args, typeID)
+	}
+	var total int
+	if err := s.db.QueryRowContext(ctx, query, args...).Scan(&total); err != nil {
+		return 0, fmt.Errorf("failed to count findings by observable: %w", err)
+	}
+	return total, nil
+}
+
+// FindFindingsByObservable returns every finding carrying the given indicator.
+func (s *Store) FindFindingsByObservable(ctx context.Context, typeID int, value string, limit int) ([]Finding, error) {
+	query := `SELECT ` + findingColumnsWithAlias("f") + `
+		FROM findings f
+		JOIN observables o ON o.finding_id = f.id
+		WHERE o.value = ?`
+	args := []interface{}{value}
+	if typeID != ocsf.ObservableTypeUnknown {
+		query += " AND o.type_id = ?"
+		args = append(args, typeID)
+	}
+	query += " GROUP BY f.id ORDER BY f.last_seen DESC"
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+	}
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to pivot findings on observable: %w", err)
+	}
+	defer rows.Close()
+	return scanFindings(rows)
 }
 
 // FindEventsByObservable returns every event carrying the given indicator.

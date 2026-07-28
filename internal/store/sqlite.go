@@ -250,6 +250,10 @@ func (s *Store) migrate() error {
 	if err := s.migrateEventsOCSFColumns(); err != nil {
 		return err
 	}
+	// findings must exist before observables, which references it.
+	if err := s.migrateFindings(); err != nil {
+		return err
+	}
 	if err := s.migrateObservables(); err != nil {
 		return err
 	}

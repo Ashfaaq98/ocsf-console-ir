@@ -220,29 +220,41 @@ func (li *LiveIngestor) fetchOnce(ctx context.Context) ([]byte, error) {
 
 // ingestRaw parses the raw JSON, saves the event, optionally assigns to case, and publishes to the bus.
 func (li *LiveIngestor) ingestRaw(ctx context.Context, raw []byte) (string, error) {
-	ocsfEvent, err := li.parser.ParseEvent(raw)
+	rec, err := li.parser.Parse(raw)
 	if err != nil {
 		return "", err
 	}
 
-	eventID, err := li.store.SaveEvent(ctx, ocsfEvent)
+	saved, err := li.store.SaveRecord(ctx, rec)
 	if err != nil {
 		return "", err
+	}
+
+	recordID := saved.EventID
+	if recordID == "" {
+		recordID = saved.FindingID
 	}
 
 	// Optional case assignment
 	if li.caseID != "" {
-		if err := li.store.AssignEventToCase(ctx, eventID, li.caseID); err != nil {
-			// Not fatal to the whole loop; log and continue
-			li.logger.Printf("assign to case error: %v", err)
+		if saved.EventID != "" {
+			if err := li.store.AssignEventToCase(ctx, saved.EventID, li.caseID); err != nil {
+				// Not fatal to the whole loop; log and continue
+				li.logger.Printf("assign to case error: %v", err)
+			}
+		}
+		if saved.FindingID != "" {
+			if err := li.store.AssignFindingToCase(ctx, saved.FindingID, li.caseID); err != nil {
+				li.logger.Printf("assign finding to case error: %v", err)
+			}
 		}
 	}
 
 	msg := bus.EventMessage{
-		EventID:   eventID,
-		EventType: string(ocsfEvent.GetEventType()),
+		EventID:   recordID,
+		EventType: rec.EventType(),
 		RawJSON:   string(raw),
-		Timestamp: ocsfEvent.Time.Unix(),
+		Timestamp: rec.Timestamp(),
 	}
 	// Best-effort publish to bus (no-op on NullBus)
 	_ = li.bus.PublishEvent(ctx, msg)
@@ -251,7 +263,7 @@ func (li *LiveIngestor) ingestRaw(ctx context.Context, raw []byte) (string, erro
 		li.opts.Enricher.EnqueueEvent(msg)
 	}
 
-	return eventID, nil
+	return recordID, nil
 }
 
 // ensureCase finds or creates the case with the configured CaseTitle.
