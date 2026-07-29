@@ -24,7 +24,6 @@ func TestLocalStubChatBasic(t *testing.T) {
 	ls := &LocalStub{}
 	req := ChatRequest{
 		Persona:   PersonaSOC,
-		MCPMode:   "local",
 		MaxTokens: 200,
 		Messages: []ChatMessage{
 			{Role: "system", Content: "You are a helpful assistant", Timestamp: time.Now()},
@@ -61,7 +60,6 @@ func TestLocalStubChatPersonaVariation(t *testing.T) {
 	makeReq := func(persona, content string) ChatRequest {
 		return ChatRequest{
 			Persona: persona,
-			MCPMode: "local",
 			Messages: []ChatMessage{
 				{Role: "user", Content: content, Timestamp: time.Now()},
 			},

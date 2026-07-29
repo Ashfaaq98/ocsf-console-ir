@@ -102,6 +102,29 @@ security: ## Run security checks
 
 check: fmt vet lint test ## Run all code quality checks
 
+GORELEASER_VERSION ?= v2.17.1
+
+release-check: ## Validate the whole release pipeline without pushing a tag (SKIP=docker to skip images)
+	@command -v goreleaser >/dev/null 2>&1 || { \
+		echo "goreleaser not found. Install the pinned version with:"; \
+		echo "  go install github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)"; \
+		exit 1; \
+	}
+	@command -v syft >/dev/null 2>&1 || { \
+		echo "syft not found (the SBOM step needs it). Install with:"; \
+		echo "  curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b $$(go env GOPATH)/bin"; \
+		exit 1; \
+	}
+	@echo "== Config lint =="
+	@# Reported separately because 'check' exits non-zero on deprecation notices
+	@# alone. The known deprecations (brews, dockers) are tracked in the roadmap;
+	@# the snapshot below is the gate, and it parses the same config, so a genuine
+	@# config error still fails this target.
+	-@goreleaser check
+	@echo "== Full snapshot (nothing is published) =="
+	@echo "   Docker images need a running daemon; use 'make release-check SKIP=docker' without one."
+	goreleaser release --snapshot --clean $(if $(SKIP),--skip=$(SKIP),)
+
 ## Runtime targets
 
 run-dev: ## Run in development mode (standalone, no Redis)

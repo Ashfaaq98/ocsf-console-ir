@@ -196,7 +196,6 @@ func (o *Ollama) SummarizeCase(ctx context.Context, case_ store.Case, events []s
 			},
 		},
 		Persona:   PersonaSOC,
-		MCPMode:   "local",
 		MaxTokens: 700,
 	}
 	resp, err := o.Chat(ctx, req)

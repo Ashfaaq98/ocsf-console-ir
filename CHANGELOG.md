@@ -58,6 +58,10 @@ nothing. Back up `data/console-ir.db` first if you may roll back.
 - **`console-ir list findings`** — and findings are now the default listing. Useful over SSH without
   a TTY, or from a script.
 - `--ingest-dir` makes the watched folder configurable; it was hardcoded.
+- **`make release-check`** validates the entire release pipeline — config, archives, checksums,
+  SBOM, Homebrew formula and container image — without pushing a tag. CI runs it on every pull
+  request. A Go module tag cannot be un-published once the proxy caches it, so the pipeline needed a
+  dry run. Its first run found three real defects, fixed below.
 
 ### Fixed
 
@@ -75,6 +79,19 @@ nothing. Back up `data/console-ir.db` first if you may roll back.
   collapsed to `unknown`.
 - `SearchEvents` selected a stale column list on the full-text path, which failed only on the shipped
   pure-Go driver.
+- **The Homebrew formula was frozen at v0.1.0.** A `skip_upload: "true"` guard, added before the tap
+  repository existed, was never lifted — so v0.1.1 shipped while `brew install` still served v0.1.0.
+  The tap and its token both exist now, so publishing is re-enabled.
+- **Release archives shipped without their documentation.** The bundled file glob was `docs/**/*`,
+  which requires a subdirectory; `docs/` is flat, so it matched nothing and every archive since
+  v0.1.0 omitted the docs.
+
+### Removed
+
+- **MCP scaffolding.** `internal/ui/config/mcp_settings.json` was tracked, carried an `api_key`
+  field, and was read by no code at all. The `MCPMode` request field was set by every LLM provider
+  and read by none of them — its only effect was a canned assistant reply advertising a "remote MCP
+  server" that does not exist.
 
 ### Changed
 
@@ -89,6 +106,9 @@ nothing. Back up `data/console-ir.db` first if you may roll back.
   lookups to finish, so the command does not exit with work still in flight.
 - `--redis` and `--plugins-dir` are no longer advertised on every command; they appear only where
   they are used.
+- **The Docker image is no longer advertised.** Releases still build and publish it, but the README
+  badge is gone until the channel is actually verified and supported — better to under-promise than
+  to point people at something untested.
 - `events.event_type` stores the OCSF category slug (`system`, `findings`, `iam`, `network`,
   `discovery`, `application`, `remediation`, `unmanned`) instead of five hand-picked labels.
 - The IOC view reads persisted observables; regex text-scraping remains only as a fallback for

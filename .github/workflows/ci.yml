@@ -55,3 +55,28 @@ jobs:
             echo "Plugin module: ${plugin_dir}"
             (cd "${plugin_dir}" && go build ./... && go test ./...)
           done < <(find plugins -mindepth 1 -maxdepth 1 -type d | sort)
+
+  release-config:
+    name: Validate release pipeline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install Syft (SBOM step needs it)
+        uses: anchore/sbom-action/download-syft@v0
+
+      # A broken release config is otherwise only discovered when a tag is
+      # pushed — and a Go module tag cannot be taken back once the module proxy
+      # has cached it. Validate on every PR instead.
+      - name: Validate config and build a snapshot
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --snapshot --clean

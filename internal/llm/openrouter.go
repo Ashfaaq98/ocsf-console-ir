@@ -215,7 +215,6 @@ func (o *OpenRouter) SummarizeCase(ctx context.Context, case_ store.Case, events
 			{Role: "user", Content: sb.String(), Timestamp: time.Now()},
 		},
 		Persona:   PersonaSOC,
-		MCPMode:   "remote",
 		MaxTokens: 700,
 	}
 	r, err := o.Chat(ctx, req)

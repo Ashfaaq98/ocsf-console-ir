@@ -510,7 +510,6 @@ func (cm *CaseManagement) handleCopilotInput(event *tcell.EventKey) *tcell.Event
 		return nil
 	case tcell.KeyRune:
 		switch event.Rune() {
-		// Toggle MCP radio via keyboard: 'm' switches local/remote text indicator
 		// Copilot sub-focus navigation: '[' to persona dropdown, ']' back to input
 		case '[':
 			cm.app.SetFocus(cm.copilotDropdown)
@@ -2072,7 +2071,6 @@ func (cm *CaseManagement) processCopilotMessage(message string) {
 		req := llm.ChatRequest{
 			Messages:  msgs,
 			Persona:   cm.currentPersona,
-			MCPMode:   "local",
 			MaxTokens: 500,
 		}
 
@@ -2471,7 +2469,7 @@ func (cm *CaseManagement) executeCaseSummary(prompt string, events []store.Event
 			cost    float64
 		)
 
-		// Prefer Chat (with persona and MCP mode)
+		// Prefer Chat (persona-aware) over the plain completion path
 		req := llm.ChatRequest{
 			Messages: []llm.ChatMessage{{
 				Role:      "user",
@@ -2480,7 +2478,6 @@ func (cm *CaseManagement) executeCaseSummary(prompt string, events []store.Event
 				Persona:   cm.currentPersona,
 			}},
 			Persona:   cm.currentPersona,
-			MCPMode:   "local",
 			MaxTokens: 700,
 		}
 		resp, err := cm.llm.Chat(cm.ctx, req)

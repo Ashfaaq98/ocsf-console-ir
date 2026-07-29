@@ -11,7 +11,6 @@
 <p align="center">
   <a href="https://github.com/Ashfaaq98/ocsf-console-ir/releases"><img src="https://img.shields.io/github/v/release/Ashfaaq98/ocsf-console-ir?display_name=tag" alt="Release" /></a>
   <a href="https://github.com/Ashfaaq98/ocsf-console-ir/actions/workflows/ci.yml"><img src="https://github.com/Ashfaaq98/ocsf-console-ir/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://github.com/Ashfaaq98/ocsf-console-ir/pkgs/container/console-ir"><img src="https://img.shields.io/badge/docker-ghcr.io%2Fashfaaq98%2Fconsole--ir-2496ED?logo=docker&logoColor=white" alt="Docker" /></a>
   <a href="go.mod"><img src="https://img.shields.io/badge/go-%E2%89%A51.23-00ADD8?logo=go&logoColor=white" alt="Go" /></a>
   <a href="https://github.com/Ashfaaq98/ocsf-console-ir/releases"><img src="https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-lightgrey" alt="Platforms" /></a>
   <a href="https://schema.ocsf.io/"><img src="https://img.shields.io/badge/OCSF-native-6f42c1" alt="OCSF" /></a>
@@ -73,7 +72,7 @@ the way the schema defines them.
 | Activity classes (System, IAM, Network, Discovery, Application, …) | An **event**: searchable telemetry and case evidence |
 
 > **Status:** early and evolving (v0.2.x). The TUI workflow is the supported path today.
-> Headless/Docker serving and the external plugins are experimental (see notes below).
+> Headless mode and the external threat-intel plugins are experimental (see notes below).
 
 ## Install
 
