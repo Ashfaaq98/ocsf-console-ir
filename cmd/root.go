@@ -29,7 +29,14 @@ Features:
 - Terminal-based user interface for case management
 - In-process enrichment plugins (optional Redis Streams for distributed mode)
 - SQLite storage with full-text search
-- Extensible enrichment pipeline`,
+- Extensible enrichment pipeline
+
+Run with no arguments to open the terminal UI.`,
+	// Running the bare binary opens the TUI. NoArgs matters: without it a typo
+	// like "console-ir ingst file.jsonl" would silently launch the UI instead of
+	// reporting an unknown command.
+	Args: cobra.NoArgs,
+	RunE: runServe,
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
@@ -44,15 +51,15 @@ func init() {
 	// Global flags
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.console-ir.yaml)")
 	rootCmd.PersistentFlags().StringVar(&dbPath, "db", "./data/console-ir.db", "SQLite database path")
-	rootCmd.PersistentFlags().StringVar(&redisURL, "redis", "", "Redis URL for distributed mode; empty (default) runs standalone with in-process enrichment and no Redis")
 	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "Log level (debug, info, warn, error)")
-	rootCmd.PersistentFlags().StringVar(&pluginsDir, "plugins-dir", "./plugins", "Directory containing plugins")
+
+	// --redis and --plugins-dir are registered only on the commands that use
+	// them (the TUI and ingest); they were previously advertised on every
+	// command, including version and list, which touch neither.
 
 	// Bind flags to viper
 	viper.BindPFlag("database.path", rootCmd.PersistentFlags().Lookup("db"))
-	viper.BindPFlag("redis.url", rootCmd.PersistentFlags().Lookup("redis"))
 	viper.BindPFlag("log.level", rootCmd.PersistentFlags().Lookup("log-level"))
-	viper.BindPFlag("plugins.dir", rootCmd.PersistentFlags().Lookup("plugins-dir"))
 }
 
 // initConfig reads in config file and ENV variables if set.
@@ -103,18 +110,29 @@ func GetConfig() Config {
 		}
 	}
 
+	// redisURL and pluginsDir are bound to per-command flags rather than to
+	// viper, so an explicitly passed flag wins and config/defaults fill the rest.
+	redis := redisURL
+	if redis == "" {
+		redis = viper.GetString("redis.url")
+	}
+	plugDir := pluginsDir
+	if plugDir == "" {
+		plugDir = viper.GetString("plugins.dir")
+	}
+
 	return Config{
 		Database: DatabaseConfig{
 			Path: viper.GetString("database.path"),
 		},
 		Redis: RedisConfig{
-			URL: viper.GetString("redis.url"),
+			URL: redis,
 		},
 		Log: LogConfig{
 			Level: viper.GetString("log.level"),
 		},
 		Plugins: PluginsConfig{
-			Dir:      viper.GetString("plugins.dir"),
+			Dir:      plugDir,
 			External: external,
 		},
 	}

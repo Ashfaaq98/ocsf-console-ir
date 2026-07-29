@@ -20,35 +20,40 @@ var (
 	inputFile   string
 	batchSize   int
 	skipInvalid bool
+	noEnrich    bool
+	ingestWatch bool
+	ingestCase  string
+	ingestGlobs string
 )
 
 // ingestCmd represents the ingest command
 var ingestCmd = &cobra.Command{
-	Use:   "ingest [file]",
-	Short: "Ingest OCSF events from file or stdin",
-	Long: `Ingest OCSF events from a file or stdin. Supports JSON and JSONL formats.
+	Use:   "ingest [path]",
+	Short: "Ingest OCSF events from a file, a directory, or stdin",
+	Long: `Ingest OCSF detections and events. Supports JSON and JSONL.
 
-The ingest command:
-1. Parses OCSF events from the input source
-2. Normalizes them to the internal event format
-3. Saves events to the SQLite database
+The path decides what happens, the way cp and tar work:
 
-Note: this batch import does not run enrichment. Enrichment (GeoIP, WHOIS)
-runs in the TUI (console-ir serve). Use ingest to pre-load events, then open
-them in the TUI — or drop files into data/incoming/ while serve is running.
+  a file        ingest that file
+  a directory   ingest every matching file in it (--watch to keep tailing)
+  -             read from stdin
+
+Records are enriched (GeoIP, WHOIS) as they are ingested. Use --no-enrich to
+skip the lookups for a bulk load.
 
 Examples:
-  # Ingest from file
+  # A file
   console-ir ingest events.jsonl
 
-  # Ingest from stdin
+  # A directory, then keep watching it
+  console-ir ingest ./incoming
+  console-ir ingest ./incoming --watch
+
+  # From stdin
   cat events.json | console-ir ingest -
 
-  # Ingest with custom batch size
-  console-ir ingest --batch-size 100 events.jsonl
-
-  # Skip invalid events instead of failing
-  console-ir ingest --skip-invalid events.jsonl`,
+  # Bulk load without enrichment lookups
+  console-ir ingest --no-enrich big-export.jsonl`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runIngest,
 }
@@ -56,65 +61,85 @@ Examples:
 func init() {
 	rootCmd.AddCommand(ingestCmd)
 
-	ingestCmd.Flags().StringVarP(&inputFile, "file", "f", "", "Input file path (use '-' for stdin)")
 	ingestCmd.Flags().IntVar(&batchSize, "batch-size", 50, "Number of events to process in each batch")
 	ingestCmd.Flags().BoolVar(&skipInvalid, "skip-invalid", false, "Skip invalid events instead of failing")
+	ingestCmd.Flags().BoolVar(&noEnrich, "no-enrich", false, "Skip GeoIP/WHOIS enrichment")
+	ingestCmd.Flags().BoolVar(&ingestWatch, "watch", false, "Keep watching a directory for new records (directories only)")
+	ingestCmd.Flags().StringVar(&ingestCase, "case", "", "Attach ingested records to a case with this title")
+	ingestCmd.Flags().StringVar(&ingestGlobs, "pattern", "*.jsonl,*.json", "Comma-separated glob patterns to match in a directory")
+
+	// Redis and plugin discovery only matter where enrichment or the bus run.
+	ingestCmd.Flags().StringVar(&redisURL, "redis", "", "Redis URL for distributed mode; empty (default) runs standalone")
+	ingestCmd.Flags().StringVar(&pluginsDir, "plugins-dir", "./plugins", "Directory containing plugins")
+
+	// Superseded by the positional argument; kept so existing scripts keep working.
+	ingestCmd.Flags().StringVarP(&inputFile, "file", "f", "", "Input file path (deprecated: pass the path as an argument)")
+	_ = ingestCmd.Flags().MarkDeprecated("file", "pass the path as an argument instead: console-ir ingest <path>")
 }
 
 func runIngest(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	config := GetConfig()
 
-	// Determine input source
-	var input io.Reader
-	var inputName string
-
+	target := inputFile
 	if len(args) > 0 {
-		inputFile = args[0]
+		target = args[0]
 	}
 
-	if inputFile == "" || inputFile == "-" {
-		input = os.Stdin
-		inputName = "stdin"
-	} else {
-		file, err := os.Open(inputFile)
-		if err != nil {
-			return fmt.Errorf("failed to open input file: %w", err)
-		}
-		defer file.Close()
-		input = file
-		inputName = inputFile
-	}
-
-	// Initialize components
 	logger := log.New(os.Stderr, "[ingest] ", log.LstdFlags)
-	logger.Printf("Starting ingestion from %s", inputName)
 
-	// Initialize store (resolve DB path relative to current working directory, same as serve)
 	baseDir := getWorkingDir()
 	resolvedDBPath := resolvePathRelativeToBase(baseDir, config.Database.Path)
-	logger.Printf("Using database at %s", resolvedDBPath)
-
-	store, err := store.NewStore(resolvedDBPath)
+	st, err := store.NewStore(resolvedDBPath)
 	if err != nil {
 		return fmt.Errorf("failed to initialize store: %w", err)
 	}
-	defer store.Close()
+	defer st.Close()
 
-	// Initialize bus (Redis or Null)
+	// One enricher for the whole run, so its worker pool and counters are shared.
+	var enricher *syncEnricher
+	if !noEnrich {
+		enricher = newSyncEnricher(st, logger)
+		if err := enricher.Start(ctx); err != nil {
+			return fmt.Errorf("failed to start enrichment: %w", err)
+		}
+		defer enricher.Stop()
+	}
+
+	// A directory is a different shape of work: the folder ingestor already
+	// handles globbing, offsets and tailing, so reuse it rather than
+	// reimplementing directory walking here.
+	if isDirectory(target) {
+		return runDirectoryIngest(ctx, config, st, enricher, target, logger)
+	}
+
+	var input io.Reader
+	var inputName string
+	if target == "" || target == "-" {
+		input = os.Stdin
+		inputName = "stdin"
+	} else {
+		file, err := os.Open(target)
+		if err != nil {
+			return fmt.Errorf("failed to open input: %w", err)
+		}
+		defer file.Close()
+		input = file
+		inputName = target
+	}
+
+	logger.Printf("Ingesting from %s into %s", inputName, resolvedDBPath)
+
 	eventBus := bus.NewBus(config.Redis.URL, logger)
 	defer eventBus.Close()
 
-	// Initialize OCSF parser
 	parser := ingest.NewParser()
 
-	// Process events
-	stats, err := processEvents(ctx, input, parser, store, eventBus, logger)
+	stats, err := processEvents(ctx, input, parser, st, eventBus, enricher, logger)
 	if err != nil {
 		return fmt.Errorf("failed to process events: %w", err)
 	}
 
-	// Print statistics
 	logger.Printf("Ingestion completed:")
 	logger.Printf("  Total events processed: %d", stats.TotalEvents)
 	logger.Printf("  Successfully ingested: %d", stats.SuccessfulEvents)
@@ -122,10 +147,72 @@ func runIngest(cmd *cobra.Command, args []string) error {
 	logger.Printf("  Skipped events: %d", stats.SkippedEvents)
 	logger.Printf("  Processing time: %v", stats.ProcessingTime)
 
+	// Enrichment is scheduled per record but runs concurrently; wait for it so
+	// the command does not exit with lookups still in flight.
+	if enricher != nil {
+		applied, failed := enricher.Wait()
+		logger.Printf("  Enrichments applied: %d (failed: %d)", applied, failed)
+	}
+
 	if stats.FailedEvents > 0 && !skipInvalid {
 		return fmt.Errorf("ingestion completed with %d failed events", stats.FailedEvents)
 	}
 
+	return nil
+}
+
+// isDirectory reports whether the target path is an existing directory.
+func isDirectory(path string) bool {
+	if path == "" || path == "-" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+// runDirectoryIngest ingests every matching file in a directory, optionally
+// tailing it, reusing the same folder ingestor the TUI runs.
+func runDirectoryIngest(ctx context.Context, config Config, st *store.Store,
+	enricher *syncEnricher, dir string, logger *log.Logger) error {
+
+	eventBus := bus.NewBus(config.Redis.URL, logger)
+	defer eventBus.Close()
+
+	var patterns []string
+	for _, p := range strings.Split(ingestGlobs, ",") {
+		if s := strings.TrimSpace(p); s != "" {
+			patterns = append(patterns, s)
+		}
+	}
+	if len(patterns) == 0 {
+		patterns = []string{"*.jsonl", "*.json"}
+	}
+
+	opts := ingest.FolderOptions{
+		Dir:         dir,
+		Watch:       ingestWatch,
+		Patterns:    patterns,
+		CaseTitle:   ingestCase,
+		Logger:      logger,
+		TailFromEnd: false,
+	}
+	if enricher != nil {
+		opts.Enricher = enricher
+	}
+
+	logger.Printf("Ingesting directory %s (watch=%v, patterns=%v)", dir, ingestWatch, patterns)
+
+	ingestor := ingest.NewFolderIngestor(ingest.NewParser(), st, eventBus, opts)
+	if err := ingestor.Run(ctx); err != nil && err != context.Canceled {
+		return fmt.Errorf("directory ingest failed: %w", err)
+	}
+
+	if enricher != nil {
+		applied, failed := enricher.Wait()
+		logger.Printf("Enrichments applied: %d (failed: %d)", applied, failed)
+	}
+
+	logger.Printf("Directory ingest completed")
 	return nil
 }
 
@@ -140,7 +227,7 @@ type IngestStats struct {
 
 // processEvents processes events from the input reader
 func processEvents(ctx context.Context, input io.Reader, parser *ingest.Parser,
-	store *store.Store, eventBus bus.Bus, logger *log.Logger) (*IngestStats, error) {
+	store *store.Store, eventBus bus.Bus, enricher *syncEnricher, logger *log.Logger) (*IngestStats, error) {
 
 	startTime := time.Now()
 	stats := &IngestStats{}
@@ -176,7 +263,7 @@ func processEvents(ctx context.Context, input io.Reader, parser *ingest.Parser,
 
 		// Process batch when full
 		if len(batch) >= batchSize {
-			batchStats := processBatch(ctx, batch, parser, store, eventBus, logger, lineNumber-len(batch)+1)
+			batchStats := processBatch(ctx, batch, parser, store, eventBus, enricher, logger, lineNumber-len(batch)+1)
 			updateStats(stats, batchStats)
 			batch = batch[:0] // Reset batch
 		}
@@ -184,7 +271,7 @@ func processEvents(ctx context.Context, input io.Reader, parser *ingest.Parser,
 
 	// Process remaining events in batch
 	if len(batch) > 0 {
-		batchStats := processBatch(ctx, batch, parser, store, eventBus, logger, lineNumber-len(batch)+1)
+		batchStats := processBatch(ctx, batch, parser, store, eventBus, enricher, logger, lineNumber-len(batch)+1)
 		updateStats(stats, batchStats)
 	}
 
@@ -198,14 +285,14 @@ func processEvents(ctx context.Context, input io.Reader, parser *ingest.Parser,
 
 // processBatch processes a batch of events
 func processBatch(ctx context.Context, batch [][]byte, parser *ingest.Parser,
-	store *store.Store, eventBus bus.Bus, logger *log.Logger, startLine int) *IngestStats {
+	store *store.Store, eventBus bus.Bus, enricher *syncEnricher, logger *log.Logger, startLine int) *IngestStats {
 
 	stats := &IngestStats{}
 
 	for i, eventData := range batch {
 		lineNumber := startLine + i
 
-		if err := processEvent(ctx, eventData, parser, store, eventBus, lineNumber); err != nil {
+		if err := processEvent(ctx, eventData, parser, store, eventBus, enricher, lineNumber); err != nil {
 			stats.FailedEvents++
 			if skipInvalid {
 				logger.Printf("Skipping invalid event at line %d: %v", lineNumber, err)
@@ -225,7 +312,7 @@ func processBatch(ctx context.Context, batch [][]byte, parser *ingest.Parser,
 
 // processEvent processes a single event
 func processEvent(ctx context.Context, eventData []byte, parser *ingest.Parser,
-	store *store.Store, eventBus bus.Bus, lineNumber int) error {
+	store *store.Store, eventBus bus.Bus, enricher *syncEnricher, lineNumber int) error {
 
 	// Parse and route: Findings-category records and alertable events become
 	// findings; everything else stays an event.
@@ -256,6 +343,12 @@ func processEvent(ctx context.Context, eventData []byte, parser *ingest.Parser,
 	if err := eventBus.PublishEvent(ctx, eventMsg); err != nil {
 		// Log the error but don't fail the ingestion
 		log.Printf("Warning: failed to publish event %s to bus: %v", recordID, err)
+	}
+
+	// Enrich in-process. Events carry the indicators GeoIP and WHOIS act on;
+	// findings are triaged on their own merits and are not enriched here.
+	if enricher != nil && saved.EventID != "" {
+		enricher.EnqueueEvent(eventMsg)
 	}
 
 	return nil

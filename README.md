@@ -91,26 +91,44 @@ cd ocsf-console-ir && make build
 
 ## Quick start
 
-Load the shipped sample and open it in the TUI:
-
 ```bash
-mkdir -p data/incoming
-cp examples/sample-events.jsonl data/incoming/
-./bin/console-ir serve
+console-ir demo
 ```
 
-The shipped sample contains a Detection Finding, so Console-IR opens on the **findings queue**.
-From there:
+That loads a sample incident into a **throwaway database** and opens the TUI. It never touches your
+real data, so it is safe to run first and safe to run again.
+
+The sample is one coherent incident — a phishing attachment leads to encoded PowerShell, credential
+access, and C2 beaconing on a single host — so the findings queue, the case model, and the indicator
+pivot all have something real to show.
+
+When you want your own data:
+
+```bash
+console-ir ingest events.jsonl   # a file
+console-ir ingest ./incoming     # a directory
+console-ir                       # open the TUI
+```
+
+Console-IR opens on the **findings queue** whenever detections are waiting. From there:
 
 - **Enter** — open the finding: evidence artifacts, the events it came from, and its indicators
 - **`s`** set status, **`v`** set verdict, **`e`** escalate it into a case
 - **`A`** — switch to **ALL EVENTS** and open one to see **GeoIP/WHOIS enrichment** attached
   (press **`r`** to refresh as async lookups land)
 
-To ingest your own data, drop OCSF `.jsonl` files into `data/incoming/`, either before launch or
-while running.
-
 [![TUI walkthrough](assets/demo.gif)](assets/demo.mp4)
+
+## Commands
+
+```
+console-ir                    open the TUI
+console-ir ingest <path|->    a file, a directory, or stdin  (--watch, --no-enrich)
+console-ir demo               sample incident in a throwaway database
+console-ir list               findings | cases | events   (works without a TTY)
+console-ir reset              clear the database
+console-ir version
+```
 
 ## Keys
 
@@ -139,13 +157,32 @@ Navigation follows vim conventions: `j`/`k` move, `h`/`l` change pane, `g`/`G` j
 
 ## Ingesting events
 
-1. **Folder drop-in (recommended):** drop OCSF `.jsonl`/`.json` files into `data/incoming/`;
-   they're ingested and enriched automatically. Files staged before launch are picked up on
-   startup. See [internal/ingest/folder.go](internal/ingest/folder.go).
-2. **CLI batch:** `./bin/console-ir ingest <file>` pre-loads a file into the store. Note that batch
-   import does not run enrichment; open the events in the TUI for that. See [cmd/ingest.go](cmd/ingest.go).
-3. **HTTP endpoint** *(experimental)*: accepts POSTed events, localhost by default, with a bearer
-   token required on non-loopback binds. See [internal/ingest/http_ingest.go](internal/ingest/http_ingest.go).
+One command, and the path decides what happens — the way `cp` and `tar` work:
+
+```bash
+console-ir ingest events.jsonl        # a file
+console-ir ingest ./incoming          # every matching file in a directory
+console-ir ingest ./incoming --watch  # ...and keep tailing it
+cat events.json | console-ir ingest - # stdin
+```
+
+Records are enriched (GeoIP, WHOIS) as they arrive. Pass `--no-enrich` to skip the lookups on a bulk
+load, `--case "Title"` to attach everything to a case.
+
+**While the TUI is running**, files dropped into the watched folder are picked up automatically:
+
+```bash
+console-ir --ingest-dir ./incoming    # default is ./incoming
+```
+
+**Over HTTP** *(experimental)* — POSTed payloads are written into the watched folder and ingested
+from there. Localhost by default; a bearer token is required on non-loopback binds:
+
+```bash
+console-ir --http-ingest-enable --http-ingest-bind 127.0.0.1:8081
+```
+
+See [internal/ingest/](internal/ingest/) for the implementations.
 
 ## Enrichment & plugins
 
@@ -184,8 +221,11 @@ plugins, not a requirement.
   findings. Press `A` for all events, or drop `examples/sample-events.jsonl` into `data/incoming/`
   for a sample that includes one. Note the queue hides already-triaged findings by default —
   press `o` to show everything.
-- **Empty event list?** Drop `examples/sample-events.jsonl` into `data/incoming/` and press `r`.
-- **TUI won't start?** Use a native terminal; it needs a real TTY. (`--no-tui` is experimental and does not ingest.)
+- **Empty event list?** Run `console-ir demo` to see the tool with data in it, or
+  `console-ir ingest examples/sample-events.jsonl` to load the shipped sample into your own database.
+- **Dropped a file in and nothing happened?** The watched folder is `./incoming` (relative to where
+  you launched). Check with `console-ir --help`, or point it elsewhere with `--ingest-dir`.
+- **TUI won't start?** Use a native terminal; it needs a real TTY. (`--no-tui` is experimental and does not ingest.) `console-ir list` works anywhere.
 - **Enrichment missing?** It's asynchronous, so press `r` to refresh an event's detail once WHOIS/GeoIP lookups complete.
 - **Build issues?** Run `go mod download` then `make build`.
 - **Redis errors?** You don't need Redis unless you explicitly pass `--redis ...`.

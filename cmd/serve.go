@@ -13,8 +13,6 @@ import (
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/bus"
-	"github.com/Ashfaaq98/ocsf-console-ir/internal/enrich/geoip"
-	"github.com/Ashfaaq98/ocsf-console-ir/internal/enrich/whois"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ingest"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/plugins"
@@ -22,6 +20,7 @@ import (
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ui"
 	"github.com/gdamore/tcell/v2"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 var (
@@ -35,12 +34,24 @@ var (
 	httpIngestRPS    int
 	httpIngestBurst  int
 	httpIngestDir    string
+
+	// ingestDir is the drop folder watched while the TUI runs.
+	ingestDir string
 )
 
-// serveCmd represents the serve command
+// defaultIngestDir sits beside the database directory rather than inside it.
+// The database is precious state written only by the app; the inbox is a
+// throwaway landing zone written by users and pipelines. Co-locating them made
+// "clear the inbox" and "destroy the database" the same rm -rf.
+const defaultIngestDir = "./incoming"
+
+// serveCmd is the pre-v0.2 name for launching the TUI, kept as a hidden alias.
+// Running the bare binary is now the documented way in — "serve" implied a
+// daemon, which this is not.
 var serveCmd = &cobra.Command{
-	Use:   "serve",
-	Short: "Start the terminal UI and enrichment pipeline",
+	Use:    "serve",
+	Hidden: true,
+	Short:  "Start the terminal UI and enrichment pipeline (alias for running console-ir with no arguments)",
 	Long: `Start the Console-IR server which includes:
 
 1. Terminal User Interface (TUI) for case management
@@ -68,16 +79,31 @@ Examples:
 func init() {
 	rootCmd.AddCommand(serveCmd)
 
-	serveCmd.Flags().BoolVar(&noTUI, "no-tui", false, "Run in headless mode without TUI")
-	serveCmd.Flags().BoolVar(&forceTUI, "force-tui", false, "Force TUI mode even in unsupported terminals")
+	// Every entry point that ends up in runServe takes the same flags, bound to
+	// the same variables, so they all behave identically.
+	addTUIFlags(rootCmd.Flags())
+	addTUIFlags(serveCmd.Flags())
+	addTUIFlags(demoCmd.Flags())
+}
 
-	// HTTP ingestion flags
-	serveCmd.Flags().BoolVar(&httpIngestEnable, "http-ingest-enable", false, "Enable HTTP ingestion server")
-	serveCmd.Flags().StringVar(&httpIngestBind, "http-ingest-bind", "127.0.0.1:8081", "Bind address for HTTP ingestion")
-	serveCmd.Flags().StringVar(&httpIngestToken, "http-ingest-token", os.Getenv("INGEST_TOKEN"), "Bearer token required for HTTP ingestion (env: INGEST_TOKEN)")
-	serveCmd.Flags().IntVar(&httpIngestRPS, "http-ingest-rps", 10, "Max HTTP ingestion requests per second")
-	serveCmd.Flags().IntVar(&httpIngestBurst, "http-ingest-burst", 20, "Burst size for HTTP ingestion rate limiter")
-	serveCmd.Flags().StringVar(&httpIngestDir, "http-ingest-dir", "data/incoming", "Directory to write ingested payloads")
+// addTUIFlags registers the flags runServe reads. Registering them per command
+// rather than persistently keeps them off `version` and `list`, which have no
+// TUI, no plugins and no bus.
+func addTUIFlags(fs *pflag.FlagSet) {
+	fs.BoolVar(&noTUI, "no-tui", false, "Run in headless mode without TUI")
+	fs.BoolVar(&forceTUI, "force-tui", false, "Force TUI mode even in unsupported terminals")
+	fs.StringVar(&ingestDir, "ingest-dir", defaultIngestDir, "Directory watched for dropped OCSF files")
+
+	fs.BoolVar(&httpIngestEnable, "http-ingest-enable", false, "Enable HTTP ingestion server")
+	fs.StringVar(&httpIngestBind, "http-ingest-bind", "127.0.0.1:8081", "Bind address for HTTP ingestion")
+	fs.StringVar(&httpIngestToken, "http-ingest-token", os.Getenv("INGEST_TOKEN"), "Bearer token required for HTTP ingestion (env: INGEST_TOKEN)")
+	fs.IntVar(&httpIngestRPS, "http-ingest-rps", 10, "Max HTTP ingestion requests per second")
+	fs.IntVar(&httpIngestBurst, "http-ingest-burst", 20, "Burst size for HTTP ingestion rate limiter")
+	fs.StringVar(&httpIngestDir, "http-ingest-dir", "", "Directory HTTP ingestion writes to (defaults to --ingest-dir)")
+
+	// Only the TUI path runs enrichment plugins or the optional bus.
+	fs.StringVar(&redisURL, "redis", "", "Redis URL for distributed mode; empty (default) runs standalone")
+	fs.StringVar(&pluginsDir, "plugins-dir", "./plugins", "Directory containing plugins")
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
@@ -151,13 +177,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	// Register embedded (in-process) core enrichments. These run inside the
 	// binary via the plugin manager's enrichment queue, with no Redis broker
-	// or subprocess required.
-	if err := pluginManager.GetRegistry().RegisterCorePlugin(whois.New(pluginLogger)); err != nil {
-		logger.Printf("Failed to register whois enrichment: %v", err)
-	}
-	if err := pluginManager.GetRegistry().RegisterCorePlugin(geoip.New(pluginLogger)); err != nil {
-		logger.Printf("Failed to register geoip enrichment: %v", err)
-	}
+	// or subprocess required. The set comes from coreEnrichers so the
+	// queue-driven and one-shot ingest paths enrich with the same plugins.
+	registerCoreEnrichers(pluginManager, pluginLogger)
 
 	// Start plugin manager
 	if err := pluginManager.Start(ctx); err != nil {
@@ -194,6 +216,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	// Optional HTTP ingestion server (runs alongside services and TUI/headless)
 	if httpIngestEnable {
+		if strings.TrimSpace(httpIngestDir) == "" {
+			httpIngestDir = resolvePathRelativeToBase(baseDir, ingestDir)
+		}
 		httpLogger := svcLogger // silent when TUI is active to avoid corrupting screen
 		opts := ingest.HTTPIngestOptions{
 			Bind:   httpIngestBind,
@@ -275,8 +300,8 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 			// Skip auto-creating any cases; only users can create cases via the TUI.
 
-			// Start background folder ingestion for TUI (watch relative CWD path)
-			ingestDir := "data/incoming"
+			// Start background folder ingestion for the TUI.
+			ingestDir := resolvePathRelativeToBase(baseDir, ingestDir)
 			if err := os.MkdirAll(ingestDir, 0755); err != nil {
 				logger.Printf("Warning: Could not create ingest directory %s: %v", ingestDir, err)
 			}

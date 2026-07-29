@@ -20,6 +20,13 @@ than a wall of log lines, and models what OCSF actually says about investigation
 
 ### Upgrading from 0.1.x
 
+**The CLI changed.** `console-ir serve` becomes plain `console-ir` (the old name still works, hidden).
+`ingest-folder` is gone — `console-ir ingest <path>` now takes a file, a directory, or `-` for stdin.
+**The watched drop folder moved from `data/incoming/` to `./incoming/`**; move any files you have
+staged there, or pass `--ingest-dir data/incoming` to keep the old location. The inbox is a throwaway
+landing zone and the database is precious state; keeping them in one directory made "clear the inbox"
+and "destroy the database" the same `rm -rf`.
+
 Opening an existing database migrates it in place: OCSF identity columns are added and backfilled
 from stored raw events, observables are extracted into an indexed table, and `event_type` is
 rewritten to OCSF category slugs. Nothing is lost and the migration is safe to re-run.
@@ -45,6 +52,12 @@ nothing. Back up `data/console-ir.db` first if you may roll back.
   suspected-breach, and external ticket links.
 - Class-level filtering (`EventFilter`, `FindingFilter`) and a `Keys` reference in the README.
 - `scripts/gen-ocsf-classes.sh` regenerates the vendored OCSF registry.
+- **`console-ir demo`** loads a sample incident into a throwaway temporary database and opens the
+  TUI. The data is embedded in the binary, so it works from a fresh install with no checkout, never
+  touches your real database, and is safe to re-run.
+- **`console-ir list findings`** — and findings are now the default listing. Useful over SSH without
+  a TTY, or from a script.
+- `--ingest-dir` makes the watched folder configurable; it was hardcoded.
 
 ### Fixed
 
@@ -65,6 +78,17 @@ nothing. Back up `data/console-ir.db` first if you may roll back.
 
 ### Changed
 
+- **Running the bare binary opens the TUI.** `console-ir serve` implied a daemon, which this is not;
+  it remains as a hidden alias so existing scripts and the demo recording keep working.
+- **`ingest` and `ingest-folder` are one command.** `console-ir ingest <path>` resolves a file, a
+  directory (`--watch` to tail), or `-` for stdin. `-f/--file` is deprecated in favour of the
+  positional argument.
+- **`ingest` now enriches by default.** Batch import previously skipped GeoIP/WHOIS silently while
+  the TUI's watcher enriched, so the same verb behaved differently depending on how you invoked it.
+  Use `--no-enrich` for bulk loads. One-shot ingestion enriches synchronously and waits for the
+  lookups to finish, so the command does not exit with work still in flight.
+- `--redis` and `--plugins-dir` are no longer advertised on every command; they appear only where
+  they are used.
 - `events.event_type` stores the OCSF category slug (`system`, `findings`, `iam`, `network`,
   `discovery`, `application`, `remediation`, `unmanned`) instead of five hand-picked labels.
 - The IOC view reads persisted observables; regex text-scraping remains only as a fallback for

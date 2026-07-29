@@ -47,6 +47,7 @@ Examples:
 func init() {
 	rootCmd.AddCommand(resetCmd)
 
+	resetCmd.Flags().StringVar(&redisURL, "redis", "", "Redis URL for distributed mode; empty (default) runs standalone")
 	resetCmd.Flags().BoolVarP(&confirmReset, "yes", "y", false, "Automatically confirm reset operation")
 	resetCmd.Flags().BoolVar(&resetRedis, "redis-only", false, "Reset only Redis data")
 	resetCmd.Flags().BoolVar(&resetDB, "db-only", false, "Reset only database")

@@ -12,26 +12,31 @@ import (
 
 // listCmd represents the list command
 var listCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List cases and events",
-	Long: `List cases and events from the database in a simple text format.
-This command works in any terminal environment and provides an alternative
-to the TUI interface when terminal capabilities are limited.
+	Use:   "list [findings|cases|events]",
+	Short: "List findings, cases and events",
+	Long: `List findings, cases and events from the database in plain text.
+
+Works in any terminal, including ones the TUI cannot run in, and is the path to
+use over SSH without a TTY or from a script.
 
 Examples:
-  # List all cases
+  # Findings awaiting triage (the default)
+  console-ir list
+
+  # Everything, including triaged findings
+  console-ir list findings --all
+
+  # Cases
   console-ir list cases
 
-  # List events for a specific case
-  console-ir list events --case-id case_123
-
-  # List recent events
-  console-ir list events --limit 10`,
+  # Events for a specific case
+  console-ir list events --case-id case_123`,
 	RunE: runList,
 }
 
 var (
 	listType string
+	listAll  bool
 	caseID   string
 	limit    int
 	sinceStr string
@@ -41,7 +46,8 @@ var (
 func init() {
 	rootCmd.AddCommand(listCmd)
 
-	listCmd.Flags().StringVar(&listType, "type", "cases", "What to list: cases, events")
+	listCmd.Flags().StringVar(&listType, "type", "findings", "What to list: findings, cases, events")
+	listCmd.Flags().BoolVar(&listAll, "all", false, "Include findings that have already been triaged")
 	listCmd.Flags().StringVar(&caseID, "case-id", "", "Case ID for listing events")
 	listCmd.Flags().IntVar(&limit, "limit", 20, "Maximum number of items to show")
 	listCmd.Flags().StringVar(&sinceStr, "since", "", "Filter events since RFC3339 time, e.g. 2025-08-26T20:00:00Z")
@@ -68,7 +74,9 @@ func runList(cmd *cobra.Command, args []string) error {
 	}
 
 	switch targetType {
-	case "cases":
+	case "findings", "finding":
+		return listFindings(ctx, store, limit, listAll)
+	case "cases", "case":
 		return listCases(ctx, store)
 	case "events":
 		// Parse optional time filters
@@ -90,6 +98,55 @@ func runList(cmd *cobra.Command, args []string) error {
 	default:
 		return fmt.Errorf("unknown list type: %s (use 'cases' or 'events')", targetType)
 	}
+}
+
+// listFindings prints the triage queue. Findings are the default listing
+// because they are what an analyst works; events are the corroboration beneath.
+func listFindings(ctx context.Context, st *store.Store, limit int, all bool) error {
+	filter := store.FindingFilter{Limit: limit, OpenOnly: !all}
+
+	findings, err := st.GetFindings(ctx, filter)
+	if err != nil {
+		return fmt.Errorf("failed to list findings: %w", err)
+	}
+	total, err := st.CountFindings(ctx, filter)
+	if err != nil {
+		total = len(findings)
+	}
+
+	scope := "open"
+	if all {
+		scope = "all"
+	}
+	fmt.Printf("Findings (%s): %d\n\n", scope, total)
+
+	if len(findings) == 0 {
+		if !all {
+			fmt.Println("No open findings. Use --all to include triaged ones.")
+		} else {
+			fmt.Println("No findings. Findings come from OCSF Findings classes (class_uid 2001-2008)")
+			fmt.Println("or events flagged is_alert; plain telemetry produces events instead.")
+		}
+		return nil
+	}
+
+	fmt.Printf("%-8s  %-12s  %-15s  %5s  %s\n", "SEVERITY", "STATUS", "VERDICT", "RISK", "TITLE")
+	for _, f := range findings {
+		verdict := f.VerdictName()
+		if verdict == "" {
+			verdict = "-"
+		}
+		risk := "-"
+		if f.RiskScore > 0 {
+			risk = fmt.Sprintf("%d", f.RiskScore)
+		}
+		title := f.Title
+		if len(title) > 60 {
+			title = title[:57] + "..."
+		}
+		fmt.Printf("%-8s  %-12s  %-15s  %5s  %s\n", f.Severity, f.StatusName(), verdict, risk, title)
+	}
+	return nil
 }
 
 func listCases(ctx context.Context, store *store.Store) error {
