@@ -3,7 +3,9 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/paths"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 var (
@@ -55,12 +57,20 @@ func defaultValue(value, fallback string) string {
 	return value
 }
 
-// versionCmd prints detailed version information.
+// versionCmd prints version information and the resolved runtime paths.
+// The paths are here because "where is my database?" is otherwise only
+// answerable by reading the source — and since the defaults are per-user rather
+// than per-directory, being able to confirm them from any working directory is
+// how you check the two agree.
 var versionCmd = &cobra.Command{
 	Use:   "version",
-	Short: "Print version information",
+	Short: "Print version information and resolved runtime paths",
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Printf("console-ir %s\n", buildVersionString(GetVersion(), getCommit(), GetBuildTime()))
+		dirs := paths.Current()
+		fmt.Printf("\ndatabase  %s\n", viper.GetString("database.path"))
+		fmt.Printf("config    %s\n", dirs.Config)
+		fmt.Printf("logs      %s\n", dirs.LogFile(logName))
 	},
 }
 

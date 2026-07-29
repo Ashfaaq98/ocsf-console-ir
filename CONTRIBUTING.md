@@ -44,16 +44,30 @@ make build-all       # main + plugins
 
 - TUI (auto-detects terminal support):
 ```bash
-./bin/console-ir serve
+./bin/console-ir
 ```
 
 - Load the shipped sample, then explore it in the TUI:
 ```bash
-cp examples/sample-events.jsonl data/incoming/
-./bin/console-ir serve
+./bin/console-ir ingest examples/sample-events.jsonl
+./bin/console-ir
 ```
 
 - Headless (`--no-tui`) is experimental and does not currently ingest.
+
+### Keeping development data out of your real database
+
+The database, config and logs live in per-user directories (`console-ir version` prints them), so
+running from a checkout writes to the same database as an installed binary. Use `--portable` to keep
+everything inside the working directory instead:
+
+```bash
+./bin/console-ir --portable
+```
+
+Note that a plain first run will *move* an existing `./data/console-ir.db` into the per-user
+location, printing what it moved — that is the upgrade path for real users. Either use `--portable`
+from the start, or `--db ./data/dev.db` to pin a scratch database.
 
 ## Code style
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/paths"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -560,9 +561,9 @@ func NewUI(ctx context.Context, store *store.Store, llmProvider llm.LLMProvider,
 	// Initialize LLM provider from persisted settings when not provided by caller.
 	if ui.llm == nil {
 		if ui.logger != nil {
-			ui.logger.Printf("No LLM provider passed in; attempting to load from config/llm_settings.json")
+			ui.logger.Printf("No LLM provider passed in; attempting to load from %s", paths.Current().ConfigFile(paths.LLMSettingsName))
 		}
-		settings, _ := llm.LoadSettings("config/llm_settings.json")
+		settings, _ := llm.LoadSettings(paths.Current().ConfigFile(paths.LLMSettingsName))
 		p, err := llm.Build(ui.ctx, settings.Active, ui.logger)
 		if err != nil || p == nil {
 			if ui.logger != nil {

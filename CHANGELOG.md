@@ -20,12 +20,20 @@ than a wall of log lines, and models what OCSF actually says about investigation
 
 ### Upgrading from 0.1.x
 
+**Your database moves.** 0.1.x resolved every path against the current working directory, so an
+installed binary opened a different, empty database per directory — indistinguishable from having
+lost every case. Paths are now per-user (XDG on Linux, `~/Library` on macOS, `%LOCALAPPDATA%` on
+Windows). On first run, an existing `./data/console-ir.db` and `./config/llm_settings.json` are moved
+into the new locations and each move is printed; nothing is moved if a database already exists at the
+destination. `console-ir version` prints the resolved paths, and `--portable` keeps the old layout.
+
 **The CLI changed.** `console-ir serve` becomes plain `console-ir` (the old name still works, hidden).
 `ingest-folder` is gone — `console-ir ingest <path>` now takes a file, a directory, or `-` for stdin.
 **The watched drop folder moved from `data/incoming/` to `./incoming/`**; move any files you have
 staged there, or pass `--ingest-dir data/incoming` to keep the old location. The inbox is a throwaway
 landing zone and the database is precious state; keeping them in one directory made "clear the inbox"
-and "destroy the database" the same `rm -rf`.
+and "destroy the database" the same `rm -rf`. The drop folder stays relative to the working directory
+on purpose: a landing zone under `~/.local/share` is one you cannot drop files into.
 
 Opening an existing database migrates it in place: OCSF identity columns are added and backfilled
 from stored raw events, observables are extracted into an indexed table, and `event_type` is
@@ -33,10 +41,20 @@ rewritten to OCSF category slugs. Nothing is lost and the migration is safe to r
 
 **Downgrading afterwards is not clean.** A 0.1.x binary reads the migrated database but offers only
 its old five type filters, none of which match the new values, so filtering appears to return
-nothing. Back up `data/console-ir.db` first if you may roll back.
+nothing. Back up the database (`console-ir version` prints its path) before upgrading if you may
+roll back.
 
 ### Added
 
+- **Stable per-user runtime paths.** The database, configuration and logs resolve to per-user
+  directories instead of the current working directory: `$XDG_DATA_HOME`, `$XDG_CONFIG_HOME` and
+  `$XDG_STATE_HOME` (honoured on every platform), falling back to `~/.local/share`, `~/.config` and
+  `~/.local/state` on Linux, `~/Library/Application Support` and `~/Library/Logs` on macOS, and
+  `%LOCALAPPDATA%` / `%APPDATA%` on Windows. Override with `--data-dir`, `--config-dir`, `--log-dir`
+  or `--db`; `--portable` restores the pre-0.2.0 working-directory layout. Config directories are
+  created 0700 because `llm_settings.json` can hold a plaintext API key.
+- **`console-ir version` prints the resolved database, config and log paths**, so "where is my
+  database?" is answerable without reading the source.
 - **Findings triage queue.** OCSF Findings classes (`class_uid` 2001–2008) and any event flagged
   `is_alert` are routed to a dedicated queue ranked by risk. Press `D`; set status with `s`, verdict
   with `v`, escalate to a case with `e`, toggle open-only with `o`. The app lands here on startup
@@ -95,6 +113,14 @@ nothing. Back up `data/console-ir.db` first if you may roll back.
 
 ### Changed
 
+- **One rotating log instead of three.** Logs were opened in append mode with no rotation, so a
+  long-running install grew without bound (a single TUI session reached ~3 MB in testing), and the
+  binary wrote `console-ir-ui.log`, `console-ir-serve.log` or `console-ir-live.log` depending on how
+  it was launched. Everything now writes to one `console-ir.log`, rotated at 5 MB with three older
+  generations kept — 20 MB maximum. Subsystems are distinguished by log prefix.
+- **LLM settings are read from the per-user config directory** rather than `./config/` relative to
+  the working directory, so an API key is written to one known place instead of wherever the binary
+  was launched from.
 - **Running the bare binary opens the TUI.** `console-ir serve` implied a daemon, which this is not;
   it remains as a hidden alias so existing scripts and the demo recording keep working.
 - **`ingest` and `ingest-folder` are one command.** `console-ir ingest <path>` resolves a file, a

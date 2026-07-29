@@ -15,6 +15,7 @@ import (
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/bus"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ingest"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/paths"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/plugins"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ui"
@@ -115,16 +116,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 	willUseTUI := determineTUIMode(cmd, args)
 
 	if willUseTUI {
-		// Silent TUI mode: logs go to file, errors still visible on terminal
-		logFile := setupFileLogger()
-		if logFile != nil {
-			// Use multi-writer: file for all logs, stderr for errors only
-			logger = log.New(io.MultiWriter(logFile, &errorFilterWriter{os.Stderr}), "[serve] ", log.LstdFlags)
-			defer logFile.Close()
-		} else {
-			// Fallback to stderr if file creation fails
-			logger = log.New(os.Stderr, "[serve] ", log.LstdFlags)
-		}
+		// Silent TUI mode: logs go to the shared rotating file, errors still
+		// visible on the terminal.
+		logger = log.New(io.MultiWriter(runtimeLogWriter(), &errorFilterWriter{os.Stderr}), "[serve] ", log.LstdFlags)
 	} else {
 		// Headless mode: normal stderr logging
 		logger = log.New(os.Stderr, "[serve] ", log.LstdFlags)
@@ -157,7 +151,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	defer eventBus.Close()
 
 	// Initialize LLM provider from settings (default: ollama). Fall back to LocalStub at runtime only if build fails.
-	settings, _ := llm.LoadSettings("config/llm_settings.json")
+	settings, _ := llm.LoadSettings(paths.Current().ConfigFile(paths.LLMSettingsName))
 	p, err := llm.Build(ctx, settings.Active, logger)
 	if err != nil || p == nil {
 		logger.Printf("LLM provider build failed: %v; falling back to local stub for runtime resilience", err)
@@ -273,30 +267,10 @@ func runServe(cmd *cobra.Command, args []string) error {
 			silentLogger := log.New(io.Discard, "", 0)
 			coordinator.logger = silentLogger
 
-			// Create logs directory and a file-backed logger for UI to prevent terminal corruption
-			baseDir := getWorkingDir()
-			logDir := filepath.Join(baseDir, "logs")
-			if err := os.MkdirAll(logDir, 0755); err != nil {
-				logger.Printf("Warning: Could not create logs directory: %v", err)
-			}
-			logPath := filepath.Join(logDir, "console-ir-ui.log")
-			logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-			if err != nil {
-				// Fallback to discard if file creation fails
-				logger.Printf("Warning: Could not create UI log file at %s: %v", logPath, err)
-				logFile = nil
-			}
-
-			var uiLogger *log.Logger
-			if logFile != nil {
-				uiLogger = log.New(logFile, "[UI] ", log.LstdFlags)
-				// Emit an initial marker to the UI log so it's easy to find and verify.
-				uiLogger.Printf("UI logger initialized (path=%s)", logPath)
-				_ = logFile.Sync()
-				defer logFile.Close()
-			} else {
-				uiLogger = log.New(io.Discard, "[UI] ", log.LstdFlags)
-			}
+			// A file-backed logger for the UI, to prevent terminal corruption.
+			uiLogger := runtimeLogger("[UI] ")
+			// Emit an initial marker so the log is easy to find and verify.
+			uiLogger.Printf("UI logger initialized (path=%s)", runtimeLogPath())
 
 			// Skip auto-creating any cases; only users can create cases via the TUI.
 
@@ -742,25 +716,6 @@ func determineTUIMode(cmd *cobra.Command, args []string) bool {
 		return false
 	}
 	return true
-}
-
-// setupFileLogger creates a log file for TUI mode
-func setupFileLogger() *os.File {
-	baseDir := getWorkingDir()
-	logDir := filepath.Join(baseDir, "logs")
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		// If we can't create logs directory, we'll fall back to stderr
-		return nil
-	}
-
-	logPath := filepath.Join(logDir, "console-ir-serve.log")
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		// If we can't create the log file, we'll fall back to stderr
-		return nil
-	}
-
-	return logFile
 }
 
 // errorFilterWriter only writes error messages to the underlying writer

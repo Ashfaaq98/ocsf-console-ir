@@ -4,8 +4,6 @@ import (
 	"context"
 	"io"
 	"log"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/bus"
@@ -79,17 +77,7 @@ func runLiveEvents(cmd *cobra.Command, args []string) error {
 	baseDir := getWorkingDir()
 
 	// Prepare a file-backed top-level logger (no console output)
-	logDir := filepath.Join(baseDir, "logs")
-	_ = os.MkdirAll(logDir, 0755)
-	liveLogPath := filepath.Join(logDir, "console-ir-live.log")
-	var logger *log.Logger
-	if f, ferr := os.OpenFile(liveLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); ferr == nil {
-		logger = log.New(f, "[live-events] ", log.LstdFlags)
-		defer f.Close()
-	} else {
-		// If we cannot open the log file, stay silent
-		logger = log.New(io.Discard, "", 0)
-	}
+	logger := runtimeLogger("[live-events] ")
 	logger.Println("Starting live events with embedded TUI")
 	resolvedDBPath := resolvePathRelativeToBase(baseDir, cfg.Database.Path)
 	logger.Printf("Using database at %s", resolvedDBPath)
@@ -131,19 +119,8 @@ func runLiveEvents(cmd *cobra.Command, args []string) error {
 	}()
 
 	// Prepare a file-backed UI logger to avoid corrupting terminal output
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		logger.Printf("Warning: could not create logs directory: %v", err)
-	}
-	logPath := filepath.Join(logDir, "console-ir-ui.log")
-	var uiLogger *log.Logger
-	if f, ferr := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); ferr == nil {
-		defer f.Close()
-		uiLogger = log.New(f, "[UI] ", log.LstdFlags)
-		uiLogger.Printf("UI logger initialized (path=%s)", logPath)
-	} else {
-		logger.Printf("Warning: could not create UI log file at %s: %v", logPath, ferr)
-		uiLogger = log.New(io.Discard, "[UI] ", log.LstdFlags)
-	}
+	uiLogger := runtimeLogger("[UI] ")
+	uiLogger.Printf("UI logger initialized (path=%s)", runtimeLogPath())
 
 	// Create and start the TUI
 	tui := ui.NewUI(ctx, st, nil, uiLogger, GetVersion())

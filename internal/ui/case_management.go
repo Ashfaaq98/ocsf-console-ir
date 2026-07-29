@@ -15,6 +15,7 @@ import (
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/paths"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -3241,9 +3242,9 @@ func (cm *CaseManagement) applyModalTheme(form *tview.Form) {
 }
 
 // showLLMSettingsModal opens a provider selection dialog (Shift+L) to configure the LLM used by Copilot and Overview summary.
-// Settings are persisted to config/llm_settings.json and applied live.
+// Settings are persisted to the per-user config directory and applied live.
 func (cm *CaseManagement) showLLMSettingsModal() {
-	const cfgPath = "config/llm_settings.json"
+	cfgPath := paths.Current().ConfigFile(paths.LLMSettingsName)
 
 	// Load current settings (defaults to Ollama localhost qwen3:0.6b)
 	settings, _ := llm.LoadSettings(cfgPath)

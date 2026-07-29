@@ -194,9 +194,35 @@ Redis Streams for distributed deployments. They're disabled by default; enable o
 
 ## Configuration
 
+### Where your data lives
+
+Console-IR keeps its database, config and logs in stable per-user directories, so it opens the
+same cases whichever folder you launch it from. Run `console-ir version` to see the resolved paths.
+
+| | Linux / BSD | macOS | Windows |
+|---|---|---|---|
+| Database | `$XDG_DATA_HOME/console-ir` → `~/.local/share/console-ir` | `~/Library/Application Support/console-ir` | `%LOCALAPPDATA%\console-ir` |
+| Config | `$XDG_CONFIG_HOME/console-ir` → `~/.config/console-ir` | `~/Library/Application Support/console-ir` | `%APPDATA%\console-ir` |
+| Logs | `$XDG_STATE_HOME/console-ir` → `~/.local/state/console-ir` | `~/Library/Logs/console-ir` | `%LOCALAPPDATA%\console-ir\logs` |
+
+`XDG_*` environment variables are honoured on every platform. Override individually with
+`--data-dir`, `--config-dir`, `--log-dir` (or `--db` for the database file itself), or pass
+`--portable` to keep everything beside the working directory — useful on a USB stick or a jump box
+you don't want to leave traces on.
+
+Logs go to a single `console-ir.log`, rotated at 5 MB with three older generations kept (20 MB
+maximum).
+
+The watched drop folder is the exception: it stays relative to where you launch (`./incoming`),
+because a landing zone buried under `~/.local/share` is one you can't drop files into. Point it
+anywhere with `--ingest-dir`.
+
+### Other settings
+
 - **LLM provider** (optional): set the provider/model/API key from the TUI's LLM Settings
-  (Shift+L), or copy [`config/llm_settings.sample.json`](config/llm_settings.sample.json) to
-  `config/llm_settings.json`. With no config, Console-IR defaults to a local Ollama model.
+  (Shift+L), or copy [`config/llm_settings.sample.json`](config/llm_settings.sample.json) into your
+  config directory as `llm_settings.json`. With no config, Console-IR defaults to a local Ollama
+  model.
 - **Redis** (optional): pass `--redis redis://host:6379` only to enable distributed mode.
   The default is standalone with no external services.
 
@@ -217,13 +243,15 @@ plugins, not a requirement.
 
 - **No findings?** Your data may contain no detections — findings come from OCSF Findings classes
   (`class_uid` 2001–2008) or events flagged `is_alert`. Plain telemetry produces events, not
-  findings. Press `A` for all events, or drop `examples/sample-events.jsonl` into `data/incoming/`
+  findings. Press `A` for all events, or drop `examples/sample-events.jsonl` into `./incoming/`
   for a sample that includes one. Note the queue hides already-triaged findings by default —
   press `o` to show everything.
 - **Empty event list?** Run `console-ir demo` to see the tool with data in it, or
   `console-ir ingest examples/sample-events.jsonl` to load the shipped sample into your own database.
 - **Dropped a file in and nothing happened?** The watched folder is `./incoming` (relative to where
   you launched). Check with `console-ir --help`, or point it elsewhere with `--ingest-dir`.
+- **Cases missing after upgrading?** v0.2.0 moved the database to a per-user directory and printed
+  the move. Run `console-ir version` to see where it is now.
 - **TUI won't start?** Use a native terminal; it needs a real TTY. (`--no-tui` is experimental and does not ingest.) `console-ir list` works anywhere.
 - **Enrichment missing?** It's asynchronous, so press `r` to refresh an event's detail once WHOIS/GeoIP lookups complete.
 - **Build issues?** Run `go mod download` then `make build`.
@@ -231,14 +259,21 @@ plugins, not a requirement.
 
 ### Upgrading from v0.1.x
 
-Opening an existing database migrates it in place: OCSF identity columns are added and backfilled
-from the stored raw events, observables are extracted, and `event_type` is rewritten to OCSF
-category slugs (`system`, `findings`, `iam`, `network`, …) — replacing the incorrect values earlier
-versions produced. Nothing is lost, and the migration is safe to re-run.
+**Your database moves.** v0.1.x kept it at `./data/console-ir.db`, relative to wherever you
+happened to launch the binary. On first run v0.2.0 moves that file — plus `config/llm_settings.json`,
+which can hold a plaintext API key — into the per-user directories above, and prints each move.
+Nothing happens silently, and nothing is moved if a database is already at the destination. Pass
+`--portable` to keep the old layout instead.
+
+**The database itself migrates in place**: OCSF identity columns are added and backfilled from the
+stored raw events, observables are extracted, and `event_type` is rewritten to OCSF category slugs
+(`system`, `findings`, `iam`, `network`, …) — replacing the incorrect values earlier versions
+produced. Nothing is lost, and the migration is safe to re-run.
 
 **Downgrading afterwards is not clean.** A v0.1.x binary reads the migrated database but only offers
 its old five type filters, none of which match the new values, so filtering appears to return
-nothing. Back up `data/console-ir.db` first if you need to roll back.
+nothing. Back up the database (`console-ir version` prints its path) before you upgrade if you may
+need to roll back.
 
 ## Contributing
 
@@ -247,8 +282,8 @@ Quick version: fork, branch, add tests, run `make check`, open a PR.
 
 ## Security
 
-Do **not** commit API keys or secrets. Use the TUI or the sample config, and keep
-`config/llm_settings.json` ignored. See [`SECURITY.md`](SECURITY.md) to report vulnerabilities.
+Do **not** commit API keys or secrets. Use the TUI or the sample config; real settings live in
+your per-user config directory (mode 0700), not in the repo. See [`SECURITY.md`](SECURITY.md) to report vulnerabilities.
 
 ## License
 
