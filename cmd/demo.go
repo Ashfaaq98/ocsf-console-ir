@@ -3,13 +3,13 @@ package cmd
 import (
 	"bytes"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/bus"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/demo"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ingest"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 	"github.com/spf13/cobra"
 )
@@ -54,7 +54,7 @@ func runDemo(cmd *cobra.Command, args []string) error {
 	}
 
 	demoDB := filepath.Join(dir, "demo.db")
-	logger := log.New(os.Stderr, "[demo] ", log.LstdFlags)
+	logger := runtimeLoggerConsole("demo", os.Stderr)
 
 	fmt.Fprintf(os.Stderr, "Loading %d sample records into a throwaway database...\n", demo.RecordCount())
 
@@ -85,7 +85,7 @@ func runDemo(cmd *cobra.Command, args []string) error {
 // seedDemoStore ingests the embedded scenario into a fresh database.
 // Enrichment is deliberately skipped: it makes network calls, and the demo
 // should start instantly and work offline on a jump box or a plane.
-func seedDemoStore(cmd *cobra.Command, dbPath string, logger *log.Logger) error {
+func seedDemoStore(cmd *cobra.Command, dbPath string, logger *logging.Logger) error {
 	st, err := store.NewStore(dbPath)
 	if err != nil {
 		return fmt.Errorf("failed to create demo database: %w", err)

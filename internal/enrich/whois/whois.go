@@ -11,8 +11,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"log"
 	"net/url"
 	"regexp"
 	"sort"
@@ -22,6 +20,7 @@ import (
 	whoislib "github.com/likexian/whois"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/bus"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/plugins"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 )
@@ -36,14 +35,11 @@ const (
 // Plugin is the in-process WHOIS enrichment plugin.
 type Plugin struct {
 	provider *WhoisProvider
-	logger   *log.Logger
+	logger   *logging.Logger
 }
 
 // New creates a WHOIS plugin with default tuning. A nil logger discards output.
-func New(logger *log.Logger) *Plugin {
-	if logger == nil {
-		logger = log.New(io.Discard, "", 0)
-	}
+func New(logger *logging.Logger) *Plugin {
 	return &Plugin{
 		provider: NewWhoisProvider(defaultTimeout, defaultRateLimitRPS, defaultCacheTTL),
 		logger:   logger,
@@ -92,13 +88,13 @@ func (p *Plugin) Process(ctx context.Context, event bus.EventMessage) ([]store.E
 	for _, d := range domains {
 		raw, err := p.provider.Lookup(d)
 		if err != nil {
-			p.logger.Printf("whois lookup failed %s: %v", d, err)
+			p.logger.Warn("lookup failed %s: %v", d, err)
 			continue
 		}
 		for k, v := range normalizeWhois(d, raw) {
 			data[k] = v
 		}
-		p.logger.Printf("whois enrichment for %s", d)
+		p.logger.Debug("enriched %s", d)
 	}
 
 	if len(data) == 0 {

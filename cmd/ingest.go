@@ -5,13 +5,13 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/bus"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ingest"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 	"github.com/spf13/cobra"
 )
@@ -86,7 +86,7 @@ func runIngest(cmd *cobra.Command, args []string) error {
 		target = args[0]
 	}
 
-	logger := log.New(os.Stderr, "[ingest] ", log.LstdFlags)
+	logger := runtimeLoggerConsole("ingest", os.Stderr)
 
 	baseDir := getWorkingDir()
 	resolvedDBPath := resolvePathRelativeToBase(baseDir, config.Database.Path)
@@ -173,7 +173,7 @@ func isDirectory(path string) bool {
 // runDirectoryIngest ingests every matching file in a directory, optionally
 // tailing it, reusing the same folder ingestor the TUI runs.
 func runDirectoryIngest(ctx context.Context, config Config, st *store.Store,
-	enricher *syncEnricher, dir string, logger *log.Logger) error {
+	enricher *syncEnricher, dir string, logger *logging.Logger) error {
 
 	eventBus := bus.NewBus(config.Redis.URL, logger)
 	defer eventBus.Close()
@@ -227,7 +227,7 @@ type IngestStats struct {
 
 // processEvents processes events from the input reader
 func processEvents(ctx context.Context, input io.Reader, parser *ingest.Parser,
-	store *store.Store, eventBus bus.Bus, enricher *syncEnricher, logger *log.Logger) (*IngestStats, error) {
+	store *store.Store, eventBus bus.Bus, enricher *syncEnricher, logger *logging.Logger) (*IngestStats, error) {
 
 	startTime := time.Now()
 	stats := &IngestStats{}
@@ -285,14 +285,14 @@ func processEvents(ctx context.Context, input io.Reader, parser *ingest.Parser,
 
 // processBatch processes a batch of events
 func processBatch(ctx context.Context, batch [][]byte, parser *ingest.Parser,
-	store *store.Store, eventBus bus.Bus, enricher *syncEnricher, logger *log.Logger, startLine int) *IngestStats {
+	store *store.Store, eventBus bus.Bus, enricher *syncEnricher, logger *logging.Logger, startLine int) *IngestStats {
 
 	stats := &IngestStats{}
 
 	for i, eventData := range batch {
 		lineNumber := startLine + i
 
-		if err := processEvent(ctx, eventData, parser, store, eventBus, enricher, lineNumber); err != nil {
+		if err := processEvent(ctx, eventData, parser, store, eventBus, enricher, logger, lineNumber); err != nil {
 			stats.FailedEvents++
 			if skipInvalid {
 				logger.Printf("Skipping invalid event at line %d: %v", lineNumber, err)
@@ -312,7 +312,7 @@ func processBatch(ctx context.Context, batch [][]byte, parser *ingest.Parser,
 
 // processEvent processes a single event
 func processEvent(ctx context.Context, eventData []byte, parser *ingest.Parser,
-	store *store.Store, eventBus bus.Bus, enricher *syncEnricher, lineNumber int) error {
+	store *store.Store, eventBus bus.Bus, enricher *syncEnricher, logger *logging.Logger, lineNumber int) error {
 
 	// Parse and route: Findings-category records and alertable events become
 	// findings; everything else stays an event.
@@ -342,7 +342,7 @@ func processEvent(ctx context.Context, eventData []byte, parser *ingest.Parser,
 
 	if err := eventBus.PublishEvent(ctx, eventMsg); err != nil {
 		// Log the error but don't fail the ingestion
-		log.Printf("Warning: failed to publish event %s to bus: %v", recordID, err)
+		logger.Warn("failed to publish event %s to bus: %v", recordID, err)
 	}
 
 	// Enrich in-process. Events carry the indicators GeoIP and WHOIS act on;

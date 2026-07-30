@@ -83,6 +83,7 @@ func (ui *UI) loadFindings() {
 
 	ui.app.QueueUpdateDraw(func() {
 		ui.findings = findings
+		ui.findingsTotal = total
 		ui.updateFindingsList(total)
 		scope := "all"
 		if ui.findingsOpenOnly {
@@ -580,4 +581,33 @@ func (ui *UI) currentAnalyst() string {
 		return u
 	}
 	return "analyst"
+}
+
+// repaintCurrentList re-renders the main table for whichever view is open,
+// without touching the database.
+//
+// The findings queue and the events list share one table widget, so anything
+// that re-renders it has to know which of the two is showing. applyTheme called
+// updateEventsList unconditionally, which silently replaced a findings queue
+// with events on every theme change — the detail pane kept showing the finding,
+// because only the table was rebuilt.
+func (ui *UI) repaintCurrentList() {
+	if ui.showFindings {
+		ui.updateFindingsList(ui.findingsTotal)
+		return
+	}
+	ui.updateEventsList()
+}
+
+// refreshCurrentView reloads the data behind whichever view is open.
+//
+// Same trap as repaintCurrentList, one level up: 'r' went straight to
+// scheduleEventsReload, so refreshing the findings queue replaced it with
+// events. Every user-initiated refresh should come through here.
+func (ui *UI) refreshCurrentView(source string) {
+	if ui.showFindings {
+		go ui.loadFindings()
+		return
+	}
+	ui.scheduleEventsReload(source)
 }

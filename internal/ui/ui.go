@@ -3,7 +3,6 @@ package ui
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"sort"
 	"strconv"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/paths"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
@@ -370,7 +370,7 @@ type UI struct {
 	app    *tview.Application
 	store  *store.Store
 	llm    llm.LLMProvider
-	logger *log.Logger
+	logger *logging.Logger
 
 	// Layout components
 	layout       *tview.Flex
@@ -400,6 +400,9 @@ type UI struct {
 	findings          []store.Finding
 	selectedFindingID string
 	findingsOpenOnly  bool
+	// findingsTotal is the unfiltered count from the last load, kept so the
+	// queue can be repainted (e.g. on a theme change) without re-querying.
+	findingsTotal int
 
 	// Theme state
 	theme          Theme
@@ -541,10 +544,7 @@ func (ui *UI) applyCaseFilters(in []store.Case) []store.Case {
 }
 
 // NewUI creates a new terminal user interface
-func NewUI(ctx context.Context, store *store.Store, llmProvider llm.LLMProvider, logger *log.Logger, version string) *UI {
-	if logger == nil {
-		logger = log.New(log.Writer(), "[UI] ", log.LstdFlags)
-	}
+func NewUI(ctx context.Context, store *store.Store, llmProvider llm.LLMProvider, logger *logging.Logger, version string) *UI {
 
 	// Use the provided context and create a child context for UI operations
 	uiCtx, cancel := context.WithCancel(ctx)
@@ -643,9 +643,9 @@ func (ui *UI) Start(ctx context.Context) error {
 	// Debug: Check if allList is properly initialized
 	if ui.logger != nil {
 		if ui.allList != nil {
-			ui.logger.Printf("DEBUG: allList is initialized with %d items", ui.allList.GetItemCount())
+			ui.logger.Debug("allList is initialized with %d items", ui.allList.GetItemCount())
 		} else {
-			ui.logger.Printf("DEBUG: allList is nil!")
+			ui.logger.Debug("allList is nil!")
 		}
 	}
 
@@ -809,7 +809,7 @@ func (ui *UI) setupLayout() {
 
 	// Debug logging
 	if ui.logger != nil {
-		ui.logger.Printf("DEBUG: allList created with %d items", ui.allList.GetItemCount())
+		ui.logger.Debug("allList created with %d items", ui.allList.GetItemCount())
 	}
 	ui.allList.SetSelectedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
 		// Load ALL EVENTS
@@ -935,9 +935,9 @@ func (ui *UI) setupLayout() {
 	if ui.logger != nil {
 		currentFocus := ui.app.GetFocus()
 		if currentFocus == ui.allList {
-			ui.logger.Printf("DEBUG: Focus successfully set to allList")
+			ui.logger.Debug("Focus successfully set to allList")
 		} else {
-			ui.logger.Printf("DEBUG: Focus not set to allList, current focus: %T", currentFocus)
+			ui.logger.Debug("Focus not set to allList, current focus: %T", currentFocus)
 		}
 	}
 }
@@ -1084,7 +1084,7 @@ func (ui *UI) setupKeybindings() {
 
 		// Log key events to help diagnose input handling
 		if ui.logger != nil {
-			ui.logger.Printf("Input event: Key=%v Rune=%q Mod=%v", event.Key(), event.Rune(), event.Modifiers())
+			ui.logger.Debug("input: key=%v rune=%q mod=%v", event.Key(), event.Rune(), event.Modifiers())
 		}
 
 		switch event.Key() {
@@ -1122,7 +1122,7 @@ func (ui *UI) setupKeybindings() {
 					}
 				}()
 				// Schedule events reload according to current selection and filter state
-				ui.scheduleEventsReload("key:r")
+				ui.refreshCurrentView("key:r")
 				return nil
 			case 's', 'S':
 				if ui.showFindings {
@@ -1165,6 +1165,12 @@ func (ui *UI) setupKeybindings() {
 				ui.pageMove(-1)
 				return nil
 			case 'N':
+				if ui.showFindings {
+					// The findings queue is not paged; without this, paging
+					// would swap the queue out for events.
+					ui.setStatusDirect("[%s]Findings are not paged • o toggles open/all[-:-:-]", ui.theme.TagMuted)
+					return nil
+				}
 				{
 					id := ui.getContextID()
 					s := ui.getOrInitState(id)
@@ -1185,6 +1191,12 @@ func (ui *UI) setupKeybindings() {
 				}
 				return nil
 			case 'P':
+				if ui.showFindings {
+					// The findings queue is not paged; without this, paging
+					// would swap the queue out for events.
+					ui.setStatusDirect("[%s]Findings are not paged • o toggles open/all[-:-:-]", ui.theme.TagMuted)
+					return nil
+				}
 				{
 					id := ui.getContextID()
 					s := ui.getOrInitState(id)
@@ -2557,7 +2569,7 @@ func (ui *UI) applyTheme() {
 	ui.statusBar.SetBackgroundColor(ui.theme.Surface)
 
 	// Re-render table and focus ring
-	ui.updateEventsList()
+	ui.repaintCurrentList()
 	ui.highlightFocus(ui.app.GetFocus())
 }
 
@@ -3555,8 +3567,8 @@ func (ui *UI) scheduleEventsReload(source string) {
 	}
 
 	if ui.logger != nil {
-		ui.logger.Printf("scheduleEventsReload: source=%s showAll=%v selectedCaseID=%s filterStart=%v filterEnd=%v loadingEvents=%d lastLoadAgo=%s filterApplying=%d",
-			source, ui.showAll, ui.selectedCaseID, ui.filterStart, ui.filterEnd, le, sinceStr, atomic.LoadInt32(&ui.filterApplying))
+		ui.logger.Debug("scheduleEventsReload: source=%s showFindings=%v showAll=%v selectedCaseID=%s filterStart=%v filterEnd=%v loadingEvents=%d lastLoadAgo=%s filterApplying=%d",
+			source, ui.showFindings, ui.showAll, ui.selectedCaseID, ui.filterStart, ui.filterEnd, le, sinceStr, atomic.LoadInt32(&ui.filterApplying))
 	}
 
 	// If a load is in progress, defer dispatch until it completes or times out; then dispatch.

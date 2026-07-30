@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log"
 	"math"
 	"math/rand"
 	"net/http"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/bus"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 )
 
@@ -36,7 +36,7 @@ type LiveOptions struct {
 	Count int
 
 	// Logger for operational logs. If nil, a default logger is used.
-	Logger *log.Logger
+	Logger *logging.Logger
 
 	// HTTPClient for fetching events. If nil, a default client is used.
 	HTTPClient *http.Client
@@ -54,7 +54,7 @@ type LiveIngestor struct {
 
 	opts   LiveOptions
 	client *http.Client
-	logger *log.Logger
+	logger *logging.Logger
 
 	caseID string
 	rng    *rand.Rand
@@ -64,7 +64,7 @@ type LiveIngestor struct {
 func NewLiveIngestor(parser *Parser, st *store.Store, b bus.Bus, opts LiveOptions) *LiveIngestor {
 	logger := opts.Logger
 	if logger == nil {
-		logger = log.New(log.Writer(), "[live-ingest] ", log.LstdFlags)
+		logger = nil
 	}
 
 	// Defaults and clamps

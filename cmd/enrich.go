@@ -2,12 +2,12 @@ package cmd
 
 import (
 	"context"
-	"log"
 	"sync"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/bus"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/enrich/geoip"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/enrich/whois"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/plugins"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 )
@@ -17,7 +17,7 @@ import (
 // Single source of truth: both the long-running pipeline (which registers these
 // with the plugin manager's queue) and one-shot ingest (which calls them
 // directly) build their set from here, so the two can never drift apart.
-func coreEnrichers(logger *log.Logger) []plugins.CorePlugin {
+func coreEnrichers(logger *logging.Logger) []plugins.CorePlugin {
 	return []plugins.CorePlugin{
 		whois.New(logger),
 		geoip.New(logger),
@@ -26,10 +26,10 @@ func coreEnrichers(logger *log.Logger) []plugins.CorePlugin {
 
 // registerCoreEnrichers wires the embedded enrichments into a plugin manager for
 // the long-running, queue-driven path used by the TUI and watch mode.
-func registerCoreEnrichers(pm plugins.PluginManager, logger *log.Logger) {
+func registerCoreEnrichers(pm plugins.PluginManager, logger *logging.Logger) {
 	for _, p := range coreEnrichers(logger) {
 		if err := pm.GetRegistry().RegisterCorePlugin(p); err != nil {
-			logger.Printf("Failed to register %s enrichment: %v", p.Name(), err)
+			logger.Error("Failed to register %s enrichment: %v", p.Name(), err)
 		}
 	}
 }
@@ -50,7 +50,7 @@ const enrichSyncConcurrency = 8
 type syncEnricher struct {
 	store     *store.Store
 	enrichers []plugins.CorePlugin
-	logger    *log.Logger
+	logger    *logging.Logger
 
 	sem chan struct{}
 	wg  sync.WaitGroup
@@ -60,7 +60,7 @@ type syncEnricher struct {
 	failed  int
 }
 
-func newSyncEnricher(st *store.Store, logger *log.Logger) *syncEnricher {
+func newSyncEnricher(st *store.Store, logger *logging.Logger) *syncEnricher {
 	return &syncEnricher{
 		store:     st,
 		enrichers: coreEnrichers(logger),
@@ -116,7 +116,7 @@ func (s *syncEnricher) process(ctx context.Context, msg bus.EventMessage) {
 				s.mu.Lock()
 				s.failed++
 				s.mu.Unlock()
-				s.logger.Printf("failed to store %s enrichment for %s: %v", p.Name(), msg.EventID, err)
+				s.logger.Error("failed to store %s enrichment for %s: %v", p.Name(), msg.EventID, err)
 				continue
 			}
 			s.mu.Lock()

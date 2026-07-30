@@ -2,13 +2,14 @@ package ui
 
 import (
 	"context"
-	"log"
+	"io"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 	"github.com/gdamore/tcell/v2"
@@ -45,7 +46,7 @@ func TestNewUI(t *testing.T) {
 	defer storeInstance.Close()
 
 	ctx := context.Background()
-	logger := log.New(os.Stdout, "[TEST] ", log.LstdFlags)
+	logger := logging.New(io.Discard, logging.LevelDebug, "test")
 	mockLLM := &mockLLMProvider{}
 
 	ui := NewUI(ctx, storeInstance, mockLLM, logger, "test")
@@ -78,7 +79,7 @@ func TestEventSelection(t *testing.T) {
 	defer storeInstance.Close()
 
 	ctx := context.Background()
-	logger := log.New(os.Stdout, "[TEST] ", log.LstdFlags)
+	logger := logging.New(io.Discard, logging.LevelDebug, "test")
 	mockLLM := &mockLLMProvider{}
 
 	ui := NewUI(ctx, storeInstance, mockLLM, logger, "test")
@@ -138,7 +139,7 @@ func TestCaseCreation(t *testing.T) {
 	defer storeInstance.Close()
 
 	ctx := context.Background()
-	logger := log.New(os.Stdout, "[TEST] ", log.LstdFlags)
+	logger := logging.New(io.Discard, logging.LevelDebug, "test")
 	mockLLM := &mockLLMProvider{}
 
 	ui := NewUI(ctx, storeInstance, mockLLM, logger, "test")
@@ -229,7 +230,7 @@ func TestAddEventsToExistingCase(t *testing.T) {
 	defer storeInstance.Close()
 
 	ctx := context.Background()
-	logger := log.New(os.Stdout, "[TEST] ", log.LstdFlags)
+	logger := logging.New(io.Discard, logging.LevelDebug, "test")
 	mockLLM := &mockLLMProvider{}
 
 	ui := NewUI(ctx, storeInstance, mockLLM, logger, "test")
@@ -310,7 +311,7 @@ func TestGlobalDeleteKey_ContextSensitive(t *testing.T) {
 	defer st.Close()
 
 	ctx := context.Background()
-	logger := log.New(os.Stdout, "[TEST] ", 0)
+	logger := logging.New(io.Discard, logging.LevelDebug, "test")
 	mock := &mockLLMProvider{}
 	ui := NewUI(ctx, st, mock, logger, "test")
 
@@ -354,7 +355,7 @@ func TestEventListDeleteKey_NoSelectionConsumed(t *testing.T) {
 	defer st.Close()
 
 	ctx := context.Background()
-	logger := log.New(os.Stdout, "[TEST] ", 0)
+	logger := logging.New(io.Discard, logging.LevelDebug, "test")
 	ui := NewUI(ctx, st, &mockLLMProvider{}, logger, "test")
 
 	// Focus events table; ensure no selection and trigger 'd'
@@ -383,7 +384,7 @@ func TestHintsShowDeleteForEventsSelection(t *testing.T) {
 	defer st.Close()
 
 	ctx := context.Background()
-	logger := log.New(os.Stdout, "[TEST] ", 0)
+	logger := logging.New(io.Discard, logging.LevelDebug, "test")
 	ui := NewUI(ctx, st, &mockLLMProvider{}, logger, "test")
 
 	// Focus events table with a selection so hints include "d:delete"

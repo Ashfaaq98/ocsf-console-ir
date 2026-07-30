@@ -3,12 +3,12 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ui"
@@ -40,7 +40,7 @@ func TestEventSelectionAndCaseCreationWorkflow(t *testing.T) {
 	}
 
 	// Create UI with test logger
-	logger := log.New(os.Stdout, "[TEST] ", log.LstdFlags)
+	logger := logging.New(os.Stdout, logging.LevelDebug, "test")
 	llmProvider := llm.NewLocalStub()
 	ui := ui.NewUI(ctx, store, llmProvider, logger, "test")
 

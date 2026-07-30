@@ -2,8 +2,6 @@ package cmd
 
 import (
 	"context"
-	"io"
-	"log"
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/bus"
@@ -77,7 +75,7 @@ func runLiveEvents(cmd *cobra.Command, args []string) error {
 	baseDir := getWorkingDir()
 
 	// Prepare a file-backed top-level logger (no console output)
-	logger := runtimeLogger("[live-events] ")
+	logger := runtimeLogger("live-events")
 	logger.Println("Starting live events with embedded TUI")
 	resolvedDBPath := resolvePathRelativeToBase(baseDir, cfg.Database.Path)
 	logger.Printf("Using database at %s", resolvedDBPath)
@@ -90,7 +88,7 @@ func runLiveEvents(cmd *cobra.Command, args []string) error {
 	defer st.Close()
 
 	// Initialize bus (silence logs while TUI is active to avoid terminal noise)
-	busLogger := log.New(io.Discard, "", 0)
+	busLogger := runtimeLogger("bus")
 	eventBus := bus.NewBus(cfg.Redis.URL, busLogger)
 	defer eventBus.Close()
 
@@ -119,7 +117,7 @@ func runLiveEvents(cmd *cobra.Command, args []string) error {
 	}()
 
 	// Prepare a file-backed UI logger to avoid corrupting terminal output
-	uiLogger := runtimeLogger("[UI] ")
+	uiLogger := runtimeLogger("ui")
 	uiLogger.Printf("UI logger initialized (path=%s)", runtimeLogPath())
 
 	// Create and start the TUI

@@ -3,12 +3,12 @@ package ui
 import (
 	"context"
 	"io"
-	"log"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 )
@@ -45,7 +45,7 @@ func TestDetailPaneShowsEnrichmentAfterItArrives(t *testing.T) {
 	eventID := testEvent(t, st, ctx, "beacon to 8.8.8.8")
 
 	// A non-nil provider keeps NewUI from loading the user's real LLM settings.
-	ui := NewUI(ctx, st, llm.NewLocalStub(), log.New(io.Discard, "", 0), "test")
+	ui := NewUI(ctx, st, llm.NewLocalStub(), logging.New(io.Discard, logging.LevelDebug, "test"), "test")
 	ui.events = []store.Event{{ID: eventID, DstIP: "8.8.8.8", Message: "beacon to 8.8.8.8"}}
 	ui.selectedEventID = eventID
 
@@ -111,7 +111,7 @@ func TestDetailPaneRendersGroupedEnrichment(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ui := NewUI(ctx, st, llm.NewLocalStub(), log.New(io.Discard, "", 0), "test")
+	ui := NewUI(ctx, st, llm.NewLocalStub(), logging.New(io.Discard, logging.LevelDebug, "test"), "test")
 	ui.events = []store.Event{{ID: eventID, DstIP: "8.8.8.8"}}
 	ui.selectedEventID = eventID
 	ui.showEventDetails()
@@ -149,7 +149,7 @@ func TestOpenEventIDTracksTheSelection(t *testing.T) {
 	first := testEvent(t, st, ctx, "first")
 	second := testEvent(t, st, ctx, "second")
 
-	ui := NewUI(ctx, st, llm.NewLocalStub(), log.New(io.Discard, "", 0), "test")
+	ui := NewUI(ctx, st, llm.NewLocalStub(), logging.New(io.Discard, logging.LevelDebug, "test"), "test")
 	ui.events = []store.Event{{ID: first}, {ID: second}}
 
 	ui.selectedEventID = first

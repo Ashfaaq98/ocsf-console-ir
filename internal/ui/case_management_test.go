@@ -2,13 +2,13 @@ package ui
 
 import (
 	"context"
-	"log"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 )
@@ -41,7 +41,7 @@ func TestToggleEventSelectionUsesCurrentTableSelection(t *testing.T) {
 	defer st.Close()
 
 	ctx := context.Background()
-	logger := log.New(os.Stdout, "[TEST] ", 0)
+	logger := logging.New(os.Stdout, logging.LevelDebug, "test")
 	ui := NewUI(ctx, st, &mockLLM{}, logger, "test")
 
 	c := store.Case{ID: "case-1", Title: "Test Case", Severity: "low", Status: "open"}
@@ -119,7 +119,7 @@ func TestExtractIOCsAggregates(t *testing.T) {
 	defer st.Close()
 
 	ctx := context.Background()
-	logger := log.New(os.Stdout, "[TEST] ", 0)
+	logger := logging.New(os.Stdout, logging.LevelDebug, "test")
 	ui := NewUI(ctx, st, &mockLLM{}, logger, "test")
 	c := store.Case{ID: "case-2", Title: "IOC Case", Severity: "medium", Status: "open"}
 	cm := NewCaseManagement(ui, c)
@@ -223,7 +223,7 @@ func TestBuildCaseSummaryPromptBasic(t *testing.T) {
 	defer st.Close()
 
 	ctx := context.Background()
-	logger := log.New(os.Stdout, "[TEST] ", 0)
+	logger := logging.New(os.Stdout, logging.LevelDebug, "test")
 	ui := NewUI(ctx, st, &mockLLMChat{}, logger, "test")
 
 	c := store.Case{ID: "case-3", Title: "Prompt Case", Severity: "high", Status: "open", AssignedTo: "analyst"}
@@ -264,7 +264,7 @@ func TestFormatActionDescriptionCaseSummary(t *testing.T) {
 	defer st.Close()
 
 	ctx := context.Background()
-	logger := log.New(os.Stdout, "[TEST] ", 0)
+	logger := logging.New(os.Stdout, logging.LevelDebug, "test")
 	ui := NewUI(ctx, st, &mockLLMChat{}, logger, "test")
 	c := store.Case{ID: "case-4", Title: "Fmt Case", Severity: "low", Status: "open"}
 	cm := NewCaseManagement(ui, c)
@@ -316,7 +316,7 @@ func TestExtractIOCsUsesObservables(t *testing.T) {
 		t.Fatalf("GetAllEvents: %v (n=%d)", err, len(stored))
 	}
 
-	logger := log.New(os.Stdout, "[TEST] ", 0)
+	logger := logging.New(os.Stdout, logging.LevelDebug, "test")
 	ui := NewUI(ctx, st, &mockLLM{}, logger, "test")
 	cm := NewCaseManagement(ui, store.Case{ID: "case-obs", Title: "Obs", Severity: "medium", Status: "open"})
 	cm.baseEvents = stored

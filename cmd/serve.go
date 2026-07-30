@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,6 +14,7 @@ import (
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/bus"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ingest"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/paths"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/plugins"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
@@ -112,16 +112,15 @@ func runServe(cmd *cobra.Command, args []string) error {
 	config := GetConfig()
 
 	// Initialize logger - use file logging for TUI mode to keep terminal clean
-	var logger *log.Logger
+	var logger *logging.Logger
 	willUseTUI := determineTUIMode(cmd, args)
 
 	if willUseTUI {
-		// Silent TUI mode: logs go to the shared rotating file, errors still
-		// visible on the terminal.
-		logger = log.New(io.MultiWriter(runtimeLogWriter(), &errorFilterWriter{os.Stderr}), "[serve] ", log.LstdFlags)
+		// TUI mode: everything to the shared file, errors also on the terminal.
+		logger = runtimeLoggerConsole("serve", &errorFilterWriter{os.Stderr})
 	} else {
-		// Headless mode: normal stderr logging
-		logger = log.New(os.Stderr, "[serve] ", log.LstdFlags)
+		// Headless mode: the file plus plain stderr.
+		logger = runtimeLoggerConsole("serve", os.Stderr)
 	}
 
 	logger.Println("Starting Console-IR server")
@@ -142,10 +141,11 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	// Initialize bus (Redis or Null)
 	logger.Println("Connecting to event bus...")
-	var busLogger *log.Logger = logger
-	if willUseTUI {
-		// Silence bus logs while TUI is active to avoid bottom-of-screen noise
-		busLogger = log.New(io.Discard, "", 0)
+	// The bus logs to the file under its own tag. It used to be discarded
+	// entirely while the TUI ran, so nothing it reported was ever recoverable.
+	busLogger := runtimeLogger("bus")
+	if !willUseTUI {
+		busLogger = runtimeLoggerConsole("bus", os.Stderr)
 	}
 	eventBus := bus.NewBus(config.Redis.URL, busLogger)
 	defer eventBus.Close()
@@ -166,7 +166,7 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// their runtime logs (e.g. per-lookup failures during enrichment) never
 	// corrupt the TUI screen; in headless mode this is the normal logger.
 	logger.Println("Initializing plugin manager...")
-	pluginLogger := busLogger
+	pluginLogger := runtimeLogger("plugins")
 	pluginManager := plugins.NewPluginManager(eventBus, st, config.Plugins.Dir, pluginLogger)
 
 	// Register embedded (in-process) core enrichments. These run inside the
@@ -182,9 +182,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 	defer pluginManager.Stop()
 
 	// Create service coordinator (silence service logs when TUI is active)
-	var svcLogger *log.Logger = logger
-	if willUseTUI {
-		svcLogger = log.New(io.Discard, "", 0)
+	svcLogger := runtimeLogger("services")
+	if !willUseTUI {
+		svcLogger = runtimeLoggerConsole("services", os.Stderr)
 	}
 
 	// Create a cancellable context for the service coordinator
@@ -263,12 +263,12 @@ func runServe(cmd *cobra.Command, args []string) error {
 			// Switch to headless mode
 			noTUI = true
 		} else {
-			// Create a silent logger for background services when TUI is active
-			silentLogger := log.New(io.Discard, "", 0)
-			coordinator.logger = silentLogger
+			// Background services keep logging to the file while the TUI runs;
+			// only the terminal is kept clean.
+			coordinator.logger = runtimeLogger("services")
 
 			// A file-backed logger for the UI, to prevent terminal corruption.
-			uiLogger := runtimeLogger("[UI] ")
+			uiLogger := runtimeLogger("ui")
 			// Emit an initial marker so the log is easy to find and verify.
 			uiLogger.Printf("UI logger initialized (path=%s)", runtimeLogPath())
 
@@ -453,7 +453,7 @@ type ServiceCoordinator struct {
 	bus           bus.Bus
 	pluginManager plugins.PluginManager
 	llmProvider   llm.LLMProvider
-	logger        *log.Logger
+	logger        *logging.Logger
 	ctx           context.Context
 
 	// Service state

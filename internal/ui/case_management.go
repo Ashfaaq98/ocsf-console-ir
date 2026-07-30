@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/paths"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
@@ -44,7 +44,7 @@ type CaseManagement struct {
 	app    *tview.Application
 	store  *store.Store
 	llm    llm.ChatProvider
-	logger *log.Logger
+	logger *logging.Logger
 	theme  Theme
 	ctx    context.Context
 

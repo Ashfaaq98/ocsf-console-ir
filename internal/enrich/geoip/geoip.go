@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"math/rand"
 	"net"
 	"net/http"
@@ -22,6 +21,7 @@ import (
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/bus"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/plugins"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 )
@@ -29,19 +29,16 @@ import (
 // Plugin is the in-process GeoIP enrichment plugin.
 type Plugin struct {
 	provider GeoIPProvider
-	logger   *log.Logger
+	logger   *logging.Logger
 }
 
 // New creates a GeoIP plugin backed by the ipapi.co provider with default
 // tuning (matching the former standalone plugin's flag defaults). A nil logger
 // discards output.
-func New(logger *log.Logger) *Plugin {
-	if logger == nil {
-		logger = log.New(io.Discard, "", 0)
-	}
+func New(logger *logging.Logger) *Plugin {
 	provider, err := NewIpapiProvider(IpapiConfig{Logger: logger})
 	if err != nil {
-		logger.Printf("geoip: failed to init ipapi provider: %v", err)
+		logger.Error("failed to init ipapi provider: %v", err)
 	}
 	return &Plugin{provider: provider, logger: logger}
 }
@@ -95,7 +92,7 @@ func (p *Plugin) Process(ctx context.Context, event bus.EventMessage) ([]store.E
 	for _, ip := range ips {
 		geoData, err := p.performGeoIPLookup(ip)
 		if err != nil {
-			p.logger.Printf("GeoIP lookup failed for %s: %v", ip, err)
+			p.logger.Warn("lookup failed for %s: %v", ip, err)
 			continue
 		}
 
@@ -173,7 +170,7 @@ type IpapiConfig struct {
 	RateLimitRPS int
 	CacheTTL     time.Duration
 	CacheSize    int
-	Logger       *log.Logger
+	Logger       *logging.Logger
 }
 
 // IpapiProvider implements GeoIP lookups via ipapi.co.
@@ -182,7 +179,7 @@ type IpapiProvider struct {
 	apiKey  string
 	client  *http.Client
 
-	logger *log.Logger
+	logger *logging.Logger
 
 	// simple token bucket
 	tokens chan struct{}
@@ -267,7 +264,7 @@ func (p *IpapiProvider) Lookup(ipStr string) (*GeoIPData, error) {
 	// cache
 	if data := p.getCached(ipStr); data != nil {
 		if p.logger != nil {
-			p.logger.Printf("ipapi cache hit ip=%s", ipStr)
+			p.logger.Debug("ipapi cache hit ip=%s", ipStr)
 		}
 		return data, nil
 	}
@@ -327,7 +324,7 @@ func (p *IpapiProvider) Lookup(ipStr string) (*GeoIPData, error) {
 		}
 		p.setCached(ipStr, geo)
 		if p.logger != nil {
-			p.logger.Printf("ipapi lookup ip=%s status=%d latency_ms=%d", ipStr, resp.StatusCode, lat)
+			p.logger.Debug("ipapi lookup ip=%s status=%d latency_ms=%d", ipStr, resp.StatusCode, lat)
 		}
 		return geo, nil
 	}

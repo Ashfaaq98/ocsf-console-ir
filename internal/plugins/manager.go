@@ -3,7 +3,6 @@ package plugins
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/bus"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 )
 
@@ -20,7 +20,7 @@ type DefaultPluginManager struct {
 	registry   PluginRegistry
 	bus        bus.Bus
 	store      *store.Store
-	logger     *log.Logger
+	logger     *logging.Logger
 	pluginsDir string
 
 	// State management
@@ -51,13 +51,13 @@ type DefaultPluginRegistry struct {
 	mu              sync.RWMutex
 	corePlugins     map[string]CorePlugin
 	externalPlugins map[string]*ExternalPlugin
-	logger          *log.Logger
+	logger          *logging.Logger
 }
 
 // NewPluginManager creates a new plugin manager
-func NewPluginManager(eventBus bus.Bus, store *store.Store, pluginsDir string, logger *log.Logger) *DefaultPluginManager {
+func NewPluginManager(eventBus bus.Bus, store *store.Store, pluginsDir string, logger *logging.Logger) *DefaultPluginManager {
 	if logger == nil {
-		logger = log.New(os.Stderr, "[PluginManager] ", log.LstdFlags)
+		logger = nil
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -109,7 +109,7 @@ func (pm *DefaultPluginManager) Start(ctx context.Context) error {
 	// Start core plugins
 	for name, plugin := range pm.registry.(*DefaultPluginRegistry).corePlugins {
 		if err := plugin.Start(ctx); err != nil {
-			pm.logger.Printf("Failed to start core plugin %s: %v", name, err)
+			pm.logger.Error("Failed to start core plugin %s: %v", name, err)
 			continue
 		}
 		pm.logger.Printf("Started core plugin: %s", name)
@@ -123,7 +123,7 @@ func (pm *DefaultPluginManager) Start(ctx context.Context) error {
 		}
 
 		if err := pm.startExternalPlugin(ctx, plugin); err != nil {
-			pm.logger.Printf("Failed to start external plugin %s: %v", name, err)
+			pm.logger.Error("Failed to start external plugin %s: %v", name, err)
 			continue
 		}
 		pm.logger.Printf("Started external plugin: %s", name)
@@ -214,7 +214,7 @@ func (pm *DefaultPluginManager) Stop() error {
 	// Stop core plugins (outside the lock)
 	for name, plugin := range corePlugins {
 		if err := plugin.Stop(); err != nil {
-			pm.logger.Printf("Error stopping core plugin %s: %v", name, err)
+			pm.logger.Error("Error stopping core plugin %s: %v", name, err)
 		} else {
 			pm.logger.Printf("Stopped core plugin: %s", name)
 		}
@@ -223,7 +223,7 @@ func (pm *DefaultPluginManager) Stop() error {
 	// Initiate shutdown for external plugins (do not call Wait() here)
 	for name, cmd := range procs {
 		if err := pm.stopExternalPlugin(name, cmd); err != nil {
-			pm.logger.Printf("Error stopping external plugin %s: %v", name, err)
+			pm.logger.Error("Error stopping external plugin %s: %v", name, err)
 		} else {
 			pm.logger.Printf("Stopped external plugin: %s", name)
 		}
@@ -294,14 +294,14 @@ func (pm *DefaultPluginManager) ProcessEvent(ctx context.Context, event bus.Even
 	for name, plugin := range pm.registry.(*DefaultPluginRegistry).corePlugins {
 		enrichments, err := plugin.Process(ctx, event)
 		if err != nil {
-			pm.logger.Printf("Error processing event through core plugin %s: %v", name, err)
+			pm.logger.Error("Error processing event through core plugin %s: %v", name, err)
 			continue
 		}
 
 		// Apply enrichments to the database
 		for _, enrichment := range enrichments {
 			if err := pm.store.ApplyEnrichment(ctx, event.EventID, enrichment); err != nil {
-				pm.logger.Printf("Error applying enrichment from plugin %s: %v", name, err)
+				pm.logger.Error("Error applying enrichment from plugin %s: %v", name, err)
 			}
 		}
 	}
@@ -478,7 +478,7 @@ func (pm *DefaultPluginManager) stopExternalPlugin(name string, cmd *exec.Cmd) e
 
 	// Try graceful shutdown first
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil && err.Error() != "os: process already finished" {
-		pm.logger.Printf("Failed to send SIGTERM to plugin %s: %v", name, err)
+		pm.logger.Error("Failed to send SIGTERM to plugin %s: %v", name, err)
 	}
 
 	// Poll for up to 2 seconds (20 x 100ms) for the process to exit.
@@ -495,7 +495,7 @@ func (pm *DefaultPluginManager) stopExternalPlugin(name string, cmd *exec.Cmd) e
 
 	// Force kill if still running
 	if err := cmd.Process.Kill(); err != nil && err.Error() != "os: process already finished" {
-		pm.logger.Printf("Failed to kill plugin %s: %v", name, err)
+		pm.logger.Error("Failed to kill plugin %s: %v", name, err)
 	}
 	return nil
 }
@@ -568,7 +568,7 @@ func (pm *DefaultPluginManager) performHealthChecks() {
 
 	results, err := pm.HealthCheck(ctx)
 	if err != nil {
-		pm.logger.Printf("Error performing health checks: %v", err)
+		pm.logger.Error("Error performing health checks: %v", err)
 		return
 	}
 

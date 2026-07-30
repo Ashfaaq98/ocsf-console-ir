@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/bus"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 	"github.com/fsnotify/fsnotify"
 )
@@ -25,7 +25,7 @@ type FolderOptions struct {
 	Watch     bool
 	Patterns  []string // e.g. []string{"*.jsonl", "*.json"}
 	CaseTitle string   // default "Ingested Events"
-	Logger    *log.Logger
+	Logger    *logging.Logger
 	// When true and in Watch mode, a JSONL file that has no persisted offset
 	// (i.e. one never seen before) starts at EOF instead of being imported from
 	// the beginning. Restart de-duplication is handled by persisted offsets
@@ -59,7 +59,7 @@ type FolderIngestor struct {
 // NewFolderIngestor constructs a folder ingestor.
 func NewFolderIngestor(parser *Parser, st *store.Store, b bus.Bus, opts FolderOptions) *FolderIngestor {
 	if opts.Logger == nil {
-		opts.Logger = log.New(log.Writer(), "[ingest-folder] ", log.LstdFlags)
+		opts.Logger = nil
 	}
 	if len(opts.Patterns) == 0 {
 		opts.Patterns = []string{"*.jsonl", "*.json"}
