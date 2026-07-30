@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -786,14 +787,7 @@ func (ui *UI) setupLayout() {
 		SetWordWrap(true)
 	ui.appTitle.SetBorder(false)
 	ui.appTitle.SetBackgroundColor(ui.theme.Surface)
-	// Professional header: Name on left, Date on right, Version below
-	todayDate := time.Now().Format("2006-01-02")
-	ui.appTitle.SetText(fmt.Sprintf(
-		" [%s]Console-IR[-]                  [%s]%s[-]\n [%s]v%s[-]",
-		ui.theme.TagAccent,
-		ui.theme.TagMuted, todayDate,
-		ui.theme.TagMuted, ui.version,
-	))
+	ui.renderHeader()
 
 	// Dedicated ALL EVENTS list (single item)
 	ui.allList = tview.NewList()
@@ -2519,13 +2513,7 @@ func (ui *UI) applyTheme() {
 	// App title header
 	if ui.appTitle != nil {
 		ui.appTitle.SetBackgroundColor(ui.theme.Surface)
-		todayDate := time.Now().Format("2006-01-02")
-		ui.appTitle.SetText(fmt.Sprintf(
-			" [%s]Console-IR[-]                  [%s]%s[-]\n [%s]v%s[-]",
-			ui.theme.TagAccent,
-			ui.theme.TagMuted, todayDate,
-			ui.theme.TagMuted, ui.version,
-		))
+		ui.renderHeader()
 		ui.appTitle.SetTextColor(ui.theme.TextPrimary)
 	}
 
@@ -4492,4 +4480,50 @@ func (ui *UI) RefreshAllEventsAsync(source string) {
 	}
 	// scheduleEventsReload handles re-entrancy, context, and dispatching the correct loader.
 	go ui.scheduleEventsReload(source)
+}
+
+// describeSuffix matches the trailing commits-since-tag and commit hash that
+// `git describe` appends on a build between releases.
+var describeSuffix = regexp.MustCompile(`-\d+-g[0-9a-f]+(-dirty)?$`)
+
+// displayVersion normalises the build version for the header.
+//
+// The two build paths disagree: GoReleaser passes {{ .Version }} ("0.2.0")
+// while the Makefile passes `git describe --tags` ("v0.1.1-16-g53dad12-dirty").
+// The header used to prepend a literal "v", which was right for one and
+// produced "vv…" for the other.
+//
+// A full describe string is also too wide for the title panel — it wrapped and
+// pushed the schema version off the header — so a between-releases build is
+// shown as "v0.1.1+dev". `console-ir version` still prints the exact string.
+func displayVersion(version string) string {
+	v := strings.TrimSpace(version)
+	if v == "" {
+		return "dev"
+	}
+	// TrimLeft rather than TrimPrefix: a doubled prefix should collapse too,
+	// not merely be reduced by one.
+	v = "v" + strings.TrimLeft(v, "v")
+	if base := describeSuffix.ReplaceAllString(v, ""); base != v {
+		return base + "+dev"
+	}
+	return v
+}
+
+// renderHeader draws the title bar. It is the single implementation: the header
+// used to be written out in full in two places, so a change to one silently
+// reverted the moment a theme was applied.
+func (ui *UI) renderHeader() {
+	if ui.appTitle == nil {
+		return
+	}
+	// The title panel is ~44 columns, so the fields are stacked rather than
+	// spread: padding the date to the right edge wrapped it onto a third line
+	// and pushed the schema version out of view entirely.
+	ui.appTitle.SetText(fmt.Sprintf(
+		" [%s]Console-IR[-] [%s]%s[-]\n [%s]OCSF %s · %s[-]",
+		ui.theme.TagAccent,
+		ui.theme.TagMuted, displayVersion(ui.version),
+		ui.theme.TagMuted, ocsf.SchemaVersion(), time.Now().Format("2006-01-02"),
+	))
 }
