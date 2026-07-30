@@ -1546,7 +1546,10 @@ func (ui *UI) updateEventsList() {
 			"No events yet.",
 			"",
 			fmt.Sprintf("Drop OCSF JSONL files into  %s  to ingest and enrich them.", ui.watchedDir()),
-			"Quick start:   console-ir ingest examples/sample-events.jsonl",
+			// Not "ingest examples/…": examples/ is not in the release archive,
+			// so a brew or curl install has no such file. The demo data is
+			// embedded in the binary, which works everywhere.
+			"Or run   console-ir demo   to explore a sample incident first.",
 			"Then press  r  to refresh this list.",
 		}
 		for i, line := range hint {

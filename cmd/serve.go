@@ -67,8 +67,8 @@ Examples:
   # Start with TUI (default)
   console-ir serve
 
-  # Load the shipped sample, then explore it in the TUI
-  console-ir ingest examples/sample-events.jsonl && console-ir
+  # Explore a sample incident in a throwaway database
+  console-ir demo
 
   # Start without TUI (experimental headless mode)
   console-ir serve --no-tui`,
