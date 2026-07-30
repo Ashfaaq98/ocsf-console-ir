@@ -15,6 +15,7 @@ import (
 	"log"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -214,50 +215,80 @@ func (p *WhoisProvider) Lookup(domain string) (string, error) {
 	return "", lastErr
 }
 
-// extractDomains attempts to find domains in the event raw JSON.
-// It looks for common fields (url, domain, host) and falls back to a regex scan.
+// domainPattern matches anything shaped like a dotted hostname.
+var domainPattern = regexp.MustCompile(`([a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,63}`)
+
+// hostKeys hold a hostname because the producer said so. Their values are taken
+// at face value, at any depth.
+var hostKeys = map[string]bool{
+	"domain": true, "host": true, "hostname": true, "fqdn": true,
+	"url": true, "uri": true, "dns_name": true, "referrer": true,
+}
+
+// textKeys hold free text, which may mention a domain. These are pattern-scanned,
+// with the filename and truncation filters applied.
+var textKeys = map[string]bool{
+	"message": true, "cmd_line": true, "command_line": true, "query": true,
+	"answer": true, "subject": true, "description": true, "body": true,
+	"raw": true,
+}
+
+// OCSF observable type_ids worth a WHOIS lookup.
+const (
+	observableHostname  = 1
+	observableURLString = 6
+)
+
+// reservedTLDs are never registrable, so a lookup cannot succeed. Internal
+// hostnames like corp.local are common in security events, and each one
+// otherwise costs a rate-limited lookup and its retries.
+var reservedTLDs = map[string]bool{
+	"local": true, "localhost": true, "internal": true, "intranet": true,
+	"lan": true, "corp": true, "home": true, "invalid": true, "test": true,
+	"example": true, "onion": true, "arpa": true,
+}
+
+func hasReservedTLD(domain string) bool {
+	idx := strings.LastIndex(domain, ".")
+	if idx < 0 {
+		return true
+	}
+	return reservedTLDs[strings.ToLower(domain[idx+1:])]
+}
+
+// extractDomains finds the domains in an event's raw JSON.
+//
+// It walks the parsed document by key rather than scanning the raw text. The text
+// scan matched OCSF *field names* — process.name, user.name, file.name,
+// file.hashes — and since .name is a real TLD those lookups succeeded, so every
+// such event stored the .name registry's registrar and abuse contact as if they
+// described the event. Keys are never values, so parsing first removes that
+// entire class of false positive.
+//
+// Walking by key also stops the scan reading fields that never hold a hostname
+// but often look like one: a "first.last" username, or a file name whose
+// extension happens to be a TLD. That trades a little recall for precision, on
+// the grounds that fabricated enrichment is worse than absent enrichment — and
+// that indicators belong in observables, which are extracted separately.
 func extractDomains(raw string) []string {
 	var domains []string
-
-	// Try to parse as JSON and look for specific keys
-	var obj map[string]interface{}
-	if err := json.Unmarshal([]byte(raw), &obj); err == nil {
-		// common fields
-		checkStringKey := func(key string) {
-			if v, ok := obj[key]; ok {
-				if s, ok := v.(string); ok {
-					if d := domainFromString(s); d != "" {
-						domains = append(domains, d)
-					}
-				}
-			}
-		}
-		checkStringKey("url")
-		checkStringKey("domain")
-		checkStringKey("host")
-		// nested checks (like network endpoints)
-		if ep, ok := obj["dst_endpoint"].(map[string]interface{}); ok {
-			if host, ok := ep["host"].(string); ok {
-				if d := domainFromString(host); d != "" {
-					domains = append(domains, d)
-				}
-			}
-		}
-		if ep, ok := obj["src_endpoint"].(map[string]interface{}); ok {
-			if host, ok := ep["host"].(string); ok {
-				if d := domainFromString(host); d != "" {
-					domains = append(domains, d)
-				}
-			}
+	add := func(s string) {
+		if d := domainFromString(s); d != "" && !hasReservedTLD(d) {
+			domains = append(domains, d)
 		}
 	}
 
-	// Fallback: regex scan for domain-like patterns
-	reg := regexp.MustCompile(`([a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,63}`)
-	matches := reg.FindAllString(raw, -1)
-	for _, m := range matches {
-		if d := domainFromString(m); d != "" {
-			domains = append(domains, d)
+	var obj map[string]interface{}
+	if json.Unmarshal([]byte(raw), &obj) == nil {
+		walkForDomains(obj, "", add, func(s string) {
+			for _, m := range scanForDomains(s) {
+				add(m)
+			}
+		})
+	} else {
+		// A non-JSON payload has no keys to be confused by, so scan the text.
+		for _, m := range scanForDomains(raw) {
+			add(m)
 		}
 	}
 
@@ -271,6 +302,142 @@ func extractDomains(raw string) []string {
 		}
 	}
 	return out
+}
+
+// walkForDomains descends a decoded JSON document, handing values under hostKeys
+// to trust and values under textKeys to scan. key is the name the current value
+// was reached by; array elements inherit their array's key.
+func walkForDomains(v interface{}, key string, trust, scan func(string)) {
+	switch t := v.(type) {
+	case string:
+		switch {
+		case hostKeys[key]:
+			trust(t)
+		case textKeys[key]:
+			scan(t)
+		}
+	case map[string]interface{}:
+		// Sorted so the domains found — and therefore the enrichment keys
+		// written — are stable from one ingest to the next.
+		keys := make([]string, 0, len(t))
+		for k := range t {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			if k == "observables" {
+				walkObservables(t[k], trust)
+				continue
+			}
+			walkForDomains(t[k], k, trust, scan)
+		}
+	case []interface{}:
+		for _, item := range t {
+			walkForDomains(item, key, trust, scan)
+		}
+	}
+}
+
+// walkObservables reads OCSF observables by their declared type rather than
+// guessing from shape. Observables are typed, so a User Name ("j.doe") or a File
+// Name is skipped outright instead of being looked up because it happens to
+// contain a dot.
+func walkObservables(v interface{}, trust func(string)) {
+	items, ok := v.([]interface{})
+	if !ok {
+		return
+	}
+	for _, item := range items {
+		o, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		value, _ := o["value"].(string)
+		if value == "" || !observableIsHostLike(o) {
+			continue
+		}
+		trust(value)
+	}
+}
+
+func observableIsHostLike(o map[string]interface{}) bool {
+	// type_id is the only required attribute of an OCSF observable, so prefer it.
+	if id, ok := o["type_id"].(float64); ok && int(id) != 0 {
+		return int(id) == observableHostname || int(id) == observableURLString
+	}
+	// Fall back to the caption for producers that send only the string form.
+	if t, ok := o["type"].(string); ok {
+		t = strings.ToLower(t)
+		return strings.Contains(t, "hostname") || strings.Contains(t, "domain") || strings.Contains(t, "url")
+	}
+	return false
+}
+
+// scanForDomains returns the hostname-shaped substrings of s that survive the
+// filename and truncation filters.
+func scanForDomains(s string) []string {
+	var out []string
+	for _, loc := range domainPattern.FindAllStringIndex(s, -1) {
+		m := s[loc[0]:loc[1]]
+		// A match that runs straight into another alphanumeric character is a
+		// fragment, not a hostname: "invoke.ps1" matches only "invoke.ps", and
+		// .ps is a real TLD, so the truncated form would resolve.
+		if loc[1] < len(s) && isAlphanumeric(s[loc[1]]) {
+			continue
+		}
+		if looksLikeFilename(m) {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+func isAlphanumeric(b byte) bool {
+	return (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+// fileExtensions are final labels that mean "filename", not "hostname". Several
+// are also real TLDs — .zip, .sh, .py, .md — so a filename caught by the pattern
+// scan would otherwise resolve, and the unrelated registry's details would be
+// stored as if they described the event.
+//
+// This list is applied only to pattern-scanned matches, never to a producer's
+// own url/domain/host fields, so a genuine domain under one of these TLDs still
+// enriches when the event actually says it is a domain.
+var fileExtensions = map[string]bool{
+	// Executables, libraries and scripts
+	"exe": true, "dll": true, "sys": true, "drv": true, "ocx": true, "cpl": true,
+	"scr": true, "msi": true, "msp": true, "bat": true, "cmd": true, "ps1": true,
+	"psm1": true, "vbs": true, "vbe": true, "js": true, "jse": true, "wsf": true,
+	"wsh": true, "hta": true, "jar": true, "class": true, "py": true, "pyc": true,
+	"pyo": true, "pl": true, "rb": true, "sh": true, "bash": true, "zsh": true,
+	"php": true, "asp": true, "aspx": true, "jsp": true, "elf": true, "so": true,
+	// Documents and data
+	"txt": true, "log": true, "ini": true, "cfg": true, "conf": true, "json": true,
+	"xml": true, "yml": true, "yaml": true, "csv": true, "tsv": true, "md": true,
+	"doc": true, "docx": true, "xls": true, "xlsx": true, "ppt": true, "pptx": true,
+	"pdf": true, "rtf": true, "odt": true, "ods": true,
+	// Archives and images
+	"zip": true, "tar": true, "gz": true, "bz2": true, "xz": true, "7z": true,
+	"rar": true, "cab": true, "iso": true, "img": true, "vhd": true, "vhdx": true,
+	"png": true, "jpg": true, "jpeg": true, "gif": true, "bmp": true, "svg": true,
+	"ico": true, "webp": true, "mp3": true, "mp4": true, "avi": true, "mov": true,
+	"wav": true,
+	// Runtime artefacts
+	"db": true, "sqlite": true, "dat": true, "bin": true, "tmp": true, "temp": true,
+	"bak": true, "old": true, "swp": true, "lnk": true, "pif": true, "reg": true,
+	"pdb": true, "dmp": true, "core": true,
+}
+
+// looksLikeFilename reports whether a pattern-scanned match is more plausibly a
+// file than a host.
+func looksLikeFilename(s string) bool {
+	idx := strings.LastIndex(s, ".")
+	if idx < 0 || idx == len(s)-1 {
+		return false
+	}
+	return fileExtensions[strings.ToLower(s[idx+1:])]
 }
 
 // domainFromString extracts the domain from a string that may be a URL or domain.
