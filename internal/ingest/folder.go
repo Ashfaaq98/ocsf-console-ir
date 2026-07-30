@@ -42,6 +42,17 @@ type FolderOptions struct {
 }
 
 // FolderIngestor ingests OCSF events from a directory (one-shot or watch mode).
+// DefaultDir is the drop folder watched when none is configured.
+//
+// It sits beside the working directory rather than inside the database
+// directory: the database is precious state written only by the app, while the
+// inbox is a throwaway landing zone written by users and pipelines. Co-locating
+// them made "clear the inbox" and "destroy the database" the same rm -rf.
+//
+// It stays working-directory-relative on purpose — a landing zone buried under
+// ~/.local/share is one you cannot drop files into.
+const DefaultDir = "./incoming"
+
 type FolderIngestor struct {
 	parser *Parser
 	store  *store.Store

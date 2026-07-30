@@ -40,11 +40,9 @@ var (
 	ingestDir string
 )
 
-// defaultIngestDir sits beside the database directory rather than inside it.
-// The database is precious state written only by the app; the inbox is a
-// throwaway landing zone written by users and pipelines. Co-locating them made
-// "clear the inbox" and "destroy the database" the same rm -rf.
-const defaultIngestDir = "./incoming"
+// defaultIngestDir is owned by the ingest package, so the folder watcher, the
+// HTTP receiver and this flag cannot disagree about where files land.
+const defaultIngestDir = ingest.DefaultDir
 
 // serveCmd is the pre-v0.2 name for launching the TUI, kept as a hidden alias.
 // Running the bare binary is now the documented way in — "serve" implied a
@@ -57,7 +55,7 @@ var serveCmd = &cobra.Command{
 
 1. Terminal User Interface (TUI) for case management
 2. In-process enrichment (GeoIP, WHOIS) with no external services
-3. Folder ingestion: OCSF JSONL/JSON dropped into data/incoming/
+3. Folder ingestion: OCSF JSONL/JSON dropped into ./incoming/
 4. Optional distributed mode via Redis (only when --redis is set)
 
 The serve command runs until interrupted (Ctrl+C).
@@ -70,7 +68,7 @@ Examples:
   console-ir serve
 
   # Load the shipped sample, then explore it in the TUI
-  cp examples/sample-events.jsonl data/incoming/ && console-ir serve
+  console-ir ingest examples/sample-events.jsonl && console-ir
 
   # Start without TUI (experimental headless mode)
   console-ir serve --no-tui`,
@@ -304,6 +302,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 			}()
 
 			ui := ui.NewUI(ctx, st, llmProvider, uiLogger, GetVersion())
+			// So empty-state hints name the folder that is genuinely watched,
+			// which --ingest-dir can move.
+			ui.SetIngestDir(ingestDir)
 
 			// Start TUI directly - tcell can handle terminal compatibility
 			if err := ui.Start(ctx); err != nil {

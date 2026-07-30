@@ -115,7 +115,7 @@ func (ui *UI) updateFindingsList(total int) {
 			"Findings are OCSF detections — class_uid 2001-2008, or any event with is_alert=true.",
 			"They are what a SIEM or EDR emits when something is worth an analyst's attention.",
 			"",
-			"Drop a Detection Finding into  data/incoming/  to see it here.",
+			fmt.Sprintf("Drop a Detection Finding into  %s  to see it here.", ui.watchedDir()),
 			"Press  A  to browse all raw events instead.",
 		}
 		if ui.findingsOpenOnly {

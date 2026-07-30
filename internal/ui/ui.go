@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/buildinfo"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/ingest"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
@@ -280,6 +281,11 @@ type UI struct {
 	// Filters (time window for events list)
 	filterStart time.Time
 	filterEnd   time.Time
+
+	// ingestDir is the drop folder actually being watched, so empty-state hints
+	// can name it. Hardcoding a path in those hints is how they came to point at
+	// data/incoming long after the watcher had moved to ./incoming.
+	ingestDir string
 
 	// Live enrichment refresh. openEventID mirrors selectedEventID for readers on
 	// other goroutines; enrichNotify carries the IDs worth redrawing for.
@@ -1539,8 +1545,8 @@ func (ui *UI) updateEventsList() {
 		hint := []string{
 			"No events yet.",
 			"",
-			"Drop OCSF JSONL files into  data/incoming/  to ingest and enrich them.",
-			"Quick start:   cp examples/sample-events.jsonl data/incoming/",
+			fmt.Sprintf("Drop OCSF JSONL files into  %s  to ingest and enrich them.", ui.watchedDir()),
+			"Quick start:   console-ir ingest examples/sample-events.jsonl",
 			"Then press  r  to refresh this list.",
 		}
 		for i, line := range hint {
@@ -4288,4 +4294,17 @@ func (ui *UI) renderHeader() {
 		ui.theme.TagMuted, buildinfo.Display(ui.version),
 		ui.theme.TagMuted, ocsf.SchemaVersion(), time.Now().Format("2006-01-02"),
 	))
+}
+
+// SetIngestDir records the drop folder being watched, so empty-state hints name
+// the real path rather than a hardcoded one that drifts when the default moves.
+func (ui *UI) SetIngestDir(dir string) { ui.ingestDir = dir }
+
+// watchedDir is the folder to name in hints, falling back to the default when
+// the UI was constructed without one (tests, live-events).
+func (ui *UI) watchedDir() string {
+	if strings.TrimSpace(ui.ingestDir) == "" {
+		return ingest.DefaultDir
+	}
+	return ui.ingestDir
 }

@@ -55,7 +55,7 @@ func NewHTTPIngestServer(opts HTTPIngestOptions) (*HTTPIngestServer, error) {
 		opts.Bind = "127.0.0.1:8081"
 	}
 	if opts.Dir == "" {
-		opts.Dir = "data/incoming"
+		opts.Dir = DefaultDir
 	}
 	if opts.MaxBodyBytes <= 0 {
 		opts.MaxBodyBytes = 10 * 1024 * 1024 // 10 MiB
