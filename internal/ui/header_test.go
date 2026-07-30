@@ -8,41 +8,6 @@ import (
 	"github.com/rivo/tview"
 )
 
-// The header rendered "vv0.1.1-16-gb359521-dirty" because it prepended a
-// literal "v" to a version that already had one. The two build paths disagree,
-// so the fix has to be correct for both rather than for whichever was tested.
-func TestDisplayVersionAddsExactlyOneV(t *testing.T) {
-	cases := map[string]string{
-		// Makefile: git describe --tags --always --dirty. Compacted, because the
-		// full string wraps the title panel and pushes the schema version off.
-		"v0.1.1-16-gb359521-dirty": "v0.1.1+dev",
-		"v0.1.1-16-gb359521":       "v0.1.1+dev",
-		"0.1.1-16-gb359521-dirty":  "v0.1.1+dev",
-		"v0.2.0":                   "v0.2.0",
-		// GoReleaser: {{ .Version }}
-		"0.2.0":      "v0.2.0",
-		"0.2.1-next": "v0.2.1-next",
-		// Unset build
-		"dev": "vdev",
-		"":    "dev",
-		"  ":  "dev",
-	}
-	for in, want := range cases {
-		if got := displayVersion(in); got != want {
-			t.Errorf("displayVersion(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
-func TestDisplayVersionNeverDoublesTheV(t *testing.T) {
-	for _, in := range []string{"v1.2.3", "1.2.3", "vv1.2.3"} {
-		got := displayVersion(in)
-		if strings.HasPrefix(got, "vv") {
-			t.Errorf("displayVersion(%q) = %q, which still doubles the v", in, got)
-		}
-	}
-}
-
 // The header used to be written out in full in two places, so a change to one
 // reverted as soon as a theme was applied. Assert it survives a theme switch.
 func TestHeaderIsStableAcrossThemeChanges(t *testing.T) {

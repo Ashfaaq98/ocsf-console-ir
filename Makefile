@@ -15,7 +15,7 @@ PLUGINS_DIR=./plugins
 GO_FILES=$(shell find . -name "*.go" -type f -not -path "./vendor/*")
 VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 COMMIT=$(shell git rev-parse --short HEAD 2>/dev/null || echo "none")
-BUILD_TIME=$(shell date -u '+%Y-%m-%d_%H:%M:%S')
+BUILD_TIME=$(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 LDFLAGS=-ldflags "-X main.Version=$(VERSION) -X main.Commit=$(COMMIT) -X main.BuildTime=$(BUILD_TIME)"
 
 # Go configuration

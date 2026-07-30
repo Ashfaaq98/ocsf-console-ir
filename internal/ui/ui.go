@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/buildinfo"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
@@ -4387,34 +4387,6 @@ func (ui *UI) RefreshAllEventsAsync(source string) {
 	go ui.scheduleEventsReload(source)
 }
 
-// describeSuffix matches the trailing commits-since-tag and commit hash that
-// `git describe` appends on a build between releases.
-var describeSuffix = regexp.MustCompile(`-\d+-g[0-9a-f]+(-dirty)?$`)
-
-// displayVersion normalises the build version for the header.
-//
-// The two build paths disagree: GoReleaser passes {{ .Version }} ("0.2.0")
-// while the Makefile passes `git describe --tags` ("v0.1.1-16-g53dad12-dirty").
-// The header used to prepend a literal "v", which was right for one and
-// produced "vv…" for the other.
-//
-// A full describe string is also too wide for the title panel — it wrapped and
-// pushed the schema version off the header — so a between-releases build is
-// shown as "v0.1.1+dev". `console-ir version` still prints the exact string.
-func displayVersion(version string) string {
-	v := strings.TrimSpace(version)
-	if v == "" {
-		return "dev"
-	}
-	// TrimLeft rather than TrimPrefix: a doubled prefix should collapse too,
-	// not merely be reduced by one.
-	v = "v" + strings.TrimLeft(v, "v")
-	if base := describeSuffix.ReplaceAllString(v, ""); base != v {
-		return base + "+dev"
-	}
-	return v
-}
-
 // renderHeader draws the title bar. It is the single implementation: the header
 // used to be written out in full in two places, so a change to one silently
 // reverted the moment a theme was applied.
@@ -4428,7 +4400,7 @@ func (ui *UI) renderHeader() {
 	ui.appTitle.SetText(fmt.Sprintf(
 		" [%s]Console-IR[-] [%s]%s[-]\n [%s]OCSF %s · %s[-]",
 		ui.theme.TagAccent,
-		ui.theme.TagMuted, displayVersion(ui.version),
+		ui.theme.TagMuted, buildinfo.Display(ui.version),
 		ui.theme.TagMuted, ocsf.SchemaVersion(), time.Now().Format("2006-01-02"),
 	))
 }
