@@ -121,6 +121,18 @@ func runServe(cmd *cobra.Command, args []string) error {
 		logger = runtimeLoggerConsole("serve", os.Stderr)
 	}
 
+	// The HTTP receiver writes each POST as a file into the drop folder; the
+	// folder watcher is what actually ingests those files, and it only starts
+	// alongside the TUI. Headless, the receiver would answer 202 Accepted and
+	// leave the events on disk unread — a pipeline pointed at it would look
+	// healthy while losing everything. Refuse the combination rather than
+	// accept data we will not store.
+	if httpIngestEnable && !willUseTUI {
+		return fmt.Errorf("HTTP ingestion is not supported without the TUI: " +
+			"POSTed events would be accepted and never ingested. " +
+			"Run without --no-tui, or use `console-ir ingest <dir> --watch`, which is fully headless")
+	}
+
 	logger.Println("Starting Console-IR server")
 
 	// Pre-determine if we'll use TUI so we can configure logging/bus before starting services

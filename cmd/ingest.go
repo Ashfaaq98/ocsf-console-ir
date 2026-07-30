@@ -140,18 +140,30 @@ func runIngest(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to process events: %w", err)
 	}
 
-	logger.Printf("Ingestion completed:")
-	logger.Printf("  Total events processed: %d", stats.TotalEvents)
-	logger.Printf("  Successfully ingested: %d", stats.SuccessfulEvents)
-	logger.Printf("  Failed events: %d", stats.FailedEvents)
-	logger.Printf("  Skipped events: %d", stats.SkippedEvents)
-	logger.Printf("  Processing time: %v", stats.ProcessingTime)
-
 	// Enrichment is scheduled per record but runs concurrently; wait for it so
 	// the command does not exit with lookups still in flight.
+	var enrichApplied, enrichFailed int
 	if enricher != nil {
-		applied, failed := enricher.Wait()
-		logger.Printf("  Enrichments applied: %d (failed: %d)", applied, failed)
+		enrichApplied, enrichFailed = enricher.Wait()
+	}
+
+	// The summary is this command's result, printed for a person watching it
+	// run. A timestamp and a severity belong on a log record, not on the answer
+	// to "what did that do" — the same numbers are in the log file either way.
+	report(os.Stdout, "Ingested %d of %d events in %s.",
+		stats.SuccessfulEvents, stats.TotalEvents, stats.ProcessingTime.Round(time.Millisecond))
+	if stats.FailedEvents > 0 {
+		report(os.Stdout, "  %d failed", stats.FailedEvents)
+	}
+	if stats.SkippedEvents > 0 {
+		report(os.Stdout, "  %d skipped (already ingested)", stats.SkippedEvents)
+	}
+	if enricher != nil {
+		line := fmt.Sprintf("  %d enrichments applied", enrichApplied)
+		if enrichFailed > 0 {
+			line += fmt.Sprintf(", %s failed (see %s)", plural(enrichFailed, "lookup"), runtimeLogPath())
+		}
+		report(os.Stdout, "%s", line)
 	}
 
 	if stats.FailedEvents > 0 && !skipInvalid {
@@ -200,7 +212,8 @@ func runDirectoryIngest(ctx context.Context, config Config, st *store.Store,
 		opts.Enricher = enricher
 	}
 
-	logger.Printf("Ingesting directory %s (watch=%v, patterns=%v)", dir, ingestWatch, patterns)
+	logger.Info("ingesting directory %s (watch=%v patterns=%v)", dir, ingestWatch, patterns)
+	report(os.Stdout, "Watching %s for %s ...", dir, strings.Join(patterns, ", "))
 
 	ingestor := ingest.NewFolderIngestor(ingest.NewParser(), st, eventBus, opts)
 	if err := ingestor.Run(ctx); err != nil && err != context.Canceled {
@@ -209,10 +222,14 @@ func runDirectoryIngest(ctx context.Context, config Config, st *store.Store,
 
 	if enricher != nil {
 		applied, failed := enricher.Wait()
-		logger.Printf("Enrichments applied: %d (failed: %d)", applied, failed)
+		line := fmt.Sprintf("Directory ingest finished. %d enrichments applied", applied)
+		if failed > 0 {
+			line += fmt.Sprintf(", %s failed (see %s)", plural(failed, "lookup"), runtimeLogPath())
+		}
+		report(os.Stdout, "%s.", line)
+	} else {
+		report(os.Stdout, "Directory ingest finished.")
 	}
-
-	logger.Printf("Directory ingest completed")
 	return nil
 }
 
@@ -360,4 +377,22 @@ func updateStats(main, batch *IngestStats) {
 	main.SuccessfulEvents += batch.SuccessfulEvents
 	main.FailedEvents += batch.FailedEvents
 	main.SkippedEvents += batch.SkippedEvents
+}
+
+// report writes a line of user-facing command output.
+//
+// Results go to stdout so they can be piped; the log file keeps its own record
+// with timestamps and levels. Mixing the two meant a person reading "did that
+// work?" had to parse a log record to find the number.
+func report(w io.Writer, format string, args ...any) {
+	fmt.Fprintf(w, format+"\n", args...)
+}
+
+// plural renders a count with its noun, pluralised. Command output is read by
+// people, and "1 lookups failed" reads like a bug in the tool reporting the bug.
+func plural(n int, noun string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, noun)
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }

@@ -44,6 +44,12 @@ Run with no arguments to open the terminal UI.`,
 	// reporting an unknown command.
 	Args: cobra.NoArgs,
 	RunE: runServe,
+	// A runtime failure is not a usage mistake. Without this, any error
+	// returned from RunE prints the full flag list after it — 38 lines that
+	// bury the one line explaining what went wrong. Cobra still prints usage
+	// for genuine usage errors (unknown flags, bad arguments), which it
+	// detects before RunE runs.
+	SilenceUsage: true,
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
