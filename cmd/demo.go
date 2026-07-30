@@ -47,13 +47,15 @@ func init() {
 }
 
 func runDemo(cmd *cobra.Command, args []string) error {
-	logger := runtimeLoggerConsole("demo", os.Stderr)
+	// File-only: everything the demo prints to the terminal is chosen
+	// deliberately below and then erased before the TUI opens, so a stray log
+	// line would either be wiped or outlive the session. Real failures are
+	// returned as errors, not logged.
+	logger := runtimeLogger("demo")
 
 	// A demo killed rather than quit never runs its cleanup, so tidy up what
-	// earlier runs left behind before adding another directory. This is
-	// housekeeping, so it is recorded in the log rather than shown on a screen
-	// the user is about to hand to the TUI.
-	sweepStaleDemoDirs(runtimeLogger("demo"))
+	// earlier runs left behind before adding another directory.
+	sweepStaleDemoDirs(logger)
 
 	dir, err := os.MkdirTemp("", demoDirPrefix)
 	if err != nil {
@@ -65,13 +67,17 @@ func runDemo(cmd *cobra.Command, args []string) error {
 
 	demoDB := filepath.Join(dir, "demo.db")
 
+	// Seeding is quick but not instant, so say what is happening. This line is
+	// erased before the TUI opens: tcell restores the pre-launch screen on exit,
+	// so anything left here outlives the session it describes and ends up as the
+	// last thing on the terminal — reading like the app failed to start.
 	fmt.Fprintf(os.Stderr, "Loading %d sample records into a throwaway database...\n", demo.RecordCount())
 
 	if err := seedDemoStore(cmd, demoDB, logger); err != nil {
 		return err
 	}
 
-	fmt.Fprintln(os.Stderr, "Opening the TUI. Press D for findings, A for events, ? for help, q to quit.")
+	clearLines(os.Stderr, 1)
 
 	// Point the TUI at the demo database and its own empty inbox, so a demo run
 	// neither reads nor writes anything the user cares about.
@@ -85,16 +91,34 @@ func runDemo(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// The TUI restores the pre-launch screen on exit, so the last thing left on
-	// the terminal would otherwise be "press D … q to quit" — instructions for a
-	// session that has ended, which reads like a failure to launch. Say what
-	// actually happened instead.
+	// The only thing the demo leaves behind: what happened to the database.
 	if demoKeep {
-		fmt.Fprintf(os.Stderr, "\nDemo finished. Database kept at %s\n", demoDB)
+		fmt.Fprintf(os.Stderr, "Demo finished. Database kept at %s\n", demoDB)
 	} else {
-		fmt.Fprintln(os.Stderr, "\nDemo finished. The throwaway database was discarded.")
+		fmt.Fprintln(os.Stderr, "Demo finished. The throwaway database was discarded.")
 	}
 	return nil
+}
+
+// clearLines erases the last n lines written to w.
+//
+// Only when w is a terminal: redirected output would otherwise receive the
+// escape sequences as literal text, which is worse than the tidy-up is worth.
+func clearLines(w *os.File, n int) {
+	if n <= 0 || !isCharDevice(w) {
+		return
+	}
+	// CSI nF moves to the start of the line n lines up; CSI J clears from there
+	// to the end of the screen.
+	fmt.Fprintf(w, "\033[%dF\033[J", n)
+}
+
+// isCharDevice reports whether f is a terminal. The package already has an
+// isTerminal(), but it always inspects stdout; the demo writes to stderr, and
+// the check has to follow the writer it guards.
+func isCharDevice(f *os.File) bool {
+	info, err := f.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 // demoDirPrefix names the temporary directories a demo run creates.
