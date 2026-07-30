@@ -1001,6 +1001,12 @@ func (cm *CaseManagement) showEventDetailsModal(ev store.Event) {
 	// Fetch enrichments asynchronously
 	go func() {
 		enrichments, err := cm.store.GetEnrichmentsByEvent(cm.ctx, ev.ID)
+		var observables []store.Observable
+		if err == nil && len(enrichments) > 0 {
+			if byEvent, obsErr := cm.store.GetObservablesForEvents(cm.ctx, []string{ev.ID}); obsErr == nil {
+				observables = byEvent[ev.ID]
+			}
+		}
 		cm.app.QueueUpdateDraw(func() {
 			if err != nil {
 				render(header + fmt.Sprintf("[%s]Failed to load enrichments:[-] %v", cm.theme.TagWarning, err))
@@ -1032,43 +1038,18 @@ func (cm *CaseManagement) showEventDetailsModal(ev store.Event) {
 			}
 			sb.WriteString("\n")
 
-			// Enrichments
+			// Enrichments, grouped into one card per indicator — the same
+			// rendering the main detail pane uses.
 			sb.WriteString(fmt.Sprintf("[%s]Enrichments[-]\n", lbl))
 			if len(enrichments) == 0 {
 				sb.WriteString("  (none)\n")
 			} else {
-				for _, enr := range enrichments {
-					sb.WriteString(fmt.Sprintf("  [%s]%s[-] (%s)\n", acc, strings.ToUpper(enr.Source), enr.Type))
-					// Render selected fields from JSON data (compact)
-					if len(enr.Data) == 0 {
-						sb.WriteString("    - (no data)\n")
-					} else {
-						// Show up to 8 keys in alpha order
-						keys := make([]string, 0, len(enr.Data))
-						for k := range enr.Data {
-							keys = append(keys, k)
-						}
-						sort.Strings(keys)
-						max := 8
-						if len(keys) < max {
-							max = len(keys)
-						}
-						for i := 0; i < max; i++ {
-							k := keys[i]
-							v := enr.Data[k]
-							// Format value as JSON (single line, truncated)
-							jsonVal, _ := json.Marshal(v)
-							txt := string(jsonVal)
-							if len(txt) > 120 {
-								txt = txt[:117] + "..."
-							}
-							sb.WriteString(fmt.Sprintf("    - [%s]%s[-]: [%s]%s[-]\n", val, k, cm.theme.TagMuted, txt))
-						}
-						if len(keys) > max {
-							sb.WriteString("    - ...\n")
-						}
-					}
-				}
+				cards := groupEnrichments(enrichments, eventIndicatorValues(observables, &ev))
+				renderEnrichmentCards(&sb, cm.theme, cards, enrichmentRenderOptions{
+					Indent:      "  ",
+					MaxFields:   12,
+					MaxValueLen: 120,
+				})
 			}
 			// Append a persistent hint at the bottom after enrichments load
 			sb.WriteString(fmt.Sprintf("\n\n[%s][Esc or q] close[-]", cm.theme.TagMuted))

@@ -412,6 +412,11 @@ type UI struct {
 	filterStart time.Time
 	filterEnd   time.Time
 
+	// Live enrichment refresh. openEventID mirrors selectedEventID for readers on
+	// other goroutines; enrichNotify carries the IDs worth redrawing for.
+	openEventID  atomic.Value // string
+	enrichNotify chan string
+
 	// Runtime
 	running    bool
 	helpActive bool
@@ -556,6 +561,16 @@ func NewUI(ctx context.Context, store *store.Store, llmProvider llm.LLMProvider,
 		shortcutBuffer:   "",
 		shortcutTimeout:  750 * time.Millisecond, // 750ms timeout for multi-key input
 		version:          version,
+		// Buffered so an enrichment worker never waits on the UI. Arrivals for the
+		// open event are rare (its own lookups), so this is generous.
+		enrichNotify: make(chan string, 32),
+	}
+	ui.openEventID.Store("")
+
+	// Enrichment is asynchronous, so without this the detail pane shows whatever
+	// was true when the event was opened until the analyst presses 'r'.
+	if store != nil {
+		store.OnEnrichment(ui.enrichmentApplied)
 	}
 
 	// Initialize LLM provider from persisted settings when not provided by caller.
@@ -587,9 +602,43 @@ func NewUI(ctx context.Context, store *store.Store, llmProvider llm.LLMProvider,
 	return ui
 }
 
+// enrichmentApplied runs on the goroutine that applied the enrichment — an
+// enrichment worker, mid-ingest. It must not block, so it filters on the open
+// event and drops the notification if the UI is already behind: the next arrival
+// or a manual 'r' will pick the change up either way.
+func (ui *UI) enrichmentApplied(eventID string) {
+	if open, _ := ui.openEventID.Load().(string); open != eventID {
+		return
+	}
+	select {
+	case ui.enrichNotify <- eventID:
+	default:
+	}
+}
+
+// watchEnrichments redraws the detail pane when the open event's enrichment lands.
+func (ui *UI) watchEnrichments() {
+	for {
+		select {
+		case <-ui.ctx.Done():
+			return
+		case eventID := <-ui.enrichNotify:
+			ui.app.QueueUpdateDraw(func() {
+				// Re-check on the UI goroutine: the selection may have moved
+				// between the notification and this redraw.
+				if ui.selectedEventID == eventID {
+					ui.showEventDetails()
+				}
+			})
+		}
+	}
+}
+
 // Start starts the TUI application
 func (ui *UI) Start(ctx context.Context) error {
 	ui.logger.Println("Starting TUI application")
+
+	go ui.watchEnrichments()
 
 	// Debug: Check if allList is properly initialized
 	if ui.logger != nil {
@@ -1720,6 +1769,11 @@ func (ui *UI) updateEventsList() {
 
 // showEventDetails displays details for the selected event
 func (ui *UI) showEventDetails() {
+	// Publish what the pane is showing so the enrichment notifier, which runs on
+	// a worker goroutine, can tell whether an arrival is worth a redraw without
+	// reading UI state.
+	ui.openEventID.Store(ui.selectedEventID)
+
 	if ui.selectedEventID == "" {
 		ui.eventDetail.SetText("No event selected")
 		return
@@ -1785,37 +1839,24 @@ func (ui *UI) showEventDetails() {
 
 	details.WriteString(fmt.Sprintf("\n[%s]Message:[-]\n[%s]%s[-]\n", lbl, val, event.Message))
 
-	// Show enrichments from DB (if any), newest first
+	// Show enrichments from the DB, grouped into one card per indicator.
 	if enrichments, err := ui.store.GetEnrichmentsByEvent(ui.ctx, event.ID); err == nil && len(enrichments) > 0 {
-		details.WriteString(fmt.Sprintf("\n[%s]Enrichments (latest %d):[-]\n", ui.theme.TagAccent, len(enrichments)))
-		for _, enr := range enrichments {
-			ts := enr.CreatedAt.Format("2006-01-02 15:04:05")
-			details.WriteString(fmt.Sprintf("[%s]- %s/%s at %s[-]\n", ui.theme.TagMuted, enr.Source, enr.Type, ts))
-
-			// Render enrichment data with stable ordering and truncation
-			keys := make([]string, 0, len(enr.Data))
-			for k := range enr.Data {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-
-			const maxKeys = 30
-			limit := maxKeys
-			if len(keys) < limit {
-				limit = len(keys)
-			}
-			for i := 0; i < limit; i++ {
-				k := keys[i]
-				v := enr.Data[k]
-				if len(v) > 200 {
-					v = v[:197] + "..."
-				}
-				details.WriteString(fmt.Sprintf("  [%s]%s:[-] [%s]%s[-]\n", ui.theme.TagWarning, k, ui.theme.TagTextPrimary, v))
-			}
-			if len(keys) > limit {
-				details.WriteString(fmt.Sprintf("  [%s]... and %d more keys[-]\n", ui.theme.TagMuted, len(keys)-limit))
-			}
+		// Observables are only needed to name the cards, so the query stays
+		// inside this branch: an unenriched event costs nothing extra.
+		var observables []store.Observable
+		if byEvent, obsErr := ui.store.GetObservablesForEvents(ui.ctx, []string{event.ID}); obsErr == nil {
+			observables = byEvent[event.ID]
+		} else if ui.logger != nil {
+			ui.logger.Printf("Failed to load observables for event %s: %v", event.ID, obsErr)
 		}
+
+		cards := groupEnrichments(enrichments, eventIndicatorValues(observables, event))
+		details.WriteString(fmt.Sprintf("\n[%s]Enrichments (%d):[-]\n", ui.theme.TagAccent, len(cards)))
+		renderEnrichmentCards(&details, ui.theme, cards, enrichmentRenderOptions{
+			Indent:      "  ",
+			MaxFields:   30,
+			MaxValueLen: 200,
+		})
 	} else if err != nil {
 		// Log failure but don't interrupt the UI
 		if ui.logger != nil {

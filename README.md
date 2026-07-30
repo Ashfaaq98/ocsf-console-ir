@@ -113,8 +113,8 @@ Console-IR opens on the **findings queue** whenever detections are waiting. From
 
 - **Enter** — open the finding: evidence artifacts, the events it came from, and its indicators
 - **`s`** set status, **`v`** set verdict, **`e`** escalate it into a case
-- **`A`** — switch to **ALL EVENTS** and open one to see **GeoIP/WHOIS enrichment** attached
-  (press **`r`** to refresh as async lookups land)
+- **`A`** — switch to **ALL EVENTS** and open one to see **GeoIP/WHOIS enrichment** attached,
+  grouped one card per indicator and updating in place as async lookups land
 
 [![TUI walkthrough](assets/demo.gif)](assets/demo.mp4)
 
@@ -253,7 +253,9 @@ plugins, not a requirement.
 - **Cases missing after upgrading?** v0.2.0 moved the database to a per-user directory and printed
   the move. Run `console-ir version` to see where it is now.
 - **TUI won't start?** Use a native terminal; it needs a real TTY. (`--no-tui` is experimental and does not ingest.) `console-ir list` works anywhere.
-- **Enrichment missing?** It's asynchronous, so press `r` to refresh an event's detail once WHOIS/GeoIP lookups complete.
+- **Enrichment missing?** Lookups are asynchronous, but the open event refreshes itself when they
+  land. If a card never appears, the lookup failed — check the log (`console-ir version` prints its
+  path). `r` still forces a reload.
 - **Build issues?** Run `go mod download` then `make build`.
 - **Redis errors?** You don't need Redis unless you explicitly pass `--redis ...`.
 

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
@@ -17,6 +18,35 @@ import (
 // Store represents the SQLite storage implementation
 type Store struct {
 	db *sql.DB
+
+	// Subscribers notified after an enrichment lands, so a view showing an event
+	// can redraw instead of displaying what was true when it was opened.
+	enrichMu   sync.RWMutex
+	enrichSubs []func(eventID string)
+}
+
+// OnEnrichment registers fn to run after an enrichment is applied to an event.
+//
+// Enrichment is asynchronous and, in standalone mode, the bus is a no-op — so
+// there is nothing for a view to subscribe to. This is the in-process
+// alternative. Callbacks run on the goroutine that applied the enrichment,
+// usually an enrichment worker, so fn must not block: hand off and return.
+func (s *Store) OnEnrichment(fn func(eventID string)) {
+	if fn == nil {
+		return
+	}
+	s.enrichMu.Lock()
+	s.enrichSubs = append(s.enrichSubs, fn)
+	s.enrichMu.Unlock()
+}
+
+func (s *Store) notifyEnrichment(eventID string) {
+	s.enrichMu.RLock()
+	subs := s.enrichSubs
+	s.enrichMu.RUnlock()
+	for _, fn := range subs {
+		fn(eventID)
+	}
 }
 
 // ensureCaseExists creates a minimal case row when a caller provides a case ID but no case exists.
@@ -904,6 +934,10 @@ func (s *Store) ApplyEnrichment(ctx context.Context, eventID string, enrichment 
 	if err != nil {
 		return fmt.Errorf("failed to save enrichment: %w", err)
 	}
+
+	// Only after the row is durable: a view that redraws on this signal must find
+	// the enrichment when it re-queries.
+	s.notifyEnrichment(enrichment.EventID)
 
 	return nil
 }
