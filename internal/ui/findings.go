@@ -592,6 +592,11 @@ func (ui *UI) currentAnalyst() string {
 // with events on every theme change — the detail pane kept showing the finding,
 // because only the table was rebuilt.
 func (ui *UI) repaintCurrentList() {
+	// The table may not exist yet: setTheme runs while restoring the persisted
+	// choice, before the layout is assembled.
+	if ui.eventList == nil {
+		return
+	}
 	if ui.showFindings {
 		ui.updateFindingsList(ui.findingsTotal)
 		return

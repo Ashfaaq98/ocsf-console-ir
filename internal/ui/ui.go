@@ -122,6 +122,58 @@ func themeDark() Theme {
 	}
 }
 
+// themeGruvbox is the gruvbox dark palette, using its published values.
+//
+// It replaces a warm theme that looked like gruvbox but was not: every accent
+// sat at roughly half gruvbox's saturation (#d4976c against #fe8019), and the
+// punchy retro accents are the whole point of the palette.
+//
+// Severity uses gruvbox's own red/orange/yellow/green/blue ramp so the levels
+// stay distinguishable rather than being tinted to match.
+func themeGruvbox() Theme {
+	return Theme{
+		Bg:          hex("#282828"), // bg0
+		Surface:     hex("#32302f"), // bg0_s
+		Border:      hex("#504945"), // bg2
+		FocusBorder: hex("#fe8019"), // bright orange
+		SelectionBg: hex("#504945"),
+		SelectionFg: hex("#fbf1c7"), // fg0
+		TextPrimary: hex("#ebdbb2"), // fg1
+		TextMuted:   hex("#928374"), // gray
+		Accent:      hex("#fe8019"), // bright orange
+		Success:     hex("#b8bb26"), // bright green
+		Warning:     hex("#fabd2f"), // bright yellow
+		Error:       hex("#fb4934"), // bright red
+		Header:      hex("#fabd2f"),
+
+		// Table colors
+		TableHeader:   hex("#fabd2f"),
+		TableHeaderBg: hex("#3c3836"), // bg1
+		TableRow:      hex("#ebdbb2"),
+		TableRowMuted: hex("#a89984"), // fg4
+		TableZebra1:   hex("#32302f"),
+		TableZebra2:   hex("#282828"),
+
+		SeverityCritical: hex("#fb4934"), // red
+		SeverityHigh:     hex("#fe8019"), // orange
+		SeverityMedium:   hex("#fabd2f"), // yellow
+		SeverityLow:      hex("#b8bb26"), // green
+		SeverityInfo:     hex("#83a598"), // blue
+
+		TagTextPrimary:      "#ebdbb2",
+		TagMuted:            "#928374",
+		TagAccent:           "#fe8019",
+		TagSuccess:          "#b8bb26",
+		TagWarning:          "#fabd2f",
+		TagError:            "#fb4934",
+		TagSeverityCritical: "#fb4934",
+		TagSeverityHigh:     "#fe8019",
+		TagSeverityMedium:   "#fabd2f",
+		TagSeverityLow:      "#b8bb26",
+		TagSeverityInfo:     "#83a598",
+	}
+}
+
 func themeLight() Theme {
 	return Theme{
 		Bg:          hex("#f6f8fa"),
@@ -252,104 +304,6 @@ func themeColorblindSafe() Theme {
 		TagSeverityMedium:   "#fee08b",
 		TagSeverityLow:      "#91bfdb",
 		TagSeverityInfo:     "#4575b4",
-	}
-}
-
-func themeClaude() Theme {
-	// Claude's signature theme: Warm, sophisticated, and designed for comfort.
-	// A palette of warm grays, ambers, and terracottas that's easy on the eyes
-	// during long incident response sessions while maintaining professionalism.
-	return Theme{
-		Bg:          hex("#1a1614"), // Deep warm charcoal
-		Surface:     hex("#252220"), // Warm gray surface
-		Border:      hex("#3d3835"), // Subtle warm border
-		FocusBorder: hex("#d4976c"), // Warm amber focus
-		SelectionBg: hex("#3d3835"), // Warm selection
-		SelectionFg: hex("#f5f0eb"), // Warm off-white
-		TextPrimary: hex("#f5f0eb"), // Warm cream text
-		TextMuted:   hex("#a89a8f"), // Warm muted gray
-		Accent:      hex("#d4976c"), // Signature warm amber - friendly yet professional
-		Success:     hex("#88b369"), // Warm sage green
-		Warning:     hex("#e0a564"), // Warm amber
-		Error:       hex("#d87c7c"), // Warm terracotta red
-		Header:      hex("#e0b882"), // Warm golden header
-
-		// Table colors - warm and readable
-		TableHeader:   hex("#e0b882"), // Warm gold
-		TableHeaderBg: hex("#2a2724"), // Slightly lighter warm bg
-		TableRow:      hex("#f5f0eb"), // Warm cream
-		TableRowMuted: hex("#b0a599"), // Warm gray
-		TableZebra1:   hex("#221f1d"), // Deep warm zebra
-		TableZebra2:   hex("#1a1614"), // Matches bg
-
-		// Severity - warm gradient from green to red
-		SeverityCritical: hex("#e07856"), // Warm coral red
-		SeverityHigh:     hex("#e09856"), // Warm tangerine
-		SeverityMedium:   hex("#d4b356"), // Warm gold
-		SeverityLow:      hex("#8ba36f"), // Warm olive green
-		SeverityInfo:     hex("#7a9bb3"), // Warm steel blue
-
-		// Tag colors for dynamic markup
-		TagTextPrimary:      "#f5f0eb",
-		TagMuted:            "#a89a8f",
-		TagAccent:           "#d4976c",
-		TagSuccess:          "#88b369",
-		TagWarning:          "#e0a564",
-		TagError:            "#d87c7c",
-		TagSeverityCritical: "#e07856",
-		TagSeverityHigh:     "#e09856",
-		TagSeverityMedium:   "#d4b356",
-		TagSeverityLow:      "#8ba36f",
-		TagSeverityInfo:     "#7a9bb3",
-	}
-}
-
-func themeGemini() Theme {
-	// Gemini theme: "Google Signature" - Bold, high-contrast, and stylish.
-	// Uses the core Google palette (Blue, Red, Yellow, Green) against a sleek dark background.
-	// This theme is designed to pop and feel distinctively "Google".
-	return Theme{
-		Bg:          hex("#000000"), // True Black for maximum contrast
-		Surface:     hex("#121212"), // Material Dark Surface
-		Border:      hex("#5f6368"), // Google Grey 600 (Subtle borders)
-		FocusBorder: hex("#4285f4"), // Google Blue 500 (Focus pops)
-		SelectionBg: hex("#4285f4"), // Google Blue 500
-		SelectionFg: hex("#ffffff"), // White text on selection
-		TextPrimary: hex("#ffffff"), // Pure White
-		TextMuted:   hex("#9aa0a6"), // Google Grey 400
-		Accent:      hex("#fbbc04"), // Google Yellow 500 (Accents)
-		Success:     hex("#34a853"), // Google Green 500
-		Warning:     hex("#fbbc04"), // Google Yellow 500
-		Error:       hex("#ea4335"), // Google Red 500
-		Header:      hex("#ea4335"), // Google Red 500 (Distinctive Header)
-
-		// Table colors
-		TableHeader:   hex("#ea4335"), // Red Header
-		TableHeaderBg: hex("#202124"), // Google Dark Grey
-		TableRow:      hex("#e8eaed"), // Google Grey 100
-		TableRowMuted: hex("#9aa0a6"), // Google Grey 400
-		TableZebra1:   hex("#171717"), // Darker Zebra
-		TableZebra2:   hex("#000000"), // Matches Bg
-
-		// Severity - Mapping Google Colors to severities
-		SeverityCritical: hex("#ea4335"), // Red
-		SeverityHigh:     hex("#f9ab00"), // Yellow/Orange-ish
-		SeverityMedium:   hex("#fbbc04"), // Yellow
-		SeverityLow:      hex("#34a853"), // Green
-		SeverityInfo:     hex("#4285f4"), // Blue
-
-		// Tag colors
-		TagTextPrimary:      "#ffffff",
-		TagMuted:            "#9aa0a6",
-		TagAccent:           "#fbbc04",
-		TagSuccess:          "#34a853",
-		TagWarning:          "#fbbc04",
-		TagError:            "#ea4335",
-		TagSeverityCritical: "#ea4335",
-		TagSeverityHigh:     "#f9ab00",
-		TagSeverityMedium:   "#fbbc04",
-		TagSeverityLow:      "#34a853",
-		TagSeverityInfo:     "#4285f4",
 	}
 }
 
@@ -593,8 +547,10 @@ func NewUI(ctx context.Context, store *store.Store, llmProvider llm.LLMProvider,
 	}
 
 	// Default theme
-	ui.themeName = "neon"
-	ui.theme = themeNeon()
+	// Restore the analyst's last choice; the default is used on a fresh
+	// install or if the settings file is missing or unreadable.
+	ui.themeName = loadThemeName()
+	ui.theme = themeBuilders[ui.themeName]()
 
 	ui.setupLayout()
 	ui.setupKeybindings()
@@ -2439,7 +2395,9 @@ func (ui *UI) setStatusDirect(format string, args ...interface{}) {
 		ui.theme.TagMuted,
 		hints)
 
-	ui.statusBar.SetText(statusText)
+	if ui.statusBar != nil {
+		ui.statusBar.SetText(statusText)
+	}
 }
 
 // getSeverityTcellColor returns the tcell color for a severity level (for widgets)
@@ -2488,13 +2446,17 @@ func (ui *UI) applyTheme() {
 	if ui.logger != nil {
 		ui.logger.Printf("Applying theme: %s", ui.themeName)
 	}
-	// Cases sidebar
-	ui.sidebar.SetMainTextColor(ui.theme.TextPrimary)
-	ui.sidebar.SetSecondaryTextColor(ui.theme.TextMuted)
-	ui.sidebar.SetSelectedTextColor(ui.theme.SelectionFg)
-	ui.sidebar.SetSelectedBackgroundColor(ui.theme.SelectionBg)
-	ui.sidebar.SetBorderColor(ui.theme.Border)
-	ui.sidebar.SetBackgroundColor(ui.theme.Surface)
+	// Cases sidebar. Most widgets below are nil-guarded already; the ones that
+	// were not made applyTheme unsafe to call before the layout is assembled,
+	// which setTheme now does when restoring the persisted choice.
+	if ui.sidebar != nil {
+		ui.sidebar.SetMainTextColor(ui.theme.TextPrimary)
+		ui.sidebar.SetSecondaryTextColor(ui.theme.TextMuted)
+		ui.sidebar.SetSelectedTextColor(ui.theme.SelectionFg)
+		ui.sidebar.SetSelectedBackgroundColor(ui.theme.SelectionBg)
+		ui.sidebar.SetBorderColor(ui.theme.Border)
+		ui.sidebar.SetBackgroundColor(ui.theme.Surface)
+	}
 
 	// ALL EVENTS list (dedicated)
 	if ui.allList != nil {
@@ -2544,21 +2506,29 @@ func (ui *UI) applyTheme() {
 	}
 
 	// Events table and details pane
-	ui.eventList.SetSelectedStyle(tcell.StyleDefault.Background(ui.theme.SelectionBg).Foreground(ui.theme.SelectionFg))
-	ui.eventList.SetBorderColor(ui.theme.Border)
-	ui.eventList.SetBackgroundColor(ui.theme.Surface)
+	if ui.eventList != nil {
+		ui.eventList.SetSelectedStyle(tcell.StyleDefault.Background(ui.theme.SelectionBg).Foreground(ui.theme.SelectionFg))
+		ui.eventList.SetBorderColor(ui.theme.Border)
+		ui.eventList.SetBackgroundColor(ui.theme.Surface)
+	}
 
-	ui.eventDetail.SetTextColor(ui.theme.TextPrimary)
-	ui.eventDetail.SetBorderColor(ui.theme.Border)
-	ui.eventDetail.SetBackgroundColor(ui.theme.Surface)
+	if ui.eventDetail != nil {
+		ui.eventDetail.SetTextColor(ui.theme.TextPrimary)
+		ui.eventDetail.SetBorderColor(ui.theme.Border)
+		ui.eventDetail.SetBackgroundColor(ui.theme.Surface)
+	}
 
 	// Status bar
-	ui.statusBar.SetTextColor(ui.theme.TextPrimary)
-	ui.statusBar.SetBackgroundColor(ui.theme.Surface)
+	if ui.statusBar != nil {
+		ui.statusBar.SetTextColor(ui.theme.TextPrimary)
+		ui.statusBar.SetBackgroundColor(ui.theme.Surface)
+	}
 
 	// Re-render table and focus ring
 	ui.repaintCurrentList()
-	ui.highlightFocus(ui.app.GetFocus())
+	if ui.app != nil {
+		ui.highlightFocus(ui.app.GetFocus())
+	}
 }
 
 // cycleTheme moves to the next theme in sequence
@@ -2566,16 +2536,14 @@ func (ui *UI) cycleTheme() {
 	if ui.logger != nil {
 		ui.logger.Printf("Cycle theme requested (current=%s)", ui.themeName)
 	}
-	next := map[string]string{
-		"dark":          "light",
-		"light":         "claude",
-		"claude":        "gemini",
-		"gemini":        "neon",
-		"neon":          "cb-safe",
-		"cb-safe":       "high-contrast",
-		"high-contrast": "dark",
+	names := themeNames()
+	for i, n := range names {
+		if n == ui.themeName {
+			ui.setTheme(names[(i+1)%len(names)])
+			return
+		}
 	}
-	ui.setTheme(next[ui.themeName])
+	ui.setTheme(defaultThemeName)
 }
 
 // setTheme applies a named theme
@@ -2592,30 +2560,14 @@ func (ui *UI) setTheme(name string) {
 	if ui.logger != nil {
 		ui.logger.Printf("Setting theme: %s (previous=%s)", name, ui.themeName)
 	}
-	switch name {
-	case "light":
-		ui.themeName = "light"
-		ui.theme = themeLight()
-	case "neon":
-		ui.themeName = "neon"
-		ui.theme = themeNeon()
-	case "high-contrast":
-		ui.themeName = "high-contrast"
-		ui.theme = themeHighContrast()
-	case "claude":
-		ui.themeName = "claude"
-		ui.theme = themeClaude()
-	case "gemini":
-		ui.themeName = "gemini"
-		ui.theme = themeGemini()
-	case "cb-safe":
-		ui.themeName = "cb-safe"
-		ui.theme = themeColorblindSafe()
-	default:
-		ui.themeName = "dark"
-		ui.theme = themeDark()
+	build, ok := themeBuilders[name]
+	if !ok {
+		name, build = defaultThemeName, themeBuilders[defaultThemeName]
 	}
+	ui.themeName = name
+	ui.theme = build()
 	ui.applyTheme()
+	ui.saveUISettings()
 
 	// Propagate live theme to active Case Management screen, if any.
 	if ui.activeCM != nil {
@@ -3124,53 +3076,6 @@ func (ui *UI) addEventsToCase(caseNumberStr string) {
 			})
 		}
 	}()
-}
-
-// Neon theme (formerly "Pride"): vibrant but accessible on a dark surface
-func themeNeon() Theme {
-	return Theme{
-		Bg:          hex("#0f0b14"),
-		Surface:     hex("#14111a"),
-		Border:      hex("#45385a"),
-		FocusBorder: hex("#ff79c6"), // pink focus ring
-		SelectionBg: hex("#2a1f3d"),
-		SelectionFg: hex("#f8f5ff"),
-		TextPrimary: hex("#f8f5ff"),
-		TextMuted:   hex("#b8a8c9"),
-		Accent:      hex("#ff6ac1"), // pink accent
-		Success:     hex("#00d084"), // green
-		Warning:     hex("#ffd166"), // amber
-		Error:       hex("#ff5555"), // red
-		Header:      hex("#ff79c6"), // header accent
-
-		// Table colors
-		TableHeader:   hex("#ff79c6"),
-		TableHeaderBg: hex("#301d49"),
-		TableRow:      hex("#f8f5ff"),
-		TableRowMuted: hex("#b8a8c9"),
-		TableZebra1:   hex("#1a1426"),
-		TableZebra2:   hex("#151020"),
-
-		// Severity colors inspired by rainbow for quick parsing
-		SeverityCritical: hex("#ff3b30"), // red
-		SeverityHigh:     hex("#ff9f0a"), // orange
-		SeverityMedium:   hex("#ffd60a"), // yellow
-		SeverityLow:      hex("#34c759"), // green
-		SeverityInfo:     hex("#0a84ff"), // blue
-
-		// Text tags
-		TagTextPrimary:      "#f8f5ff",
-		TagMuted:            "#b8a8c9",
-		TagAccent:           "#ff6ac1",
-		TagSuccess:          "#00d084",
-		TagWarning:          "#ffd166",
-		TagError:            "#ff5555",
-		TagSeverityCritical: "#ff3b30",
-		TagSeverityHigh:     "#ff9f0a",
-		TagSeverityMedium:   "#ffd60a",
-		TagSeverityLow:      "#34c759",
-		TagSeverityInfo:     "#0a84ff",
-	}
 }
 
 // showCombinedFilterModal opens a structured, keyboard-friendly filter modal with dropdowns and sub-modals.

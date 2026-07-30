@@ -220,7 +220,7 @@ func TestRenderEnrichmentCardsGroupsVisually(t *testing.T) {
 		},
 	}}, []string{"8.8.8.8"})
 
-	renderEnrichmentCards(&sb, themeNeon(), cards, enrichmentRenderOptions{Indent: "  "})
+	renderEnrichmentCards(&sb, themeDark(), cards, enrichmentRenderOptions{Indent: "  "})
 	out := stripTags(sb.String())
 
 	lines := nonEmptyLines(out)
@@ -247,7 +247,7 @@ func TestRenderEnrichmentCardsTruncatesAndReports(t *testing.T) {
 		data[string(rune('a'+i))+"_field"] = "value"
 	}
 	var sb strings.Builder
-	renderEnrichmentCards(&sb, themeNeon(),
+	renderEnrichmentCards(&sb, themeDark(),
 		groupEnrichments([]store.Enrichment{{Source: "x", Data: data}}, nil),
 		enrichmentRenderOptions{MaxFields: 4})
 
@@ -259,7 +259,7 @@ func TestRenderEnrichmentCardsTruncatesAndReports(t *testing.T) {
 
 func TestRenderEnrichmentCardsLabelsUnmatchedGroup(t *testing.T) {
 	var sb strings.Builder
-	renderEnrichmentCards(&sb, themeNeon(),
+	renderEnrichmentCards(&sb, themeDark(),
 		groupEnrichments([]store.Enrichment{{Source: "x", Data: map[string]string{"verdict": "bad"}}}, nil),
 		enrichmentRenderOptions{})
 
@@ -270,7 +270,7 @@ func TestRenderEnrichmentCardsLabelsUnmatchedGroup(t *testing.T) {
 
 func TestRenderEnrichmentCardsShowsDashForEmptyValue(t *testing.T) {
 	var sb strings.Builder
-	renderEnrichmentCards(&sb, themeNeon(),
+	renderEnrichmentCards(&sb, themeDark(),
 		groupEnrichments([]store.Enrichment{{
 			Source: "geoip",
 			Data:   map[string]string{"geoip_8_8_8_8_city": ""},
