@@ -50,8 +50,8 @@ threat intel, and Console-IR is the focused investigation layer once relevant OC
   one alert reported five times stays one row — not five
 - **Indicator pivot:** observables are indexed, so "every event and finding touching this IP, hash,
   or host" is one lookup, not a text search
-- **Case model that matches the schema:** cases hold findings as *members* and events as *evidence*,
-  and the same finding can belong to more than one case
+- **Case model that matches the schema:** cases hold findings as *members* (their own tab) and events
+  as *evidence*, and the same finding can belong to more than one case
 - **OCSF-native ingestion:** JSON/JSONL files, stdin, folder drop-in, and an optional HTTP endpoint
 - **Keyboard-first TUI:** findings, cases, events, timelines, evidence, notes, IOCs, full-text search
 - **Built-in enrichment:** GeoIP and WHOIS run in-process, with no external services
@@ -211,7 +211,14 @@ same cases whichever folder you launch it from. Run `console-ir version` to see 
 you don't want to leave traces on.
 
 Logs go to a single `console-ir.log`, rotated at 5 MB with three older generations kept (20 MB
-maximum).
+maximum). Every line carries a level and the subsystem that emitted it, so failures are greppable:
+
+```
+2026-07-30 17:15:21 WARN  [whois] lookup failed example.bd: no whois server found
+```
+
+`--log-level debug|info|warn|error` sets the threshold (default `info`). `debug` adds keystrokes and
+query timings; `warn` keeps only failures.
 
 The watched drop folder is the exception: it stays relative to where you launch (`./incoming`),
 because a landing zone buried under `~/.local/share` is one you can't drop files into. Point it
@@ -225,6 +232,10 @@ anywhere with `--ingest-dir`.
   model.
 - **Redis** (optional): pass `--redis redis://host:6379` only to enable distributed mode.
   The default is standalone with no external services.
+- **Themes**: press `t` to cycle, `T` for high-contrast, `C` for colourblind-safe. Five ship —
+  `dark` (default), `light`, `gruvbox`, `high-contrast` and `cb-safe`. Your choice is remembered.
+  The accessibility themes matter more than they look: severity is colour-coded, so red/green
+  confusion is a correctness problem here, not a preference.
 
 ## Architecture
 

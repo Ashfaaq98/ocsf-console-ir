@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/bus"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/demo"
@@ -45,7 +47,15 @@ func init() {
 }
 
 func runDemo(cmd *cobra.Command, args []string) error {
-	dir, err := os.MkdirTemp("", "console-ir-demo-")
+	logger := runtimeLoggerConsole("demo", os.Stderr)
+
+	// A demo killed rather than quit never runs its cleanup, so tidy up what
+	// earlier runs left behind before adding another directory. This is
+	// housekeeping, so it is recorded in the log rather than shown on a screen
+	// the user is about to hand to the TUI.
+	sweepStaleDemoDirs(runtimeLogger("demo"))
+
+	dir, err := os.MkdirTemp("", demoDirPrefix)
 	if err != nil {
 		return fmt.Errorf("failed to create demo directory: %w", err)
 	}
@@ -54,7 +64,6 @@ func runDemo(cmd *cobra.Command, args []string) error {
 	}
 
 	demoDB := filepath.Join(dir, "demo.db")
-	logger := runtimeLoggerConsole("demo", os.Stderr)
 
 	fmt.Fprintf(os.Stderr, "Loading %d sample records into a throwaway database...\n", demo.RecordCount())
 
@@ -76,10 +85,49 @@ func runDemo(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// The TUI restores the pre-launch screen on exit, so the last thing left on
+	// the terminal would otherwise be "press D … q to quit" — instructions for a
+	// session that has ended, which reads like a failure to launch. Say what
+	// actually happened instead.
 	if demoKeep {
-		fmt.Fprintf(os.Stderr, "Demo database kept at %s\n", demoDB)
+		fmt.Fprintf(os.Stderr, "\nDemo finished. Database kept at %s\n", demoDB)
+	} else {
+		fmt.Fprintln(os.Stderr, "\nDemo finished. The throwaway database was discarded.")
 	}
 	return nil
+}
+
+// demoDirPrefix names the temporary directories a demo run creates.
+const demoDirPrefix = "console-ir-demo-"
+
+// staleDemoAge is how old an abandoned demo directory must be before it is
+// swept. Generous enough that a concurrent demo is never touched.
+const staleDemoAge = 24 * time.Hour
+
+// sweepStaleDemoDirs removes demo directories left by runs that were killed
+// before their cleanup could run. Failures are logged and ignored: this is
+// housekeeping, not the user's task.
+func sweepStaleDemoDirs(logger *logging.Logger) {
+	entries, err := os.ReadDir(os.TempDir())
+	if err != nil {
+		logger.Debug("could not scan the temp directory for stale demos: %v", err)
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), demoDirPrefix) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || time.Since(info.ModTime()) < staleDemoAge {
+			continue
+		}
+		path := filepath.Join(os.TempDir(), e.Name())
+		if err := os.RemoveAll(path); err != nil {
+			logger.Debug("could not remove stale demo directory %s: %v", path, err)
+			continue
+		}
+		logger.Info("removed stale demo directory %s", path)
+	}
 }
 
 // seedDemoStore ingests the embedded scenario into a fresh database.
