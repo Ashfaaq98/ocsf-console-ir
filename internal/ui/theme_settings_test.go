@@ -21,7 +21,7 @@ func withTempConfig(t *testing.T) string {
 }
 
 func TestShippedThemes(t *testing.T) {
-	want := []string{"cb-safe", "dark", "gruvbox", "high-contrast", "light"}
+	want := []string{"dark", "gruvbox", "light"}
 	got := themeNames()
 
 	if len(got) != len(want) {
@@ -34,7 +34,7 @@ func TestShippedThemes(t *testing.T) {
 	}
 
 	// The culled palettes must be gone, not merely unreferenced.
-	for _, dropped := range []string{"neon", "gemini", "claude"} {
+	for _, dropped := range []string{"neon", "gemini", "claude", "high-contrast", "cb-safe"} {
 		if _, ok := themeBuilders[dropped]; ok {
 			t.Errorf("%q is still registered", dropped)
 		}
@@ -184,7 +184,7 @@ func TestCycleThemeVisitsEveryThemeOnce(t *testing.T) {
 func TestSettingsFileShape(t *testing.T) {
 	dir := withTempConfig(t)
 	ui := &UI{logger: logging.New(os.Stderr, logging.LevelError, "test")}
-	ui.setTheme("high-contrast")
+	ui.setTheme("gruvbox")
 
 	data, err := os.ReadFile(filepath.Join(dir, uiSettingsName))
 	if err != nil {
@@ -194,7 +194,7 @@ func TestSettingsFileShape(t *testing.T) {
 	if err := json.Unmarshal(data, &s); err != nil {
 		t.Fatalf("settings are not valid JSON: %v\n%s", err, data)
 	}
-	if s.Theme != "high-contrast" {
+	if s.Theme != "gruvbox" {
 		t.Errorf("theme = %q", s.Theme)
 	}
 }

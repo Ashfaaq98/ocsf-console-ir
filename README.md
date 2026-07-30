@@ -232,10 +232,8 @@ anywhere with `--ingest-dir`.
   model.
 - **Redis** (optional): pass `--redis redis://host:6379` only to enable distributed mode.
   The default is standalone with no external services.
-- **Themes**: press `t` to cycle, `T` for high-contrast, `C` for colourblind-safe. Five ship —
-  `dark` (default), `light`, `gruvbox`, `high-contrast` and `cb-safe`. Your choice is remembered.
-  The accessibility themes matter more than they look: severity is colour-coded, so red/green
-  confusion is a correctness problem here, not a preference.
+- **Themes**: press `t` to cycle. Three ship — `dark` (default), `gruvbox` and `light`. Your choice
+  is remembered between sessions.
 
 ## Architecture
 

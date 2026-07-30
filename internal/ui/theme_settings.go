@@ -15,16 +15,18 @@ const defaultThemeName = "dark"
 
 // themeBuilders is the registry of shipped themes.
 //
-// Five, each earning its place: dark and light cover the ordinary cases,
-// gruvbox is the one palette people ask for by name, and high-contrast and
-// cb-safe are accessibility. Since severity is colour-coded, red/green
-// confusion is a correctness problem in an IR tool, not a preference.
+// Three: dark and light cover the ordinary cases, and gruvbox is the one
+// palette people ask for by name.
+//
+// The high-contrast and colourblind-safe palettes were dropped for now. They
+// are worth bringing back — severity is colour-coded here, so red/green
+// confusion is a correctness problem rather than a preference — but neither had
+// been checked against every screen, and shipping an accessibility theme that
+// has not been verified is worse than not claiming one. Tracked in the roadmap.
 var themeBuilders = map[string]func() Theme{
-	"dark":          themeDark,
-	"light":         themeLight,
-	"gruvbox":       themeGruvbox,
-	"high-contrast": themeHighContrast,
-	"cb-safe":       themeColorblindSafe,
+	"dark":    themeDark,
+	"light":   themeLight,
+	"gruvbox": themeGruvbox,
 }
 
 // themeNames returns the theme names in a stable cycle order.

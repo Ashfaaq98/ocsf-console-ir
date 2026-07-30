@@ -24,7 +24,7 @@ import (
    Theming model (color-only change set)
 
    - Adds a lightweight Theme with widget colors (tcell.Color) and color tag strings for text markup.
-   - Provides four palettes: dark (default), light, high-contrast, colorblind-safe.
+   - Provides three palettes: dark (default), gruvbox, light.
    - Adds keyboard-first UX bindings: h/l focus move, j/k selection move, g/G top/bottom, J/K page, ?: help alias,
      t/T/C theme toggles, Esc clears status. Existing keys unchanged.
 */
@@ -215,95 +215,6 @@ func themeLight() Theme {
 		TagSeverityMedium:   "#ca8a04",
 		TagSeverityLow:      "#16a34a",
 		TagSeverityInfo:     "#2563eb",
-	}
-}
-
-func themeHighContrast() Theme {
-	return Theme{
-		Bg:          hex("#000000"),
-		Surface:     hex("#000000"),
-		Border:      hex("#ffffff"),
-		FocusBorder: hex("#ffff00"),
-		SelectionBg: hex("#ffffff"),
-		SelectionFg: hex("#000000"),
-		TextPrimary: hex("#ffffff"),
-		TextMuted:   hex("#cccccc"),
-		Accent:      hex("#00ffff"),
-		Success:     hex("#00ff00"),
-		Warning:     hex("#ffff00"),
-		Error:       hex("#ff0000"),
-		Header:      hex("#ffffff"),
-
-		// Table colors
-		TableHeader:   hex("#ffffff"),
-		TableHeaderBg: hex("#000000"),
-		TableRow:      hex("#ffffff"),
-		TableRowMuted: hex("#cccccc"),
-		TableZebra1:   hex("#000000"),
-		TableZebra2:   hex("#111111"),
-
-		SeverityCritical: hex("#ff0000"),
-		SeverityHigh:     hex("#ff8800"),
-		SeverityMedium:   hex("#ffff00"),
-		SeverityLow:      hex("#00ff00"),
-		SeverityInfo:     hex("#00aaff"),
-
-		TagTextPrimary:      "#ffffff",
-		TagMuted:            "#cccccc",
-		TagAccent:           "#00ffff",
-		TagSuccess:          "#00ff00",
-		TagWarning:          "#ffff00",
-		TagError:            "#ff0000",
-		TagSeverityCritical: "#ff0000",
-		TagSeverityHigh:     "#ff8800",
-		TagSeverityMedium:   "#ffff00",
-		TagSeverityLow:      "#00ff00",
-		TagSeverityInfo:     "#00aaff",
-	}
-}
-
-func themeColorblindSafe() Theme {
-	// ColorBrewer-inspired RdYlBu-like palette (safe-ish)
-	return Theme{
-		Bg:          hex("#0e1116"),
-		Surface:     hex("#12161e"),
-		Border:      hex("#2b3240"),
-		FocusBorder: hex("#4aa8ff"),
-		SelectionBg: hex("#2b3240"),
-		SelectionFg: hex("#e6edf3"),
-		TextPrimary: hex("#e6edf3"),
-		TextMuted:   hex("#8a939f"),
-		Accent:      hex("#80b1d3"),
-		Success:     hex("#5ab4ac"),
-		Warning:     hex("#fdb863"),
-		Error:       hex("#d7191c"),
-		Header:      hex("#fee08b"),
-
-		// Table colors
-		TableHeader:   hex("#fee08b"),
-		TableHeaderBg: hex("#232a38"),
-		TableRow:      hex("#e6edf3"),
-		TableRowMuted: hex("#94a3b8"),
-		TableZebra1:   hex("#151a22"),
-		TableZebra2:   hex("#10141b"),
-
-		SeverityCritical: hex("#d73027"),
-		SeverityHigh:     hex("#fc8d59"),
-		SeverityMedium:   hex("#fee08b"),
-		SeverityLow:      hex("#91bfdb"),
-		SeverityInfo:     hex("#4575b4"),
-
-		TagTextPrimary:      "#e6edf3",
-		TagMuted:            "#8a939f",
-		TagAccent:           "#80b1d3",
-		TagSuccess:          "#5ab4ac",
-		TagWarning:          "#fdb863",
-		TagError:            "#d7191c",
-		TagSeverityCritical: "#d73027",
-		TagSeverityHigh:     "#fc8d59",
-		TagSeverityMedium:   "#fee08b",
-		TagSeverityLow:      "#91bfdb",
-		TagSeverityInfo:     "#4575b4",
 	}
 }
 
@@ -1174,28 +1085,6 @@ func (ui *UI) setupKeybindings() {
 				}
 				ui.cycleTheme()
 				return nil
-			case 'T':
-				// Apply theme synchronously on UI goroutine
-				next := "dark"
-				if ui.themeName != "high-contrast" {
-					next = "high-contrast"
-				}
-				if ui.logger != nil {
-					ui.logger.Printf("Key 'T' pressed: applying setTheme(%s) (current=%s)", next, ui.themeName)
-				}
-				ui.setTheme(next)
-				return nil
-			case 'C':
-				// Apply theme synchronously on UI goroutine
-				next := "dark"
-				if ui.themeName != "cb-safe" {
-					next = "cb-safe"
-				}
-				if ui.logger != nil {
-					ui.logger.Printf("Key 'C' pressed: applying setTheme(%s) (current=%s)", next, ui.themeName)
-				}
-				ui.setTheme(next)
-				return nil
 			case 'f':
 				if ui.showFindings {
 					ui.setStatusDirect("[%s]Findings: o toggles open/all • s status • v verdict[-:-:-]", ui.theme.TagAccent)
@@ -2002,9 +1891,7 @@ func (ui *UI) showHelp() {
 	addGap()
 
 	addSection("THEMING")
-	addKV("t", "Cycle themes (dark → light → neon → cb-safe → high-contrast)")
-	addKV("T", "Toggle high-contrast")
-	addKV("C", "Toggle colorblind-safe")
+	addKV("t", "Cycle themes (dark → gruvbox → light)")
 	addGap()
 
 	addSection("QUICK ACTIONS")
@@ -3891,8 +3778,6 @@ func (ui *UI) buildShortcutHints() string {
 	// 4) Theme (lowest priority)
 	base = append(base,
 		kv{"t", "theme"},
-		kv{"T", "high-contrast"},
-		kv{"C", "cb-safe"},
 	)
 
 	// Post-process:
