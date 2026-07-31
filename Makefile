@@ -104,7 +104,7 @@ check: fmt vet lint test ## Run all code quality checks
 
 GORELEASER_VERSION ?= v2.17.1
 
-release-check: ## Validate the whole release pipeline without pushing a tag (SKIP=docker to skip images)
+release-check: ## Validate the whole release pipeline without pushing a tag
 	@command -v goreleaser >/dev/null 2>&1 || { \
 		echo "goreleaser not found. Install the pinned version with:"; \
 		echo "  go install github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)"; \
@@ -117,12 +117,11 @@ release-check: ## Validate the whole release pipeline without pushing a tag (SKI
 	}
 	@echo "== Config lint =="
 	@# Reported separately because 'check' exits non-zero on deprecation notices
-	@# alone. The known deprecations (brews, dockers) are tracked in the roadmap;
+	@# alone. The remaining deprecation (brews) is tracked in the roadmap;
 	@# the snapshot below is the gate, and it parses the same config, so a genuine
 	@# config error still fails this target.
 	-@goreleaser check
 	@echo "== Full snapshot (nothing is published) =="
-	@echo "   Docker images need a running daemon; use 'make release-check SKIP=docker' without one."
 	goreleaser release --snapshot --clean $(if $(SKIP),--skip=$(SKIP),)
 
 ## Runtime targets

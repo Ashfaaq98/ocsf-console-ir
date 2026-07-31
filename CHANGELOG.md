@@ -89,8 +89,13 @@ nothing. Back up the database first if you may roll back.
   keeping three older generations — 20 MB maximum. Logs previously grew without bound.
 - **LLM settings are read from the per-user config directory**, so an API key is written to one known
   place rather than wherever the binary was launched from.
-- **The Docker image is no longer advertised.** Releases still build and publish it, but the README
-  badge is gone until the channel is verified and supported.
+- **Container distribution is dropped.** The image had no working purpose: its default command was
+  `--help`, and its one documented use — `serve --no-tui --http-ingest-enable` — is the combination
+  that is now refused because it accepted events and never stored them. It also declared
+  `VOLUME /data` while the database had moved to a per-user directory, so mounting it as documented
+  would have discarded the database on every restart. `Dockerfile`, `.dockerignore`, the GoReleaser
+  `dockers:`/`docker_manifests:` sections and the QEMU/buildx/GHCR release steps are gone; the
+  release dry-run went from over 20 minutes to 11 seconds. Reconsider when headless ingest exists.
 - `events.event_type` stores the OCSF category slug (`system`, `findings`, `iam`, `network`, …)
   instead of five hand-picked labels.
 - The IOC view reads persisted observables; regex text-scraping remains only as a fallback for events

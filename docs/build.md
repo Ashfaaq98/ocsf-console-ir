@@ -1,6 +1,7 @@
 # Build and Release Guide
 
-This document explains how to build and run **Console-IR** on different platforms without Docker.
+This document explains how to build and run **Console-IR** on different platforms. It is a single
+static binary with no runtime dependencies.
 
 ---
 

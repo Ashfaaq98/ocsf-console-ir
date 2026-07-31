@@ -15,16 +15,14 @@ So validate the pipeline *before* tagging:
 go install github.com/goreleaser/goreleaser/v2@v2.17.1
 
 make release-check                # full snapshot, nothing published
-make release-check SKIP=docker    # skip the image build (no Docker daemon)
 ```
 
 This runs `goreleaser check` and then `goreleaser release --snapshot --clean`, building every
-archive, checksum, SBOM, Homebrew formula and container image locally. `docker_manifests` sets
-`skip_push: auto`, so a snapshot never pushes.
+archive, checksum, SBOM and the Homebrew formula locally, without publishing anything.
 
-It matters because the release workflow runs GoReleaser as a **single step** — if the Docker build
-fails, the binaries and the Homebrew formula fail with it. The Homebrew step nearly broke this way at
-v0.1.1 and was only caught because it had been disabled first.
+It matters because the release workflow runs GoReleaser as a **single step** — one failing artifact
+takes the whole release with it. The Homebrew step nearly broke this way at v0.1.1 and was only
+caught because it had been disabled first.
 
 CI runs the same target on every pull request.
 
@@ -33,7 +31,7 @@ CI runs the same target on every pull request.
 1. Commit release-prep changes to `main`.
 2. Push a tag like `v0.1.0`.
 3. GitHub Actions runs [`.github/workflows/release.yml`](.github/workflows/release.yml).
-4. GoReleaser builds archives, checksums, SBOMs, Homebrew metadata, and Docker images.
+4. GoReleaser builds archives, checksums, SBOMs and Homebrew metadata.
 5. GitHub publishes the release assets and release notes.
 
 ## Recommended First Release Flow
@@ -132,16 +130,6 @@ Confirm:
 - checksum verification passes
 - `console-ir --help` works
 
-### Docker
-
-Check both:
-
-```bash
-docker run --rm -it ghcr.io/ashfaaq98/console-ir:latest --help
-docker run --rm -it -p 8080:8080 -v "$(pwd)/data:/data" ghcr.io/ashfaaq98/console-ir:latest
-```
-
-Confirm the container starts in headless mode and exposes HTTP ingest on `0.0.0.0:8080`.
 
 ### Homebrew
 
