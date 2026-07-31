@@ -6,13 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 )
 
@@ -23,14 +23,14 @@ type Synthetic struct {
 	model      string
 	apiKey     string
 	httpClient *http.Client
-	logger     *log.Logger
+	logger     *logging.Logger
 }
 
 // NewSynthetic constructs a new Synthetic provider.
 // endpoint example: https://api.synthetic.new/openai/v1
 // model example: "gpt-3.5-turbo" or any OpenAI-compatible model
 // apiKey is required; when empty this constructor will try SYNTHETIC_API_KEY env var.
-func NewSynthetic(endpoint, model, apiKey string, logger *log.Logger) (*Synthetic, error) {
+func NewSynthetic(endpoint, model, apiKey string, logger *logging.Logger) (*Synthetic, error) {
 	ep := strings.TrimSpace(endpoint)
 	if ep == "" {
 		ep = "https://api.synthetic.new/openai/v1"
@@ -212,7 +212,6 @@ func (s *Synthetic) SummarizeCase(ctx context.Context, case_ store.Case, events 
 			{Role: "user", Content: sb.String(), Timestamp: time.Now()},
 		},
 		Persona:   PersonaSOC,
-		MCPMode:   "remote",
 		MaxTokens: 700,
 	}
 	r, err := s.Chat(ctx, req)

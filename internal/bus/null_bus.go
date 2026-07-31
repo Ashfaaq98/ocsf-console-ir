@@ -1,19 +1,20 @@
 package bus
 
 import (
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
+
 	"context"
-	"log"
 )
 
 // NullBus is a no-op implementation of the bus interface for when Redis is disabled
 type NullBus struct {
-	logger *log.Logger
+	logger *logging.Logger
 }
 
 // NewNullBus creates a new null bus instance
-func NewNullBus(logger *log.Logger) *NullBus {
+func NewNullBus(logger *logging.Logger) *NullBus {
 	if logger == nil {
-		logger = log.New(log.Writer(), "[NullBus] ", log.LstdFlags)
+		logger = nil
 	}
 
 	return &NullBus{

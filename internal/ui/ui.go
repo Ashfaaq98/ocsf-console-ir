@@ -3,7 +3,6 @@ package ui
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"sort"
 	"strconv"
@@ -11,8 +10,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/buildinfo"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/ingest"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/paths"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -22,7 +25,7 @@ import (
    Theming model (color-only change set)
 
    - Adds a lightweight Theme with widget colors (tcell.Color) and color tag strings for text markup.
-   - Provides four palettes: dark (default), light, high-contrast, colorblind-safe.
+   - Provides three palettes: dark (default), gruvbox, light.
    - Adds keyboard-first UX bindings: h/l focus move, j/k selection move, g/G top/bottom, J/K page, ?: help alias,
      t/T/C theme toggles, Esc clears status. Existing keys unchanged.
 */
@@ -120,6 +123,58 @@ func themeDark() Theme {
 	}
 }
 
+// themeGruvbox is the gruvbox dark palette, using its published values.
+//
+// It replaces a warm theme that looked like gruvbox but was not: every accent
+// sat at roughly half gruvbox's saturation (#d4976c against #fe8019), and the
+// punchy retro accents are the whole point of the palette.
+//
+// Severity uses gruvbox's own red/orange/yellow/green/blue ramp so the levels
+// stay distinguishable rather than being tinted to match.
+func themeGruvbox() Theme {
+	return Theme{
+		Bg:          hex("#282828"), // bg0
+		Surface:     hex("#32302f"), // bg0_s
+		Border:      hex("#504945"), // bg2
+		FocusBorder: hex("#fe8019"), // bright orange
+		SelectionBg: hex("#504945"),
+		SelectionFg: hex("#fbf1c7"), // fg0
+		TextPrimary: hex("#ebdbb2"), // fg1
+		TextMuted:   hex("#928374"), // gray
+		Accent:      hex("#fe8019"), // bright orange
+		Success:     hex("#b8bb26"), // bright green
+		Warning:     hex("#fabd2f"), // bright yellow
+		Error:       hex("#fb4934"), // bright red
+		Header:      hex("#fabd2f"),
+
+		// Table colors
+		TableHeader:   hex("#fabd2f"),
+		TableHeaderBg: hex("#3c3836"), // bg1
+		TableRow:      hex("#ebdbb2"),
+		TableRowMuted: hex("#a89984"), // fg4
+		TableZebra1:   hex("#32302f"),
+		TableZebra2:   hex("#282828"),
+
+		SeverityCritical: hex("#fb4934"), // red
+		SeverityHigh:     hex("#fe8019"), // orange
+		SeverityMedium:   hex("#fabd2f"), // yellow
+		SeverityLow:      hex("#b8bb26"), // green
+		SeverityInfo:     hex("#83a598"), // blue
+
+		TagTextPrimary:      "#ebdbb2",
+		TagMuted:            "#928374",
+		TagAccent:           "#fe8019",
+		TagSuccess:          "#b8bb26",
+		TagWarning:          "#fabd2f",
+		TagError:            "#fb4934",
+		TagSeverityCritical: "#fb4934",
+		TagSeverityHigh:     "#fe8019",
+		TagSeverityMedium:   "#fabd2f",
+		TagSeverityLow:      "#b8bb26",
+		TagSeverityInfo:     "#83a598",
+	}
+}
+
 func themeLight() Theme {
 	return Theme{
 		Bg:          hex("#f6f8fa"),
@@ -164,193 +219,6 @@ func themeLight() Theme {
 	}
 }
 
-func themeHighContrast() Theme {
-	return Theme{
-		Bg:          hex("#000000"),
-		Surface:     hex("#000000"),
-		Border:      hex("#ffffff"),
-		FocusBorder: hex("#ffff00"),
-		SelectionBg: hex("#ffffff"),
-		SelectionFg: hex("#000000"),
-		TextPrimary: hex("#ffffff"),
-		TextMuted:   hex("#cccccc"),
-		Accent:      hex("#00ffff"),
-		Success:     hex("#00ff00"),
-		Warning:     hex("#ffff00"),
-		Error:       hex("#ff0000"),
-		Header:      hex("#ffffff"),
-
-		// Table colors
-		TableHeader:   hex("#ffffff"),
-		TableHeaderBg: hex("#000000"),
-		TableRow:      hex("#ffffff"),
-		TableRowMuted: hex("#cccccc"),
-		TableZebra1:   hex("#000000"),
-		TableZebra2:   hex("#111111"),
-
-		SeverityCritical: hex("#ff0000"),
-		SeverityHigh:     hex("#ff8800"),
-		SeverityMedium:   hex("#ffff00"),
-		SeverityLow:      hex("#00ff00"),
-		SeverityInfo:     hex("#00aaff"),
-
-		TagTextPrimary:      "#ffffff",
-		TagMuted:            "#cccccc",
-		TagAccent:           "#00ffff",
-		TagSuccess:          "#00ff00",
-		TagWarning:          "#ffff00",
-		TagError:            "#ff0000",
-		TagSeverityCritical: "#ff0000",
-		TagSeverityHigh:     "#ff8800",
-		TagSeverityMedium:   "#ffff00",
-		TagSeverityLow:      "#00ff00",
-		TagSeverityInfo:     "#00aaff",
-	}
-}
-
-func themeColorblindSafe() Theme {
-	// ColorBrewer-inspired RdYlBu-like palette (safe-ish)
-	return Theme{
-		Bg:          hex("#0e1116"),
-		Surface:     hex("#12161e"),
-		Border:      hex("#2b3240"),
-		FocusBorder: hex("#4aa8ff"),
-		SelectionBg: hex("#2b3240"),
-		SelectionFg: hex("#e6edf3"),
-		TextPrimary: hex("#e6edf3"),
-		TextMuted:   hex("#8a939f"),
-		Accent:      hex("#80b1d3"),
-		Success:     hex("#5ab4ac"),
-		Warning:     hex("#fdb863"),
-		Error:       hex("#d7191c"),
-		Header:      hex("#fee08b"),
-
-		// Table colors
-		TableHeader:   hex("#fee08b"),
-		TableHeaderBg: hex("#232a38"),
-		TableRow:      hex("#e6edf3"),
-		TableRowMuted: hex("#94a3b8"),
-		TableZebra1:   hex("#151a22"),
-		TableZebra2:   hex("#10141b"),
-
-		SeverityCritical: hex("#d73027"),
-		SeverityHigh:     hex("#fc8d59"),
-		SeverityMedium:   hex("#fee08b"),
-		SeverityLow:      hex("#91bfdb"),
-		SeverityInfo:     hex("#4575b4"),
-
-		TagTextPrimary:      "#e6edf3",
-		TagMuted:            "#8a939f",
-		TagAccent:           "#80b1d3",
-		TagSuccess:          "#5ab4ac",
-		TagWarning:          "#fdb863",
-		TagError:            "#d7191c",
-		TagSeverityCritical: "#d73027",
-		TagSeverityHigh:     "#fc8d59",
-		TagSeverityMedium:   "#fee08b",
-		TagSeverityLow:      "#91bfdb",
-		TagSeverityInfo:     "#4575b4",
-	}
-}
-
-func themeClaude() Theme {
-	// Claude's signature theme: Warm, sophisticated, and designed for comfort.
-	// A palette of warm grays, ambers, and terracottas that's easy on the eyes
-	// during long incident response sessions while maintaining professionalism.
-	return Theme{
-		Bg:          hex("#1a1614"), // Deep warm charcoal
-		Surface:     hex("#252220"), // Warm gray surface
-		Border:      hex("#3d3835"), // Subtle warm border
-		FocusBorder: hex("#d4976c"), // Warm amber focus
-		SelectionBg: hex("#3d3835"), // Warm selection
-		SelectionFg: hex("#f5f0eb"), // Warm off-white
-		TextPrimary: hex("#f5f0eb"), // Warm cream text
-		TextMuted:   hex("#a89a8f"), // Warm muted gray
-		Accent:      hex("#d4976c"), // Signature warm amber - friendly yet professional
-		Success:     hex("#88b369"), // Warm sage green
-		Warning:     hex("#e0a564"), // Warm amber
-		Error:       hex("#d87c7c"), // Warm terracotta red
-		Header:      hex("#e0b882"), // Warm golden header
-
-		// Table colors - warm and readable
-		TableHeader:   hex("#e0b882"), // Warm gold
-		TableHeaderBg: hex("#2a2724"), // Slightly lighter warm bg
-		TableRow:      hex("#f5f0eb"), // Warm cream
-		TableRowMuted: hex("#b0a599"), // Warm gray
-		TableZebra1:   hex("#221f1d"), // Deep warm zebra
-		TableZebra2:   hex("#1a1614"), // Matches bg
-
-		// Severity - warm gradient from green to red
-		SeverityCritical: hex("#e07856"), // Warm coral red
-		SeverityHigh:     hex("#e09856"), // Warm tangerine
-		SeverityMedium:   hex("#d4b356"), // Warm gold
-		SeverityLow:      hex("#8ba36f"), // Warm olive green
-		SeverityInfo:     hex("#7a9bb3"), // Warm steel blue
-
-		// Tag colors for dynamic markup
-		TagTextPrimary:      "#f5f0eb",
-		TagMuted:            "#a89a8f",
-		TagAccent:           "#d4976c",
-		TagSuccess:          "#88b369",
-		TagWarning:          "#e0a564",
-		TagError:            "#d87c7c",
-		TagSeverityCritical: "#e07856",
-		TagSeverityHigh:     "#e09856",
-		TagSeverityMedium:   "#d4b356",
-		TagSeverityLow:      "#8ba36f",
-		TagSeverityInfo:     "#7a9bb3",
-	}
-}
-
-func themeGemini() Theme {
-	// Gemini theme: "Google Signature" - Bold, high-contrast, and stylish.
-	// Uses the core Google palette (Blue, Red, Yellow, Green) against a sleek dark background.
-	// This theme is designed to pop and feel distinctively "Google".
-	return Theme{
-		Bg:          hex("#000000"), // True Black for maximum contrast
-		Surface:     hex("#121212"), // Material Dark Surface
-		Border:      hex("#5f6368"), // Google Grey 600 (Subtle borders)
-		FocusBorder: hex("#4285f4"), // Google Blue 500 (Focus pops)
-		SelectionBg: hex("#4285f4"), // Google Blue 500
-		SelectionFg: hex("#ffffff"), // White text on selection
-		TextPrimary: hex("#ffffff"), // Pure White
-		TextMuted:   hex("#9aa0a6"), // Google Grey 400
-		Accent:      hex("#fbbc04"), // Google Yellow 500 (Accents)
-		Success:     hex("#34a853"), // Google Green 500
-		Warning:     hex("#fbbc04"), // Google Yellow 500
-		Error:       hex("#ea4335"), // Google Red 500
-		Header:      hex("#ea4335"), // Google Red 500 (Distinctive Header)
-
-		// Table colors
-		TableHeader:   hex("#ea4335"), // Red Header
-		TableHeaderBg: hex("#202124"), // Google Dark Grey
-		TableRow:      hex("#e8eaed"), // Google Grey 100
-		TableRowMuted: hex("#9aa0a6"), // Google Grey 400
-		TableZebra1:   hex("#171717"), // Darker Zebra
-		TableZebra2:   hex("#000000"), // Matches Bg
-
-		// Severity - Mapping Google Colors to severities
-		SeverityCritical: hex("#ea4335"), // Red
-		SeverityHigh:     hex("#f9ab00"), // Yellow/Orange-ish
-		SeverityMedium:   hex("#fbbc04"), // Yellow
-		SeverityLow:      hex("#34a853"), // Green
-		SeverityInfo:     hex("#4285f4"), // Blue
-
-		// Tag colors
-		TagTextPrimary:      "#ffffff",
-		TagMuted:            "#9aa0a6",
-		TagAccent:           "#fbbc04",
-		TagSuccess:          "#34a853",
-		TagWarning:          "#fbbc04",
-		TagError:            "#ea4335",
-		TagSeverityCritical: "#ea4335",
-		TagSeverityHigh:     "#f9ab00",
-		TagSeverityMedium:   "#fbbc04",
-		TagSeverityLow:      "#34a853",
-		TagSeverityInfo:     "#4285f4",
-	}
-}
-
 func detectTrueColor() bool {
 	// Best-effort detection without initializing screen
 	ct := strings.ToLower(os.Getenv("COLORTERM"))
@@ -369,7 +237,7 @@ type UI struct {
 	app    *tview.Application
 	store  *store.Store
 	llm    llm.LLMProvider
-	logger *log.Logger
+	logger *logging.Logger
 
 	// Layout components
 	layout       *tview.Flex
@@ -399,6 +267,9 @@ type UI struct {
 	findings          []store.Finding
 	selectedFindingID string
 	findingsOpenOnly  bool
+	// findingsTotal is the unfiltered count from the last load, kept so the
+	// queue can be repainted (e.g. on a theme change) without re-querying.
+	findingsTotal int
 
 	// Theme state
 	theme          Theme
@@ -410,6 +281,16 @@ type UI struct {
 	// Filters (time window for events list)
 	filterStart time.Time
 	filterEnd   time.Time
+
+	// ingestDir is the drop folder actually being watched, so empty-state hints
+	// can name it. Hardcoding a path in those hints is how they came to point at
+	// data/incoming long after the watcher had moved to ./incoming.
+	ingestDir string
+
+	// Live enrichment refresh. openEventID mirrors selectedEventID for readers on
+	// other goroutines; enrichNotify carries the IDs worth redrawing for.
+	openEventID  atomic.Value // string
+	enrichNotify chan string
 
 	// Runtime
 	running    bool
@@ -535,10 +416,7 @@ func (ui *UI) applyCaseFilters(in []store.Case) []store.Case {
 }
 
 // NewUI creates a new terminal user interface
-func NewUI(ctx context.Context, store *store.Store, llmProvider llm.LLMProvider, logger *log.Logger, version string) *UI {
-	if logger == nil {
-		logger = log.New(log.Writer(), "[UI] ", log.LstdFlags)
-	}
+func NewUI(ctx context.Context, store *store.Store, llmProvider llm.LLMProvider, logger *logging.Logger, version string) *UI {
 
 	// Use the provided context and create a child context for UI operations
 	uiCtx, cancel := context.WithCancel(ctx)
@@ -555,14 +433,24 @@ func NewUI(ctx context.Context, store *store.Store, llmProvider llm.LLMProvider,
 		shortcutBuffer:   "",
 		shortcutTimeout:  750 * time.Millisecond, // 750ms timeout for multi-key input
 		version:          version,
+		// Buffered so an enrichment worker never waits on the UI. Arrivals for the
+		// open event are rare (its own lookups), so this is generous.
+		enrichNotify: make(chan string, 32),
+	}
+	ui.openEventID.Store("")
+
+	// Enrichment is asynchronous, so without this the detail pane shows whatever
+	// was true when the event was opened until the analyst presses 'r'.
+	if store != nil {
+		store.OnEnrichment(ui.enrichmentApplied)
 	}
 
 	// Initialize LLM provider from persisted settings when not provided by caller.
 	if ui.llm == nil {
 		if ui.logger != nil {
-			ui.logger.Printf("No LLM provider passed in; attempting to load from config/llm_settings.json")
+			ui.logger.Printf("No LLM provider passed in; attempting to load from %s", paths.Current().ConfigFile(paths.LLMSettingsName))
 		}
-		settings, _ := llm.LoadSettings("config/llm_settings.json")
+		settings, _ := llm.LoadSettings(paths.Current().ConfigFile(paths.LLMSettingsName))
 		p, err := llm.Build(ui.ctx, settings.Active, ui.logger)
 		if err != nil || p == nil {
 			if ui.logger != nil {
@@ -576,8 +464,10 @@ func NewUI(ctx context.Context, store *store.Store, llmProvider llm.LLMProvider,
 	}
 
 	// Default theme
-	ui.themeName = "neon"
-	ui.theme = themeNeon()
+	// Restore the analyst's last choice; the default is used on a fresh
+	// install or if the settings file is missing or unreadable.
+	ui.themeName = loadThemeName()
+	ui.theme = themeBuilders[ui.themeName]()
 
 	ui.setupLayout()
 	ui.setupKeybindings()
@@ -586,16 +476,50 @@ func NewUI(ctx context.Context, store *store.Store, llmProvider llm.LLMProvider,
 	return ui
 }
 
+// enrichmentApplied runs on the goroutine that applied the enrichment — an
+// enrichment worker, mid-ingest. It must not block, so it filters on the open
+// event and drops the notification if the UI is already behind: the next arrival
+// or a manual 'r' will pick the change up either way.
+func (ui *UI) enrichmentApplied(eventID string) {
+	if open, _ := ui.openEventID.Load().(string); open != eventID {
+		return
+	}
+	select {
+	case ui.enrichNotify <- eventID:
+	default:
+	}
+}
+
+// watchEnrichments redraws the detail pane when the open event's enrichment lands.
+func (ui *UI) watchEnrichments() {
+	for {
+		select {
+		case <-ui.ctx.Done():
+			return
+		case eventID := <-ui.enrichNotify:
+			ui.app.QueueUpdateDraw(func() {
+				// Re-check on the UI goroutine: the selection may have moved
+				// between the notification and this redraw.
+				if ui.selectedEventID == eventID {
+					ui.showEventDetails()
+				}
+			})
+		}
+	}
+}
+
 // Start starts the TUI application
 func (ui *UI) Start(ctx context.Context) error {
 	ui.logger.Println("Starting TUI application")
 
+	go ui.watchEnrichments()
+
 	// Debug: Check if allList is properly initialized
 	if ui.logger != nil {
 		if ui.allList != nil {
-			ui.logger.Printf("DEBUG: allList is initialized with %d items", ui.allList.GetItemCount())
+			ui.logger.Debug("allList is initialized with %d items", ui.allList.GetItemCount())
 		} else {
-			ui.logger.Printf("DEBUG: allList is nil!")
+			ui.logger.Debug("allList is nil!")
 		}
 	}
 
@@ -736,14 +660,7 @@ func (ui *UI) setupLayout() {
 		SetWordWrap(true)
 	ui.appTitle.SetBorder(false)
 	ui.appTitle.SetBackgroundColor(ui.theme.Surface)
-	// Professional header: Name on left, Date on right, Version below
-	todayDate := time.Now().Format("2006-01-02")
-	ui.appTitle.SetText(fmt.Sprintf(
-		" [%s]Console-IR[-]                  [%s]%s[-]\n [%s]v%s[-]",
-		ui.theme.TagAccent,
-		ui.theme.TagMuted, todayDate,
-		ui.theme.TagMuted, ui.version,
-	))
+	ui.renderHeader()
 
 	// Dedicated ALL EVENTS list (single item)
 	ui.allList = tview.NewList()
@@ -759,7 +676,7 @@ func (ui *UI) setupLayout() {
 
 	// Debug logging
 	if ui.logger != nil {
-		ui.logger.Printf("DEBUG: allList created with %d items", ui.allList.GetItemCount())
+		ui.logger.Debug("allList created with %d items", ui.allList.GetItemCount())
 	}
 	ui.allList.SetSelectedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
 		// Load ALL EVENTS
@@ -885,9 +802,9 @@ func (ui *UI) setupLayout() {
 	if ui.logger != nil {
 		currentFocus := ui.app.GetFocus()
 		if currentFocus == ui.allList {
-			ui.logger.Printf("DEBUG: Focus successfully set to allList")
+			ui.logger.Debug("Focus successfully set to allList")
 		} else {
-			ui.logger.Printf("DEBUG: Focus not set to allList, current focus: %T", currentFocus)
+			ui.logger.Debug("Focus not set to allList, current focus: %T", currentFocus)
 		}
 	}
 }
@@ -1034,7 +951,7 @@ func (ui *UI) setupKeybindings() {
 
 		// Log key events to help diagnose input handling
 		if ui.logger != nil {
-			ui.logger.Printf("Input event: Key=%v Rune=%q Mod=%v", event.Key(), event.Rune(), event.Modifiers())
+			ui.logger.Debug("input: key=%v rune=%q mod=%v", event.Key(), event.Rune(), event.Modifiers())
 		}
 
 		switch event.Key() {
@@ -1072,7 +989,7 @@ func (ui *UI) setupKeybindings() {
 					}
 				}()
 				// Schedule events reload according to current selection and filter state
-				ui.scheduleEventsReload("key:r")
+				ui.refreshCurrentView("key:r")
 				return nil
 			case 's', 'S':
 				if ui.showFindings {
@@ -1115,6 +1032,12 @@ func (ui *UI) setupKeybindings() {
 				ui.pageMove(-1)
 				return nil
 			case 'N':
+				if ui.showFindings {
+					// The findings queue is not paged; without this, paging
+					// would swap the queue out for events.
+					ui.setStatusDirect("[%s]Findings are not paged • o toggles open/all[-:-:-]", ui.theme.TagMuted)
+					return nil
+				}
 				{
 					id := ui.getContextID()
 					s := ui.getOrInitState(id)
@@ -1135,6 +1058,12 @@ func (ui *UI) setupKeybindings() {
 				}
 				return nil
 			case 'P':
+				if ui.showFindings {
+					// The findings queue is not paged; without this, paging
+					// would swap the queue out for events.
+					ui.setStatusDirect("[%s]Findings are not paged • o toggles open/all[-:-:-]", ui.theme.TagMuted)
+					return nil
+				}
 				{
 					id := ui.getContextID()
 					s := ui.getOrInitState(id)
@@ -1161,28 +1090,6 @@ func (ui *UI) setupKeybindings() {
 					ui.logger.Printf("Key 't' pressed: applying theme cycle (current=%s)", ui.themeName)
 				}
 				ui.cycleTheme()
-				return nil
-			case 'T':
-				// Apply theme synchronously on UI goroutine
-				next := "dark"
-				if ui.themeName != "high-contrast" {
-					next = "high-contrast"
-				}
-				if ui.logger != nil {
-					ui.logger.Printf("Key 'T' pressed: applying setTheme(%s) (current=%s)", next, ui.themeName)
-				}
-				ui.setTheme(next)
-				return nil
-			case 'C':
-				// Apply theme synchronously on UI goroutine
-				next := "dark"
-				if ui.themeName != "cb-safe" {
-					next = "cb-safe"
-				}
-				if ui.logger != nil {
-					ui.logger.Printf("Key 'C' pressed: applying setTheme(%s) (current=%s)", next, ui.themeName)
-				}
-				ui.setTheme(next)
 				return nil
 			case 'f':
 				if ui.showFindings {
@@ -1638,8 +1545,11 @@ func (ui *UI) updateEventsList() {
 		hint := []string{
 			"No events yet.",
 			"",
-			"Drop OCSF JSONL files into  data/incoming/  to ingest and enrich them.",
-			"Quick start:   cp examples/sample-events.jsonl data/incoming/",
+			fmt.Sprintf("Drop OCSF JSONL files into  %s  to ingest and enrich them.", ui.watchedDir()),
+			// Not "ingest examples/…": examples/ is not in the release archive,
+			// so a brew or curl install has no such file. The demo data is
+			// embedded in the binary, which works everywhere.
+			"Or run   console-ir demo   to explore a sample incident first.",
 			"Then press  r  to refresh this list.",
 		}
 		for i, line := range hint {
@@ -1719,6 +1629,11 @@ func (ui *UI) updateEventsList() {
 
 // showEventDetails displays details for the selected event
 func (ui *UI) showEventDetails() {
+	// Publish what the pane is showing so the enrichment notifier, which runs on
+	// a worker goroutine, can tell whether an arrival is worth a redraw without
+	// reading UI state.
+	ui.openEventID.Store(ui.selectedEventID)
+
 	if ui.selectedEventID == "" {
 		ui.eventDetail.SetText("No event selected")
 		return
@@ -1784,37 +1699,24 @@ func (ui *UI) showEventDetails() {
 
 	details.WriteString(fmt.Sprintf("\n[%s]Message:[-]\n[%s]%s[-]\n", lbl, val, event.Message))
 
-	// Show enrichments from DB (if any), newest first
+	// Show enrichments from the DB, grouped into one card per indicator.
 	if enrichments, err := ui.store.GetEnrichmentsByEvent(ui.ctx, event.ID); err == nil && len(enrichments) > 0 {
-		details.WriteString(fmt.Sprintf("\n[%s]Enrichments (latest %d):[-]\n", ui.theme.TagAccent, len(enrichments)))
-		for _, enr := range enrichments {
-			ts := enr.CreatedAt.Format("2006-01-02 15:04:05")
-			details.WriteString(fmt.Sprintf("[%s]- %s/%s at %s[-]\n", ui.theme.TagMuted, enr.Source, enr.Type, ts))
-
-			// Render enrichment data with stable ordering and truncation
-			keys := make([]string, 0, len(enr.Data))
-			for k := range enr.Data {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-
-			const maxKeys = 30
-			limit := maxKeys
-			if len(keys) < limit {
-				limit = len(keys)
-			}
-			for i := 0; i < limit; i++ {
-				k := keys[i]
-				v := enr.Data[k]
-				if len(v) > 200 {
-					v = v[:197] + "..."
-				}
-				details.WriteString(fmt.Sprintf("  [%s]%s:[-] [%s]%s[-]\n", ui.theme.TagWarning, k, ui.theme.TagTextPrimary, v))
-			}
-			if len(keys) > limit {
-				details.WriteString(fmt.Sprintf("  [%s]... and %d more keys[-]\n", ui.theme.TagMuted, len(keys)-limit))
-			}
+		// Observables are only needed to name the cards, so the query stays
+		// inside this branch: an unenriched event costs nothing extra.
+		var observables []store.Observable
+		if byEvent, obsErr := ui.store.GetObservablesForEvents(ui.ctx, []string{event.ID}); obsErr == nil {
+			observables = byEvent[event.ID]
+		} else if ui.logger != nil {
+			ui.logger.Printf("Failed to load observables for event %s: %v", event.ID, obsErr)
 		}
+
+		cards := groupEnrichments(enrichments, eventIndicatorValues(observables, event))
+		details.WriteString(fmt.Sprintf("\n[%s]Enrichments (%d):[-]\n", ui.theme.TagAccent, len(cards)))
+		renderEnrichmentCards(&details, ui.theme, cards, enrichmentRenderOptions{
+			Indent:      "  ",
+			MaxFields:   30,
+			MaxValueLen: 200,
+		})
 	} else if err != nil {
 		// Log failure but don't interrupt the UI
 		if ui.logger != nil {
@@ -1998,9 +1900,7 @@ func (ui *UI) showHelp() {
 	addGap()
 
 	addSection("THEMING")
-	addKV("t", "Cycle themes (dark → light → neon → cb-safe → high-contrast)")
-	addKV("T", "Toggle high-contrast")
-	addKV("C", "Toggle colorblind-safe")
+	addKV("t", "Cycle themes (dark → gruvbox → light)")
 	addGap()
 
 	addSection("QUICK ACTIONS")
@@ -2391,7 +2291,9 @@ func (ui *UI) setStatusDirect(format string, args ...interface{}) {
 		ui.theme.TagMuted,
 		hints)
 
-	ui.statusBar.SetText(statusText)
+	if ui.statusBar != nil {
+		ui.statusBar.SetText(statusText)
+	}
 }
 
 // getSeverityTcellColor returns the tcell color for a severity level (for widgets)
@@ -2440,13 +2342,17 @@ func (ui *UI) applyTheme() {
 	if ui.logger != nil {
 		ui.logger.Printf("Applying theme: %s", ui.themeName)
 	}
-	// Cases sidebar
-	ui.sidebar.SetMainTextColor(ui.theme.TextPrimary)
-	ui.sidebar.SetSecondaryTextColor(ui.theme.TextMuted)
-	ui.sidebar.SetSelectedTextColor(ui.theme.SelectionFg)
-	ui.sidebar.SetSelectedBackgroundColor(ui.theme.SelectionBg)
-	ui.sidebar.SetBorderColor(ui.theme.Border)
-	ui.sidebar.SetBackgroundColor(ui.theme.Surface)
+	// Cases sidebar. Most widgets below are nil-guarded already; the ones that
+	// were not made applyTheme unsafe to call before the layout is assembled,
+	// which setTheme now does when restoring the persisted choice.
+	if ui.sidebar != nil {
+		ui.sidebar.SetMainTextColor(ui.theme.TextPrimary)
+		ui.sidebar.SetSecondaryTextColor(ui.theme.TextMuted)
+		ui.sidebar.SetSelectedTextColor(ui.theme.SelectionFg)
+		ui.sidebar.SetSelectedBackgroundColor(ui.theme.SelectionBg)
+		ui.sidebar.SetBorderColor(ui.theme.Border)
+		ui.sidebar.SetBackgroundColor(ui.theme.Surface)
+	}
 
 	// ALL EVENTS list (dedicated)
 	if ui.allList != nil {
@@ -2465,13 +2371,7 @@ func (ui *UI) applyTheme() {
 	// App title header
 	if ui.appTitle != nil {
 		ui.appTitle.SetBackgroundColor(ui.theme.Surface)
-		todayDate := time.Now().Format("2006-01-02")
-		ui.appTitle.SetText(fmt.Sprintf(
-			" [%s]Console-IR[-]                  [%s]%s[-]\n [%s]v%s[-]",
-			ui.theme.TagAccent,
-			ui.theme.TagMuted, todayDate,
-			ui.theme.TagMuted, ui.version,
-		))
+		ui.renderHeader()
 		ui.appTitle.SetTextColor(ui.theme.TextPrimary)
 	}
 
@@ -2502,21 +2402,29 @@ func (ui *UI) applyTheme() {
 	}
 
 	// Events table and details pane
-	ui.eventList.SetSelectedStyle(tcell.StyleDefault.Background(ui.theme.SelectionBg).Foreground(ui.theme.SelectionFg))
-	ui.eventList.SetBorderColor(ui.theme.Border)
-	ui.eventList.SetBackgroundColor(ui.theme.Surface)
+	if ui.eventList != nil {
+		ui.eventList.SetSelectedStyle(tcell.StyleDefault.Background(ui.theme.SelectionBg).Foreground(ui.theme.SelectionFg))
+		ui.eventList.SetBorderColor(ui.theme.Border)
+		ui.eventList.SetBackgroundColor(ui.theme.Surface)
+	}
 
-	ui.eventDetail.SetTextColor(ui.theme.TextPrimary)
-	ui.eventDetail.SetBorderColor(ui.theme.Border)
-	ui.eventDetail.SetBackgroundColor(ui.theme.Surface)
+	if ui.eventDetail != nil {
+		ui.eventDetail.SetTextColor(ui.theme.TextPrimary)
+		ui.eventDetail.SetBorderColor(ui.theme.Border)
+		ui.eventDetail.SetBackgroundColor(ui.theme.Surface)
+	}
 
 	// Status bar
-	ui.statusBar.SetTextColor(ui.theme.TextPrimary)
-	ui.statusBar.SetBackgroundColor(ui.theme.Surface)
+	if ui.statusBar != nil {
+		ui.statusBar.SetTextColor(ui.theme.TextPrimary)
+		ui.statusBar.SetBackgroundColor(ui.theme.Surface)
+	}
 
 	// Re-render table and focus ring
-	ui.updateEventsList()
-	ui.highlightFocus(ui.app.GetFocus())
+	ui.repaintCurrentList()
+	if ui.app != nil {
+		ui.highlightFocus(ui.app.GetFocus())
+	}
 }
 
 // cycleTheme moves to the next theme in sequence
@@ -2524,16 +2432,14 @@ func (ui *UI) cycleTheme() {
 	if ui.logger != nil {
 		ui.logger.Printf("Cycle theme requested (current=%s)", ui.themeName)
 	}
-	next := map[string]string{
-		"dark":          "light",
-		"light":         "claude",
-		"claude":        "gemini",
-		"gemini":        "neon",
-		"neon":          "cb-safe",
-		"cb-safe":       "high-contrast",
-		"high-contrast": "dark",
+	names := themeNames()
+	for i, n := range names {
+		if n == ui.themeName {
+			ui.setTheme(names[(i+1)%len(names)])
+			return
+		}
 	}
-	ui.setTheme(next[ui.themeName])
+	ui.setTheme(defaultThemeName)
 }
 
 // setTheme applies a named theme
@@ -2550,30 +2456,14 @@ func (ui *UI) setTheme(name string) {
 	if ui.logger != nil {
 		ui.logger.Printf("Setting theme: %s (previous=%s)", name, ui.themeName)
 	}
-	switch name {
-	case "light":
-		ui.themeName = "light"
-		ui.theme = themeLight()
-	case "neon":
-		ui.themeName = "neon"
-		ui.theme = themeNeon()
-	case "high-contrast":
-		ui.themeName = "high-contrast"
-		ui.theme = themeHighContrast()
-	case "claude":
-		ui.themeName = "claude"
-		ui.theme = themeClaude()
-	case "gemini":
-		ui.themeName = "gemini"
-		ui.theme = themeGemini()
-	case "cb-safe":
-		ui.themeName = "cb-safe"
-		ui.theme = themeColorblindSafe()
-	default:
-		ui.themeName = "dark"
-		ui.theme = themeDark()
+	build, ok := themeBuilders[name]
+	if !ok {
+		name, build = defaultThemeName, themeBuilders[defaultThemeName]
 	}
+	ui.themeName = name
+	ui.theme = build()
 	ui.applyTheme()
+	ui.saveUISettings()
 
 	// Propagate live theme to active Case Management screen, if any.
 	if ui.activeCM != nil {
@@ -3084,53 +2974,6 @@ func (ui *UI) addEventsToCase(caseNumberStr string) {
 	}()
 }
 
-// Neon theme (formerly "Pride"): vibrant but accessible on a dark surface
-func themeNeon() Theme {
-	return Theme{
-		Bg:          hex("#0f0b14"),
-		Surface:     hex("#14111a"),
-		Border:      hex("#45385a"),
-		FocusBorder: hex("#ff79c6"), // pink focus ring
-		SelectionBg: hex("#2a1f3d"),
-		SelectionFg: hex("#f8f5ff"),
-		TextPrimary: hex("#f8f5ff"),
-		TextMuted:   hex("#b8a8c9"),
-		Accent:      hex("#ff6ac1"), // pink accent
-		Success:     hex("#00d084"), // green
-		Warning:     hex("#ffd166"), // amber
-		Error:       hex("#ff5555"), // red
-		Header:      hex("#ff79c6"), // header accent
-
-		// Table colors
-		TableHeader:   hex("#ff79c6"),
-		TableHeaderBg: hex("#301d49"),
-		TableRow:      hex("#f8f5ff"),
-		TableRowMuted: hex("#b8a8c9"),
-		TableZebra1:   hex("#1a1426"),
-		TableZebra2:   hex("#151020"),
-
-		// Severity colors inspired by rainbow for quick parsing
-		SeverityCritical: hex("#ff3b30"), // red
-		SeverityHigh:     hex("#ff9f0a"), // orange
-		SeverityMedium:   hex("#ffd60a"), // yellow
-		SeverityLow:      hex("#34c759"), // green
-		SeverityInfo:     hex("#0a84ff"), // blue
-
-		// Text tags
-		TagTextPrimary:      "#f8f5ff",
-		TagMuted:            "#b8a8c9",
-		TagAccent:           "#ff6ac1",
-		TagSuccess:          "#00d084",
-		TagWarning:          "#ffd166",
-		TagError:            "#ff5555",
-		TagSeverityCritical: "#ff3b30",
-		TagSeverityHigh:     "#ff9f0a",
-		TagSeverityMedium:   "#ffd60a",
-		TagSeverityLow:      "#34c759",
-		TagSeverityInfo:     "#0a84ff",
-	}
-}
-
 // showCombinedFilterModal opens a structured, keyboard-friendly filter modal with dropdowns and sub-modals.
 func (ui *UI) showCombinedFilterModal() {
 	// Current context state
@@ -3513,8 +3356,8 @@ func (ui *UI) scheduleEventsReload(source string) {
 	}
 
 	if ui.logger != nil {
-		ui.logger.Printf("scheduleEventsReload: source=%s showAll=%v selectedCaseID=%s filterStart=%v filterEnd=%v loadingEvents=%d lastLoadAgo=%s filterApplying=%d",
-			source, ui.showAll, ui.selectedCaseID, ui.filterStart, ui.filterEnd, le, sinceStr, atomic.LoadInt32(&ui.filterApplying))
+		ui.logger.Debug("scheduleEventsReload: source=%s showFindings=%v showAll=%v selectedCaseID=%s filterStart=%v filterEnd=%v loadingEvents=%d lastLoadAgo=%s filterApplying=%d",
+			source, ui.showFindings, ui.showAll, ui.selectedCaseID, ui.filterStart, ui.filterEnd, le, sinceStr, atomic.LoadInt32(&ui.filterApplying))
 	}
 
 	// If a load is in progress, defer dispatch until it completes or times out; then dispatch.
@@ -3944,8 +3787,6 @@ func (ui *UI) buildShortcutHints() string {
 	// 4) Theme (lowest priority)
 	base = append(base,
 		kv{"t", "theme"},
-		kv{"T", "high-contrast"},
-		kv{"C", "cb-safe"},
 	)
 
 	// Post-process:
@@ -4438,4 +4279,35 @@ func (ui *UI) RefreshAllEventsAsync(source string) {
 	}
 	// scheduleEventsReload handles re-entrancy, context, and dispatching the correct loader.
 	go ui.scheduleEventsReload(source)
+}
+
+// renderHeader draws the title bar. It is the single implementation: the header
+// used to be written out in full in two places, so a change to one silently
+// reverted the moment a theme was applied.
+func (ui *UI) renderHeader() {
+	if ui.appTitle == nil {
+		return
+	}
+	// The title panel is ~44 columns, so the fields are stacked rather than
+	// spread: padding the date to the right edge wrapped it onto a third line
+	// and pushed the schema version out of view entirely.
+	ui.appTitle.SetText(fmt.Sprintf(
+		" [%s]Console-IR[-] [%s]%s[-]\n [%s]OCSF %s · %s[-]",
+		ui.theme.TagAccent,
+		ui.theme.TagMuted, buildinfo.Display(ui.version),
+		ui.theme.TagMuted, ocsf.SchemaVersion(), time.Now().Format("2006-01-02"),
+	))
+}
+
+// SetIngestDir records the drop folder being watched, so empty-state hints name
+// the real path rather than a hardcoded one that drifts when the default moves.
+func (ui *UI) SetIngestDir(dir string) { ui.ingestDir = dir }
+
+// watchedDir is the folder to name in hints, falling back to the default when
+// the UI was constructed without one (tests, live-events).
+func (ui *UI) watchedDir() string {
+	if strings.TrimSpace(ui.ingestDir) == "" {
+		return ingest.DefaultDir
+	}
+	return ui.ingestDir
 }

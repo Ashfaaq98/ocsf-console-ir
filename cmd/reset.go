@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/paths"
 	"github.com/go-redis/redis/v8"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -47,6 +48,7 @@ Examples:
 func init() {
 	rootCmd.AddCommand(resetCmd)
 
+	resetCmd.Flags().StringVar(&redisURL, "redis", "", "Redis URL for distributed mode; empty (default) runs standalone")
 	resetCmd.Flags().BoolVarP(&confirmReset, "yes", "y", false, "Automatically confirm reset operation")
 	resetCmd.Flags().BoolVar(&resetRedis, "redis-only", false, "Reset only Redis data")
 	resetCmd.Flags().BoolVar(&resetDB, "db-only", false, "Reset only database")
@@ -169,7 +171,7 @@ func resetDatabase(ctx context.Context) error {
 	// Get database path from configuration
 	dbPath := viper.GetString("database.path")
 	if dbPath == "" {
-		dbPath = "./data/console-ir.db"
+		dbPath = paths.Current().DB()
 	}
 
 	// Remove SQLite database files

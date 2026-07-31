@@ -1,6 +1,8 @@
 package ingest
 
 import (
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
+
 	"bufio"
 	"bytes"
 	"context"
@@ -9,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -34,7 +35,7 @@ type HTTPIngestOptions struct {
 	// Burst is the token bucket size. If 0 and RPS>0, defaults to RPS.
 	Burst int
 	// Logger for minimal logs (optional)
-	Logger *log.Logger
+	Logger *logging.Logger
 	// MaxBodyBytes caps request body size; defaults to 10 MiB.
 	MaxBodyBytes int64
 }
@@ -44,7 +45,7 @@ type HTTPIngestServer struct {
 	srv     *http.Server
 	opts    HTTPIngestOptions
 	limiter *simpleLimiter
-	logger  *log.Logger
+	logger  *logging.Logger
 	started int32
 }
 
@@ -54,7 +55,7 @@ func NewHTTPIngestServer(opts HTTPIngestOptions) (*HTTPIngestServer, error) {
 		opts.Bind = "127.0.0.1:8081"
 	}
 	if opts.Dir == "" {
-		opts.Dir = "data/incoming"
+		opts.Dir = DefaultDir
 	}
 	if opts.MaxBodyBytes <= 0 {
 		opts.MaxBodyBytes = 10 * 1024 * 1024 // 10 MiB
@@ -65,11 +66,11 @@ func NewHTTPIngestServer(opts HTTPIngestOptions) (*HTTPIngestServer, error) {
 		return nil, fmt.Errorf("http ingest: --http-ingest-token is required when binding to non-localhost address %q", opts.Bind)
 	}
 
-	var logger *log.Logger
+	var logger *logging.Logger
 	if opts.Logger != nil {
 		logger = opts.Logger
 	} else {
-		logger = log.New(os.Stderr, "[http-ingest] ", log.LstdFlags)
+		logger = nil
 	}
 	if err := os.MkdirAll(opts.Dir, 0700); err != nil {
 		return nil, fmt.Errorf("create ingest dir: %w", err)

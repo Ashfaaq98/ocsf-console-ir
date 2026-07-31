@@ -1,9 +1,9 @@
 package bus
 
 import (
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
+
 	"context"
-	"io"
-	"log"
 )
 
 // Bus defines the interface for event bus implementations
@@ -29,10 +29,7 @@ type Bus interface {
 
 // NewBus creates a new bus instance based on the Redis URL
 // If redisURL is empty or invalid, returns a NullBus
-func NewBus(redisURL string, logger *log.Logger) Bus {
-	if logger == nil {
-		logger = log.New(io.Discard, "", 0)
-	}
+func NewBus(redisURL string, logger *logging.Logger) Bus {
 
 	if redisURL == "" {
 		return NewNullBus(logger)

@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 )
 
@@ -21,13 +21,13 @@ type Ollama struct {
 	endpoint   string
 	model      string
 	httpClient *http.Client
-	logger     *log.Logger
+	logger     *logging.Logger
 }
 
 // NewOllama constructs a new Ollama provider.
 // endpoint example: http://localhost:11434
 // model example: qwen3:0.6b (may be empty when only using discovery)
-func NewOllama(endpoint, model string, logger *log.Logger) (*Ollama, error) {
+func NewOllama(endpoint, model string, logger *logging.Logger) (*Ollama, error) {
 	if endpoint == "" {
 		return nil, fmt.Errorf("ollama: endpoint is required")
 	}
@@ -196,7 +196,6 @@ func (o *Ollama) SummarizeCase(ctx context.Context, case_ store.Case, events []s
 			},
 		},
 		Persona:   PersonaSOC,
-		MCPMode:   "local",
 		MaxTokens: 700,
 	}
 	resp, err := o.Chat(ctx, req)

@@ -83,6 +83,7 @@ func (ui *UI) loadFindings() {
 
 	ui.app.QueueUpdateDraw(func() {
 		ui.findings = findings
+		ui.findingsTotal = total
 		ui.updateFindingsList(total)
 		scope := "all"
 		if ui.findingsOpenOnly {
@@ -114,7 +115,7 @@ func (ui *UI) updateFindingsList(total int) {
 			"Findings are OCSF detections — class_uid 2001-2008, or any event with is_alert=true.",
 			"They are what a SIEM or EDR emits when something is worth an analyst's attention.",
 			"",
-			"Drop a Detection Finding into  data/incoming/  to see it here.",
+			fmt.Sprintf("Drop a Detection Finding into  %s  to see it here.", ui.watchedDir()),
 			"Press  A  to browse all raw events instead.",
 		}
 		if ui.findingsOpenOnly {
@@ -580,4 +581,38 @@ func (ui *UI) currentAnalyst() string {
 		return u
 	}
 	return "analyst"
+}
+
+// repaintCurrentList re-renders the main table for whichever view is open,
+// without touching the database.
+//
+// The findings queue and the events list share one table widget, so anything
+// that re-renders it has to know which of the two is showing. applyTheme called
+// updateEventsList unconditionally, which silently replaced a findings queue
+// with events on every theme change — the detail pane kept showing the finding,
+// because only the table was rebuilt.
+func (ui *UI) repaintCurrentList() {
+	// The table may not exist yet: setTheme runs while restoring the persisted
+	// choice, before the layout is assembled.
+	if ui.eventList == nil {
+		return
+	}
+	if ui.showFindings {
+		ui.updateFindingsList(ui.findingsTotal)
+		return
+	}
+	ui.updateEventsList()
+}
+
+// refreshCurrentView reloads the data behind whichever view is open.
+//
+// Same trap as repaintCurrentList, one level up: 'r' went straight to
+// scheduleEventsReload, so refreshing the findings queue replaced it with
+// events. Every user-initiated refresh should come through here.
+func (ui *UI) refreshCurrentView(source string) {
+	if ui.showFindings {
+		go ui.loadFindings()
+		return
+	}
+	ui.scheduleEventsReload(source)
 }

@@ -6,13 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 )
 
@@ -23,14 +23,14 @@ type OpenRouter struct {
 	model      string
 	apiKey     string
 	httpClient *http.Client
-	logger     *log.Logger
+	logger     *logging.Logger
 }
 
 // NewOpenRouter constructs a new OpenRouter provider.
 // endpoint example: https://openrouter.ai/api/v1
 // model example: "qwen/qwen-2.5-7b-instruct" (OpenRouter model id)
 // apiKey is required; when empty this constructor will try OPENROUTER_API_KEY env var.
-func NewOpenRouter(endpoint, model, apiKey string, logger *log.Logger) (*OpenRouter, error) {
+func NewOpenRouter(endpoint, model, apiKey string, logger *logging.Logger) (*OpenRouter, error) {
 	ep := strings.TrimSpace(endpoint)
 	if ep == "" {
 		ep = "https://openrouter.ai/api/v1"
@@ -215,7 +215,6 @@ func (o *OpenRouter) SummarizeCase(ctx context.Context, case_ store.Case, events
 			{Role: "user", Content: sb.String(), Timestamp: time.Now()},
 		},
 		Persona:   PersonaSOC,
-		MCPMode:   "remote",
 		MaxTokens: 700,
 	}
 	r, err := o.Chat(ctx, req)

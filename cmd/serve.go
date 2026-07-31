@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,15 +12,16 @@ import (
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/bus"
-	"github.com/Ashfaaq98/ocsf-console-ir/internal/enrich/geoip"
-	"github.com/Ashfaaq98/ocsf-console-ir/internal/enrich/whois"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ingest"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/paths"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/plugins"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ui"
 	"github.com/gdamore/tcell/v2"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 var (
@@ -35,17 +35,27 @@ var (
 	httpIngestRPS    int
 	httpIngestBurst  int
 	httpIngestDir    string
+
+	// ingestDir is the drop folder watched while the TUI runs.
+	ingestDir string
 )
 
-// serveCmd represents the serve command
+// defaultIngestDir is owned by the ingest package, so the folder watcher, the
+// HTTP receiver and this flag cannot disagree about where files land.
+const defaultIngestDir = ingest.DefaultDir
+
+// serveCmd is the pre-v0.2 name for launching the TUI, kept as a hidden alias.
+// Running the bare binary is now the documented way in — "serve" implied a
+// daemon, which this is not.
 var serveCmd = &cobra.Command{
-	Use:   "serve",
-	Short: "Start the terminal UI and enrichment pipeline",
+	Use:    "serve",
+	Hidden: true,
+	Short:  "Start the terminal UI and enrichment pipeline (alias for running console-ir with no arguments)",
 	Long: `Start the Console-IR server which includes:
 
 1. Terminal User Interface (TUI) for case management
 2. In-process enrichment (GeoIP, WHOIS) with no external services
-3. Folder ingestion: OCSF JSONL/JSON dropped into data/incoming/
+3. Folder ingestion: OCSF JSONL/JSON dropped into ./incoming/
 4. Optional distributed mode via Redis (only when --redis is set)
 
 The serve command runs until interrupted (Ctrl+C).
@@ -57,8 +67,8 @@ Examples:
   # Start with TUI (default)
   console-ir serve
 
-  # Load the shipped sample, then explore it in the TUI
-  cp examples/sample-events.jsonl data/incoming/ && console-ir serve
+  # Explore a sample incident in a throwaway database
+  console-ir demo
 
   # Start without TUI (experimental headless mode)
   console-ir serve --no-tui`,
@@ -68,16 +78,31 @@ Examples:
 func init() {
 	rootCmd.AddCommand(serveCmd)
 
-	serveCmd.Flags().BoolVar(&noTUI, "no-tui", false, "Run in headless mode without TUI")
-	serveCmd.Flags().BoolVar(&forceTUI, "force-tui", false, "Force TUI mode even in unsupported terminals")
+	// Every entry point that ends up in runServe takes the same flags, bound to
+	// the same variables, so they all behave identically.
+	addTUIFlags(rootCmd.Flags())
+	addTUIFlags(serveCmd.Flags())
+	addTUIFlags(demoCmd.Flags())
+}
 
-	// HTTP ingestion flags
-	serveCmd.Flags().BoolVar(&httpIngestEnable, "http-ingest-enable", false, "Enable HTTP ingestion server")
-	serveCmd.Flags().StringVar(&httpIngestBind, "http-ingest-bind", "127.0.0.1:8081", "Bind address for HTTP ingestion")
-	serveCmd.Flags().StringVar(&httpIngestToken, "http-ingest-token", os.Getenv("INGEST_TOKEN"), "Bearer token required for HTTP ingestion (env: INGEST_TOKEN)")
-	serveCmd.Flags().IntVar(&httpIngestRPS, "http-ingest-rps", 10, "Max HTTP ingestion requests per second")
-	serveCmd.Flags().IntVar(&httpIngestBurst, "http-ingest-burst", 20, "Burst size for HTTP ingestion rate limiter")
-	serveCmd.Flags().StringVar(&httpIngestDir, "http-ingest-dir", "data/incoming", "Directory to write ingested payloads")
+// addTUIFlags registers the flags runServe reads. Registering them per command
+// rather than persistently keeps them off `version` and `list`, which have no
+// TUI, no plugins and no bus.
+func addTUIFlags(fs *pflag.FlagSet) {
+	fs.BoolVar(&noTUI, "no-tui", false, "Run in headless mode without TUI")
+	fs.BoolVar(&forceTUI, "force-tui", false, "Force TUI mode even in unsupported terminals")
+	fs.StringVar(&ingestDir, "ingest-dir", defaultIngestDir, "Directory watched for dropped OCSF files")
+
+	fs.BoolVar(&httpIngestEnable, "http-ingest-enable", false, "Enable HTTP ingestion server")
+	fs.StringVar(&httpIngestBind, "http-ingest-bind", "127.0.0.1:8081", "Bind address for HTTP ingestion")
+	fs.StringVar(&httpIngestToken, "http-ingest-token", os.Getenv("INGEST_TOKEN"), "Bearer token required for HTTP ingestion (env: INGEST_TOKEN)")
+	fs.IntVar(&httpIngestRPS, "http-ingest-rps", 10, "Max HTTP ingestion requests per second")
+	fs.IntVar(&httpIngestBurst, "http-ingest-burst", 20, "Burst size for HTTP ingestion rate limiter")
+	fs.StringVar(&httpIngestDir, "http-ingest-dir", "", "Directory HTTP ingestion writes to (defaults to --ingest-dir)")
+
+	// Only the TUI path runs enrichment plugins or the optional bus.
+	fs.StringVar(&redisURL, "redis", "", "Redis URL for distributed mode; empty (default) runs standalone")
+	fs.StringVar(&pluginsDir, "plugins-dir", "./plugins", "Directory containing plugins")
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
@@ -85,23 +110,27 @@ func runServe(cmd *cobra.Command, args []string) error {
 	config := GetConfig()
 
 	// Initialize logger - use file logging for TUI mode to keep terminal clean
-	var logger *log.Logger
+	var logger *logging.Logger
 	willUseTUI := determineTUIMode(cmd, args)
 
 	if willUseTUI {
-		// Silent TUI mode: logs go to file, errors still visible on terminal
-		logFile := setupFileLogger()
-		if logFile != nil {
-			// Use multi-writer: file for all logs, stderr for errors only
-			logger = log.New(io.MultiWriter(logFile, &errorFilterWriter{os.Stderr}), "[serve] ", log.LstdFlags)
-			defer logFile.Close()
-		} else {
-			// Fallback to stderr if file creation fails
-			logger = log.New(os.Stderr, "[serve] ", log.LstdFlags)
-		}
+		// TUI mode: everything to the shared file, errors also on the terminal.
+		logger = runtimeLoggerConsole("serve", &errorFilterWriter{os.Stderr})
 	} else {
-		// Headless mode: normal stderr logging
-		logger = log.New(os.Stderr, "[serve] ", log.LstdFlags)
+		// Headless mode: the file plus plain stderr.
+		logger = runtimeLoggerConsole("serve", os.Stderr)
+	}
+
+	// The HTTP receiver writes each POST as a file into the drop folder; the
+	// folder watcher is what actually ingests those files, and it only starts
+	// alongside the TUI. Headless, the receiver would answer 202 Accepted and
+	// leave the events on disk unread — a pipeline pointed at it would look
+	// healthy while losing everything. Refuse the combination rather than
+	// accept data we will not store.
+	if httpIngestEnable && !willUseTUI {
+		return fmt.Errorf("HTTP ingestion is not supported without the TUI: " +
+			"POSTed events would be accepted and never ingested. " +
+			"Run without --no-tui, or use `console-ir ingest <dir> --watch`, which is fully headless")
 	}
 
 	logger.Println("Starting Console-IR server")
@@ -122,16 +151,17 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	// Initialize bus (Redis or Null)
 	logger.Println("Connecting to event bus...")
-	var busLogger *log.Logger = logger
-	if willUseTUI {
-		// Silence bus logs while TUI is active to avoid bottom-of-screen noise
-		busLogger = log.New(io.Discard, "", 0)
+	// The bus logs to the file under its own tag. It used to be discarded
+	// entirely while the TUI ran, so nothing it reported was ever recoverable.
+	busLogger := runtimeLogger("bus")
+	if !willUseTUI {
+		busLogger = runtimeLoggerConsole("bus", os.Stderr)
 	}
 	eventBus := bus.NewBus(config.Redis.URL, busLogger)
 	defer eventBus.Close()
 
 	// Initialize LLM provider from settings (default: ollama). Fall back to LocalStub at runtime only if build fails.
-	settings, _ := llm.LoadSettings("config/llm_settings.json")
+	settings, _ := llm.LoadSettings(paths.Current().ConfigFile(paths.LLMSettingsName))
 	p, err := llm.Build(ctx, settings.Active, logger)
 	if err != nil || p == nil {
 		logger.Printf("LLM provider build failed: %v; falling back to local stub for runtime resilience", err)
@@ -146,18 +176,14 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// their runtime logs (e.g. per-lookup failures during enrichment) never
 	// corrupt the TUI screen; in headless mode this is the normal logger.
 	logger.Println("Initializing plugin manager...")
-	pluginLogger := busLogger
+	pluginLogger := runtimeLogger("plugins")
 	pluginManager := plugins.NewPluginManager(eventBus, st, config.Plugins.Dir, pluginLogger)
 
 	// Register embedded (in-process) core enrichments. These run inside the
 	// binary via the plugin manager's enrichment queue, with no Redis broker
-	// or subprocess required.
-	if err := pluginManager.GetRegistry().RegisterCorePlugin(whois.New(pluginLogger)); err != nil {
-		logger.Printf("Failed to register whois enrichment: %v", err)
-	}
-	if err := pluginManager.GetRegistry().RegisterCorePlugin(geoip.New(pluginLogger)); err != nil {
-		logger.Printf("Failed to register geoip enrichment: %v", err)
-	}
+	// or subprocess required. The set comes from coreEnrichers so the
+	// queue-driven and one-shot ingest paths enrich with the same plugins.
+	registerCoreEnrichers(pluginManager, pluginLogger)
 
 	// Start plugin manager
 	if err := pluginManager.Start(ctx); err != nil {
@@ -166,9 +192,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 	defer pluginManager.Stop()
 
 	// Create service coordinator (silence service logs when TUI is active)
-	var svcLogger *log.Logger = logger
-	if willUseTUI {
-		svcLogger = log.New(io.Discard, "", 0)
+	svcLogger := runtimeLogger("services")
+	if !willUseTUI {
+		svcLogger = runtimeLoggerConsole("services", os.Stderr)
 	}
 
 	// Create a cancellable context for the service coordinator
@@ -194,6 +220,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 	// Optional HTTP ingestion server (runs alongside services and TUI/headless)
 	if httpIngestEnable {
+		if strings.TrimSpace(httpIngestDir) == "" {
+			httpIngestDir = resolvePathRelativeToBase(baseDir, ingestDir)
+		}
 		httpLogger := svcLogger // silent when TUI is active to avoid corrupting screen
 		opts := ingest.HTTPIngestOptions{
 			Bind:   httpIngestBind,
@@ -244,39 +273,19 @@ func runServe(cmd *cobra.Command, args []string) error {
 			// Switch to headless mode
 			noTUI = true
 		} else {
-			// Create a silent logger for background services when TUI is active
-			silentLogger := log.New(io.Discard, "", 0)
-			coordinator.logger = silentLogger
+			// Background services keep logging to the file while the TUI runs;
+			// only the terminal is kept clean.
+			coordinator.logger = runtimeLogger("services")
 
-			// Create logs directory and a file-backed logger for UI to prevent terminal corruption
-			baseDir := getWorkingDir()
-			logDir := filepath.Join(baseDir, "logs")
-			if err := os.MkdirAll(logDir, 0755); err != nil {
-				logger.Printf("Warning: Could not create logs directory: %v", err)
-			}
-			logPath := filepath.Join(logDir, "console-ir-ui.log")
-			logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-			if err != nil {
-				// Fallback to discard if file creation fails
-				logger.Printf("Warning: Could not create UI log file at %s: %v", logPath, err)
-				logFile = nil
-			}
-
-			var uiLogger *log.Logger
-			if logFile != nil {
-				uiLogger = log.New(logFile, "[UI] ", log.LstdFlags)
-				// Emit an initial marker to the UI log so it's easy to find and verify.
-				uiLogger.Printf("UI logger initialized (path=%s)", logPath)
-				_ = logFile.Sync()
-				defer logFile.Close()
-			} else {
-				uiLogger = log.New(io.Discard, "[UI] ", log.LstdFlags)
-			}
+			// A file-backed logger for the UI, to prevent terminal corruption.
+			uiLogger := runtimeLogger("ui")
+			// Emit an initial marker so the log is easy to find and verify.
+			uiLogger.Printf("UI logger initialized (path=%s)", runtimeLogPath())
 
 			// Skip auto-creating any cases; only users can create cases via the TUI.
 
-			// Start background folder ingestion for TUI (watch relative CWD path)
-			ingestDir := "data/incoming"
+			// Start background folder ingestion for the TUI.
+			ingestDir := resolvePathRelativeToBase(baseDir, ingestDir)
 			if err := os.MkdirAll(ingestDir, 0755); err != nil {
 				logger.Printf("Warning: Could not create ingest directory %s: %v", ingestDir, err)
 			}
@@ -305,6 +314,9 @@ func runServe(cmd *cobra.Command, args []string) error {
 			}()
 
 			ui := ui.NewUI(ctx, st, llmProvider, uiLogger, GetVersion())
+			// So empty-state hints name the folder that is genuinely watched,
+			// which --ingest-dir can move.
+			ui.SetIngestDir(ingestDir)
 
 			// Start TUI directly - tcell can handle terminal compatibility
 			if err := ui.Start(ctx); err != nil {
@@ -454,7 +466,7 @@ type ServiceCoordinator struct {
 	bus           bus.Bus
 	pluginManager plugins.PluginManager
 	llmProvider   llm.LLMProvider
-	logger        *log.Logger
+	logger        *logging.Logger
 	ctx           context.Context
 
 	// Service state
@@ -717,25 +729,6 @@ func determineTUIMode(cmd *cobra.Command, args []string) bool {
 		return false
 	}
 	return true
-}
-
-// setupFileLogger creates a log file for TUI mode
-func setupFileLogger() *os.File {
-	baseDir := getWorkingDir()
-	logDir := filepath.Join(baseDir, "logs")
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		// If we can't create logs directory, we'll fall back to stderr
-		return nil
-	}
-
-	logPath := filepath.Join(logDir, "console-ir-serve.log")
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		// If we can't create the log file, we'll fall back to stderr
-		return nil
-	}
-
-	return logFile
 }
 
 // errorFilterWriter only writes error messages to the underlying writer

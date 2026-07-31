@@ -45,7 +45,7 @@ archives:
       - LICENSE
       - CHANGELOG.md
       - config/llm_settings.sample.json
-      - docs/**/*
+      - docs/*
 
 checksum:
   name_template: checksums.txt
@@ -79,11 +79,11 @@ brews:
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Formula
-    # Disabled for the initial public release: the homebrew-tap repository and
-    # HOMEBREW_TAP_TOKEN are not set up yet, and an unguarded push would fail the
-    # release *after* the GitHub release and images are published. Re-enable
-    # (set to "auto") once the tap + token exist.
-    skip_upload: "true"
+    # The tap (Ashfaaq98/homebrew-tap) and HOMEBREW_TAP_TOKEN both exist now, so
+    # the formula is published again. It had been pinned to "true" since before
+    # the tap was created, which left Homebrew users on v0.1.0 while v0.1.1
+    # shipped. "auto" still skips snapshots and prereleases.
+    skip_upload: auto
     homepage: "https://github.com/Ashfaaq98/ocsf-console-ir"
     description: "Terminal-first OCSF-native incident response manager for security analysts"
     license: "AGPL-3.0-only"

@@ -11,7 +11,6 @@
 <p align="center">
   <a href="https://github.com/Ashfaaq98/ocsf-console-ir/releases"><img src="https://img.shields.io/github/v/release/Ashfaaq98/ocsf-console-ir?display_name=tag" alt="Release" /></a>
   <a href="https://github.com/Ashfaaq98/ocsf-console-ir/actions/workflows/ci.yml"><img src="https://github.com/Ashfaaq98/ocsf-console-ir/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://github.com/Ashfaaq98/ocsf-console-ir/pkgs/container/console-ir"><img src="https://img.shields.io/badge/docker-ghcr.io%2Fashfaaq98%2Fconsole--ir-2496ED?logo=docker&logoColor=white" alt="Docker" /></a>
   <a href="go.mod"><img src="https://img.shields.io/badge/go-%E2%89%A51.23-00ADD8?logo=go&logoColor=white" alt="Go" /></a>
   <a href="https://github.com/Ashfaaq98/ocsf-console-ir/releases"><img src="https://img.shields.io/badge/platform-linux%20%7C%20macOS%20%7C%20windows-lightgrey" alt="Platforms" /></a>
   <a href="https://schema.ocsf.io/"><img src="https://img.shields.io/badge/OCSF-native-6f42c1" alt="OCSF" /></a>
@@ -51,8 +50,8 @@ threat intel, and Console-IR is the focused investigation layer once relevant OC
   one alert reported five times stays one row — not five
 - **Indicator pivot:** observables are indexed, so "every event and finding touching this IP, hash,
   or host" is one lookup, not a text search
-- **Case model that matches the schema:** cases hold findings as *members* and events as *evidence*,
-  and the same finding can belong to more than one case
+- **Case model that matches the schema:** cases hold findings as *members* (their own tab) and events
+  as *evidence*, and the same finding can belong to more than one case
 - **OCSF-native ingestion:** JSON/JSONL files, stdin, folder drop-in, and an optional HTTP endpoint
 - **Keyboard-first TUI:** findings, cases, events, timelines, evidence, notes, IOCs, full-text search
 - **Built-in enrichment:** GeoIP and WHOIS run in-process, with no external services
@@ -73,7 +72,7 @@ the way the schema defines them.
 | Activity classes (System, IAM, Network, Discovery, Application, …) | An **event**: searchable telemetry and case evidence |
 
 > **Status:** early and evolving (v0.2.x). The TUI workflow is the supported path today.
-> Headless/Docker serving and the external plugins are experimental (see notes below).
+> Headless mode and the external threat-intel plugins are experimental (see notes below).
 
 ## Install
 
@@ -91,26 +90,44 @@ cd ocsf-console-ir && make build
 
 ## Quick start
 
-Load the shipped sample and open it in the TUI:
-
 ```bash
-mkdir -p data/incoming
-cp examples/sample-events.jsonl data/incoming/
-./bin/console-ir serve
+console-ir demo
 ```
 
-The shipped sample contains a Detection Finding, so Console-IR opens on the **findings queue**.
-From there:
+That loads a sample incident into a **throwaway database** and opens the TUI. It never touches your
+real data, so it is safe to run first and safe to run again.
+
+The sample is one coherent incident — a phishing attachment leads to encoded PowerShell, credential
+access, and C2 beaconing on a single host — so the findings queue, the case model, and the indicator
+pivot all have something real to show.
+
+When you want your own data:
+
+```bash
+console-ir ingest events.jsonl   # a file
+console-ir ingest ./incoming     # a directory
+console-ir                       # open the TUI
+```
+
+Console-IR opens on the **findings queue** whenever detections are waiting. From there:
 
 - **Enter** — open the finding: evidence artifacts, the events it came from, and its indicators
 - **`s`** set status, **`v`** set verdict, **`e`** escalate it into a case
-- **`A`** — switch to **ALL EVENTS** and open one to see **GeoIP/WHOIS enrichment** attached
-  (press **`r`** to refresh as async lookups land)
-
-To ingest your own data, drop OCSF `.jsonl` files into `data/incoming/`, either before launch or
-while running.
+- **`A`** — switch to **ALL EVENTS** and open one to see **GeoIP/WHOIS enrichment** attached,
+  grouped one card per indicator and updating in place as async lookups land
 
 [![TUI walkthrough](assets/demo.gif)](assets/demo.mp4)
+
+## Commands
+
+```
+console-ir                    open the TUI
+console-ir ingest <path|->    a file, a directory, or stdin  (--watch, --no-enrich)
+console-ir demo               sample incident in a throwaway database
+console-ir list               findings | cases | events   (works without a TTY)
+console-ir reset              clear the database
+console-ir version
+```
 
 ## Keys
 
@@ -139,13 +156,32 @@ Navigation follows vim conventions: `j`/`k` move, `h`/`l` change pane, `g`/`G` j
 
 ## Ingesting events
 
-1. **Folder drop-in (recommended):** drop OCSF `.jsonl`/`.json` files into `data/incoming/`;
-   they're ingested and enriched automatically. Files staged before launch are picked up on
-   startup. See [internal/ingest/folder.go](internal/ingest/folder.go).
-2. **CLI batch:** `./bin/console-ir ingest <file>` pre-loads a file into the store. Note that batch
-   import does not run enrichment; open the events in the TUI for that. See [cmd/ingest.go](cmd/ingest.go).
-3. **HTTP endpoint** *(experimental)*: accepts POSTed events, localhost by default, with a bearer
-   token required on non-loopback binds. See [internal/ingest/http_ingest.go](internal/ingest/http_ingest.go).
+One command, and the path decides what happens — the way `cp` and `tar` work:
+
+```bash
+console-ir ingest events.jsonl        # a file
+console-ir ingest ./incoming          # every matching file in a directory
+console-ir ingest ./incoming --watch  # ...and keep tailing it
+cat events.json | console-ir ingest - # stdin
+```
+
+Records are enriched (GeoIP, WHOIS) as they arrive. Pass `--no-enrich` to skip the lookups on a bulk
+load, `--case "Title"` to attach everything to a case.
+
+**While the TUI is running**, files dropped into the watched folder are picked up automatically:
+
+```bash
+console-ir --ingest-dir ./incoming    # default is ./incoming
+```
+
+**Over HTTP** *(experimental)* — POSTed payloads are written into the watched folder and ingested
+from there. Localhost by default; a bearer token is required on non-loopback binds:
+
+```bash
+console-ir --http-ingest-enable --http-ingest-bind 127.0.0.1:8081
+```
+
+See [internal/ingest/](internal/ingest/) for the implementations.
 
 ## Enrichment & plugins
 
@@ -158,11 +194,46 @@ Redis Streams for distributed deployments. They're disabled by default; enable o
 
 ## Configuration
 
+### Where your data lives
+
+Console-IR keeps its database, config and logs in stable per-user directories, so it opens the
+same cases whichever folder you launch it from. Run `console-ir version` to see the resolved paths.
+
+| | Linux / BSD | macOS | Windows |
+|---|---|---|---|
+| Database | `$XDG_DATA_HOME/console-ir` → `~/.local/share/console-ir` | `~/Library/Application Support/console-ir` | `%LOCALAPPDATA%\console-ir` |
+| Config | `$XDG_CONFIG_HOME/console-ir` → `~/.config/console-ir` | `~/Library/Application Support/console-ir` | `%APPDATA%\console-ir` |
+| Logs | `$XDG_STATE_HOME/console-ir` → `~/.local/state/console-ir` | `~/Library/Logs/console-ir` | `%LOCALAPPDATA%\console-ir\logs` |
+
+`XDG_*` environment variables are honoured on every platform. Override individually with
+`--data-dir`, `--config-dir`, `--log-dir` (or `--db` for the database file itself), or pass
+`--portable` to keep everything beside the working directory — useful on a USB stick or a jump box
+you don't want to leave traces on.
+
+Logs go to a single `console-ir.log`, rotated at 5 MB with three older generations kept (20 MB
+maximum). Every line carries a level and the subsystem that emitted it, so failures are greppable:
+
+```
+2026-07-30 17:15:21 WARN  [whois] lookup failed example.bd: no whois server found
+```
+
+`--log-level debug|info|warn|error` sets the threshold (default `info`). `debug` adds keystrokes and
+query timings; `warn` keeps only failures.
+
+The watched drop folder is the exception: it stays relative to where you launch (`./incoming`),
+because a landing zone buried under `~/.local/share` is one you can't drop files into. Point it
+anywhere with `--ingest-dir`.
+
+### Other settings
+
 - **LLM provider** (optional): set the provider/model/API key from the TUI's LLM Settings
-  (Shift+L), or copy [`config/llm_settings.sample.json`](config/llm_settings.sample.json) to
-  `config/llm_settings.json`. With no config, Console-IR defaults to a local Ollama model.
+  (Shift+L), or copy [`config/llm_settings.sample.json`](config/llm_settings.sample.json) into your
+  config directory as `llm_settings.json`. With no config, Console-IR defaults to a local Ollama
+  model.
 - **Redis** (optional): pass `--redis redis://host:6379` only to enable distributed mode.
   The default is standalone with no external services.
+- **Themes**: press `t` to cycle. Three ship — `dark` (default), `gruvbox` and `light`. Your choice
+  is remembered between sessions.
 
 ## Architecture
 
@@ -181,25 +252,39 @@ plugins, not a requirement.
 
 - **No findings?** Your data may contain no detections — findings come from OCSF Findings classes
   (`class_uid` 2001–2008) or events flagged `is_alert`. Plain telemetry produces events, not
-  findings. Press `A` for all events, or drop `examples/sample-events.jsonl` into `data/incoming/`
+  findings. Press `A` for all events, or drop `examples/sample-events.jsonl` into `./incoming/`
   for a sample that includes one. Note the queue hides already-triaged findings by default —
   press `o` to show everything.
-- **Empty event list?** Drop `examples/sample-events.jsonl` into `data/incoming/` and press `r`.
-- **TUI won't start?** Use a native terminal; it needs a real TTY. (`--no-tui` is experimental and does not ingest.)
-- **Enrichment missing?** It's asynchronous, so press `r` to refresh an event's detail once WHOIS/GeoIP lookups complete.
+- **Empty event list?** Run `console-ir demo` to see the tool with data in it, or
+  `console-ir ingest examples/sample-events.jsonl` to load the shipped sample into your own database.
+- **Dropped a file in and nothing happened?** The watched folder is `./incoming` (relative to where
+  you launched). Check with `console-ir --help`, or point it elsewhere with `--ingest-dir`.
+- **Cases missing after upgrading?** v0.2.0 moved the database to a per-user directory and printed
+  the move. Run `console-ir version` to see where it is now.
+- **TUI won't start?** Use a native terminal; it needs a real TTY. (`--no-tui` is experimental and does not ingest.) `console-ir list` works anywhere.
+- **Enrichment missing?** Lookups are asynchronous, but the open event refreshes itself when they
+  land. If a card never appears, the lookup failed — check the log (`console-ir version` prints its
+  path). `r` still forces a reload.
 - **Build issues?** Run `go mod download` then `make build`.
 - **Redis errors?** You don't need Redis unless you explicitly pass `--redis ...`.
 
 ### Upgrading from v0.1.x
 
-Opening an existing database migrates it in place: OCSF identity columns are added and backfilled
-from the stored raw events, observables are extracted, and `event_type` is rewritten to OCSF
-category slugs (`system`, `findings`, `iam`, `network`, …) — replacing the incorrect values earlier
-versions produced. Nothing is lost, and the migration is safe to re-run.
+**Your database moves.** v0.1.x kept it at `./data/console-ir.db`, relative to wherever you
+happened to launch the binary. On first run v0.2.0 moves that file — plus `config/llm_settings.json`,
+which can hold a plaintext API key — into the per-user directories above, and prints each move.
+Nothing happens silently, and nothing is moved if a database is already at the destination. Pass
+`--portable` to keep the old layout instead.
+
+**The database itself migrates in place**: OCSF identity columns are added and backfilled from the
+stored raw events, observables are extracted, and `event_type` is rewritten to OCSF category slugs
+(`system`, `findings`, `iam`, `network`, …) — replacing the incorrect values earlier versions
+produced. Nothing is lost, and the migration is safe to re-run.
 
 **Downgrading afterwards is not clean.** A v0.1.x binary reads the migrated database but only offers
 its old five type filters, none of which match the new values, so filtering appears to return
-nothing. Back up `data/console-ir.db` first if you need to roll back.
+nothing. Back up the database (`console-ir version` prints its path) before you upgrade if you may
+need to roll back.
 
 ## Contributing
 
@@ -208,8 +293,8 @@ Quick version: fork, branch, add tests, run `make check`, open a PR.
 
 ## Security
 
-Do **not** commit API keys or secrets. Use the TUI or the sample config, and keep
-`config/llm_settings.json` ignored. See [`SECURITY.md`](SECURITY.md) to report vulnerabilities.
+Do **not** commit API keys or secrets. Use the TUI or the sample config; real settings live in
+your per-user config directory (mode 0700), not in the repo. See [`SECURITY.md`](SECURITY.md) to report vulnerabilities.
 
 ## License
 

@@ -2,6 +2,32 @@
 
 This document is the practical checklist for shipping `console-ir` releases.
 
+## Before Any Tag: `make release-check`
+
+A tag is close to irreversible. GitHub releases can be deleted, but a Go module version cannot —
+`proxy.golang.org` and `sum.golang.org` cache the content hash permanently, so re-tagging the same
+version with different code produces a checksum mismatch for anyone who fetches it.
+
+So validate the pipeline *before* tagging:
+
+```bash
+# once, pinned to match CI
+go install github.com/goreleaser/goreleaser/v2@v2.17.1
+
+make release-check                # full snapshot, nothing published
+make release-check SKIP=docker    # skip the image build (no Docker daemon)
+```
+
+This runs `goreleaser check` and then `goreleaser release --snapshot --clean`, building every
+archive, checksum, SBOM, Homebrew formula and container image locally. `docker_manifests` sets
+`skip_push: auto`, so a snapshot never pushes.
+
+It matters because the release workflow runs GoReleaser as a **single step** — if the Docker build
+fails, the binaries and the Homebrew formula fail with it. The Homebrew step nearly broke this way at
+v0.1.1 and was only caught because it had been disabled first.
+
+CI runs the same target on every pull request.
+
 ## What Happens on a Release
 
 1. Commit release-prep changes to `main`.

@@ -6,13 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 )
 
@@ -23,14 +23,14 @@ type Groq struct {
 	model      string
 	apiKey     string
 	httpClient *http.Client
-	logger     *log.Logger
+	logger     *logging.Logger
 }
 
 // NewGroq constructs a new Groq provider.
 // endpoint example: https://api.groq.com/openai/v1
 // model example: "llama-3.3-70b-versatile" (Groq model id)
 // apiKey is required; when empty this constructor will try GROQ_API_KEY env var.
-func NewGroq(endpoint, model, apiKey string, logger *log.Logger) (*Groq, error) {
+func NewGroq(endpoint, model, apiKey string, logger *logging.Logger) (*Groq, error) {
 	ep := strings.TrimSpace(endpoint)
 	if ep == "" {
 		ep = "https://api.groq.com/openai/v1"
@@ -212,7 +212,6 @@ func (g *Groq) SummarizeCase(ctx context.Context, case_ store.Case, events []sto
 			{Role: "user", Content: sb.String(), Timestamp: time.Now()},
 		},
 		Persona:   PersonaSOC,
-		MCPMode:   "remote",
 		MaxTokens: 700,
 	}
 	r, err := g.Chat(ctx, req)

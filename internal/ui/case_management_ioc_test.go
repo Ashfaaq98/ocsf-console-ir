@@ -2,12 +2,12 @@ package ui
 
 import (
 	"context"
-	"log"
 	"os"
 	"testing"
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 	"github.com/gdamore/tcell/v2"
 )
@@ -39,7 +39,7 @@ func TestIOCTabSelectionToggle_Space(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	logger := log.New(os.Stdout, "[TEST] ", 0)
+	logger := logging.New(os.Stdout, logging.LevelDebug, "test")
 	ui := NewUI(ctx, st, &mockLLMIOC{}, logger, "test")
 
 	c := store.Case{ID: "case-ioc", Title: "IOC Manual", Severity: "low", Status: "open"}
@@ -110,7 +110,7 @@ func TestIOCTabAddModalPlusKey_OpensModal(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	logger := log.New(os.Stdout, "[TEST] ", 0)
+	logger := logging.New(os.Stdout, logging.LevelDebug, "test")
 	ui := NewUI(ctx, st, &mockLLMIOC{}, logger, "test")
 
 	c := store.Case{ID: "case-ioc-plus", Title: "IOC Plus", Severity: "low", Status: "open"}
@@ -148,7 +148,7 @@ func TestGetCurrentAnalystPriority(t *testing.T) {
 	defer st.Close()
 
 	ctx := context.Background()
-	logger := log.New(os.Stdout, "[TEST] ", 0)
+	logger := logging.New(os.Stdout, logging.LevelDebug, "test")
 	ui := NewUI(ctx, st, &mockLLMIOC{}, logger, "test")
 
 	// 1) Case owner takes precedence
@@ -189,7 +189,7 @@ func TestTimelineRender_NoFreeze(t *testing.T) {
 	defer st.Close()
 
 	ctx := context.Background()
-	logger := log.New(os.Stdout, "[TEST] ", 0)
+	logger := logging.New(os.Stdout, logging.LevelDebug, "test")
 	ui := NewUI(ctx, st, &mockLLMIOC{}, logger, "test")
 	c := store.Case{ID: "case-timeline", Title: "Timeline", Severity: "low", Status: "open"}
 	cm := NewCaseManagement(ui, c)

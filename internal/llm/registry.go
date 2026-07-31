@@ -1,9 +1,10 @@
 package llm
 
 import (
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
+
 	"context"
 	"fmt"
-	"log"
 )
 
 // Discovery is an optional capability a provider can implement to expose
@@ -15,7 +16,7 @@ type Discovery interface {
 
 // Build constructs an LLMProvider from a ProviderConfig.
 // Returns an error if the provider cannot be built; callers should handle the error.
-func Build(ctx context.Context, cfg ProviderConfig, logger *log.Logger) (LLMProvider, error) {
+func Build(ctx context.Context, cfg ProviderConfig, logger *logging.Logger) (LLMProvider, error) {
 	switch normalize(cfg.Provider) {
 	case "ollama":
 		p, err := NewOllama(cfg.Endpoint, cfg.Model, logger)

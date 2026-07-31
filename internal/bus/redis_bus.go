@@ -1,10 +1,11 @@
 package bus
 
 import (
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
+
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strconv"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 // RedisBus provides Redis Streams-based messaging for plugins
 type RedisBus struct {
 	client *redis.Client
-	logger *log.Logger
+	logger *logging.Logger
 }
 
 // StreamMessage represents a message in a Redis Stream
@@ -45,7 +46,7 @@ type EnrichmentMessage struct {
 type StreamHandler func(ctx context.Context, message StreamMessage) error
 
 // NewRedisBus creates a new Redis bus instance
-func NewRedisBus(redisURL string, logger *log.Logger) (*RedisBus, error) {
+func NewRedisBus(redisURL string, logger *logging.Logger) (*RedisBus, error) {
 	opts, err := redis.ParseURL(redisURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse Redis URL: %w", err)
@@ -62,7 +63,7 @@ func NewRedisBus(redisURL string, logger *log.Logger) (*RedisBus, error) {
 	}
 
 	if logger == nil {
-		logger = log.New(log.Writer(), "[RedisBus] ", log.LstdFlags)
+		logger = nil
 	}
 
 	return &RedisBus{
@@ -172,7 +173,7 @@ func (rb *RedisBus) ReadStream(ctx context.Context, stream, group, consumer stri
 					// No messages available, continue
 					continue
 				}
-				rb.logger.Printf("Error reading from stream %s: %v", stream, err)
+				rb.logger.Error("Error reading from stream %s: %v", stream, err)
 				time.Sleep(5 * time.Second)
 				continue
 			}
@@ -194,13 +195,13 @@ func (rb *RedisBus) ReadStream(ctx context.Context, stream, group, consumer stri
 
 					// Process the message
 					if err := handler(ctx, streamMsg); err != nil {
-						rb.logger.Printf("Error processing message %s: %v", message.ID, err)
+						rb.logger.Error("Error processing message %s: %v", message.ID, err)
 						continue
 					}
 
 					// Acknowledge the message
 					if err := rb.client.XAck(ctx, stream.Stream, group, message.ID).Err(); err != nil {
-						rb.logger.Printf("Error acknowledging message %s: %v", message.ID, err)
+						rb.logger.Error("Error acknowledging message %s: %v", message.ID, err)
 					}
 				}
 			}

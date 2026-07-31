@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/bus"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 	"github.com/fsnotify/fsnotify"
 )
@@ -25,7 +25,7 @@ type FolderOptions struct {
 	Watch     bool
 	Patterns  []string // e.g. []string{"*.jsonl", "*.json"}
 	CaseTitle string   // default "Ingested Events"
-	Logger    *log.Logger
+	Logger    *logging.Logger
 	// When true and in Watch mode, a JSONL file that has no persisted offset
 	// (i.e. one never seen before) starts at EOF instead of being imported from
 	// the beginning. Restart de-duplication is handled by persisted offsets
@@ -42,6 +42,17 @@ type FolderOptions struct {
 }
 
 // FolderIngestor ingests OCSF events from a directory (one-shot or watch mode).
+// DefaultDir is the drop folder watched when none is configured.
+//
+// It sits beside the working directory rather than inside the database
+// directory: the database is precious state written only by the app, while the
+// inbox is a throwaway landing zone written by users and pipelines. Co-locating
+// them made "clear the inbox" and "destroy the database" the same rm -rf.
+//
+// It stays working-directory-relative on purpose — a landing zone buried under
+// ~/.local/share is one you cannot drop files into.
+const DefaultDir = "./incoming"
+
 type FolderIngestor struct {
 	parser *Parser
 	store  *store.Store
@@ -59,7 +70,7 @@ type FolderIngestor struct {
 // NewFolderIngestor constructs a folder ingestor.
 func NewFolderIngestor(parser *Parser, st *store.Store, b bus.Bus, opts FolderOptions) *FolderIngestor {
 	if opts.Logger == nil {
-		opts.Logger = log.New(log.Writer(), "[ingest-folder] ", log.LstdFlags)
+		opts.Logger = nil
 	}
 	if len(opts.Patterns) == 0 {
 		opts.Patterns = []string{"*.jsonl", "*.json"}

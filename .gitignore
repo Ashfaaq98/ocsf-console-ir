@@ -32,10 +32,14 @@ release-*/
 *.temp
 bin/*
 
-# Runtime data — created by the binary at run time; never committed
-data/
-logs/
-exports/
+# Runtime data — created by the binary at run time; never committed.
+# Anchored with a leading slash so these match only the directories at the repo
+# root. Unanchored, "data/" also matched internal/demo/data/, silently excluding
+# an embedded asset the build depends on.
+/data/
+/logs/
+/exports/
+/incoming/
 config/llm_settings.json
 
 # Local-only workspace for agent notes, reports, and scratch files

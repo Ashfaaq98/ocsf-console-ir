@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,7 +13,9 @@ import (
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/paths"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -43,7 +44,7 @@ type CaseManagement struct {
 	app    *tview.Application
 	store  *store.Store
 	llm    llm.ChatProvider
-	logger *log.Logger
+	logger *logging.Logger
 	theme  Theme
 	ctx    context.Context
 
@@ -82,6 +83,11 @@ type CaseManagement struct {
 	selectedManualIOCIDs map[string]bool // note.ID used as manual IOC id
 	iocRowToManualID     map[int]string  // table row index -> note.ID (only for manual rows)
 
+	// Findings the case is about (its OCSF members), as opposed to the events
+	// attached as evidence.
+	findingsTable *tview.Table
+	caseFindings  []store.Finding
+
 	// State management
 	selectedEventIDs   map[string]bool
 	selectedEventIndex int
@@ -89,7 +95,7 @@ type CaseManagement struct {
 	chatHistory        []llm.ChatMessage
 	currentPersona     string
 	pendingTokens      int32 // atomic
-	activeTab          int   // 0=Overview, 1=Events, 2=Timeline, 3=IOCs, 4=Notes, 5=Activity
+	activeTab          int   // index into caseTabNames
 
 	// LLM summary state (Overview)
 	overviewSummary string
@@ -139,7 +145,41 @@ const (
 	FocusOverview
 	FocusIOCs
 	FocusActivity
+	FocusFindings
 )
+
+// caseTabNames is the single source of truth for the tab strip: its order, its
+// labels, its bounds and its number keys all derive from this. The bounds used
+// to be a hardcoded 5 in four different places, which is what made adding a tab
+// a landmine.
+var caseTabNames = []string{
+	"Overview", "Findings", "Events", "Timeline", "Artifacts/IOCs", "Notes", "Activity Log",
+}
+
+// Tab indices, named so switches read as intent rather than arithmetic.
+const (
+	tabOverview = iota
+	tabFindings
+	tabEvents
+	tabTimeline
+	tabIOCs
+	tabNotes
+	tabActivity
+)
+
+// caseTabPages maps a tab index to its page name and focus pane.
+var caseTabPages = []struct {
+	page  string
+	focus int
+}{
+	tabOverview: {"overview", FocusOverview},
+	tabFindings: {"findings", FocusFindings},
+	tabEvents:   {"events", FocusEvents},
+	tabTimeline: {"timeline", FocusTimeline},
+	tabIOCs:     {"iocs", FocusIOCs},
+	tabNotes:    {"notes", FocusNotes},
+	tabActivity: {"activity", FocusActivity},
+}
 
 // NewCaseManagement creates a new Case Management screen
 func NewCaseManagement(parentUI *UI, caseData store.Case) *CaseManagement {
@@ -192,6 +232,9 @@ func (cm *CaseManagement) setupLayout() {
 		SetFixed(1, 0) // Fixed header row
 	cm.eventsTable.SetBorder(true).SetTitle(" Events ").SetTitleAlign(tview.AlignLeft)
 	cm.setupEventsTable()
+
+	// Findings the case is about
+	cm.setupCaseFindingsTable()
 
 	// Timeline view (center)
 	cm.timelineView = tview.NewTextView().
@@ -429,23 +472,12 @@ func (cm *CaseManagement) setupKeybindings() {
 				// Global hotkey: Shift+L opens LLM Settings anywhere in Case Management
 				cm.showLLMSettingsModal()
 				return nil
-			case '1':
-				cm.switchTab(0) // Overview
-				return nil
-			case '2':
-				cm.switchTab(1) // Events
-				return nil
-			case '3':
-				cm.switchTab(2) // Timeline
-				return nil
-			case '4':
-				cm.switchTab(3) // IOCs
-				return nil
-			case '5':
-				cm.switchTab(4) // Notes
-				return nil
-			case '6':
-				cm.switchTab(5) // Activity
+			case '1', '2', '3', '4', '5', '6', '7':
+				// One key per tab, indexed off caseTabNames so adding a tab
+				// cannot leave a key pointing at the wrong page.
+				if idx := int(event.Rune() - '1'); idx >= 0 && idx < len(caseTabNames) {
+					cm.switchTab(idx)
+				}
 				return nil
 			case 'p', 'P':
 				// Allow pin on Timeline tab
@@ -510,7 +542,6 @@ func (cm *CaseManagement) handleCopilotInput(event *tcell.EventKey) *tcell.Event
 		return nil
 	case tcell.KeyRune:
 		switch event.Rune() {
-		// Toggle MCP radio via keyboard: 'm' switches local/remote text indicator
 		// Copilot sub-focus navigation: '[' to persona dropdown, ']' back to input
 		case '[':
 			cm.app.SetFocus(cm.copilotDropdown)
@@ -1001,6 +1032,12 @@ func (cm *CaseManagement) showEventDetailsModal(ev store.Event) {
 	// Fetch enrichments asynchronously
 	go func() {
 		enrichments, err := cm.store.GetEnrichmentsByEvent(cm.ctx, ev.ID)
+		var observables []store.Observable
+		if err == nil && len(enrichments) > 0 {
+			if byEvent, obsErr := cm.store.GetObservablesForEvents(cm.ctx, []string{ev.ID}); obsErr == nil {
+				observables = byEvent[ev.ID]
+			}
+		}
 		cm.app.QueueUpdateDraw(func() {
 			if err != nil {
 				render(header + fmt.Sprintf("[%s]Failed to load enrichments:[-] %v", cm.theme.TagWarning, err))
@@ -1032,43 +1069,18 @@ func (cm *CaseManagement) showEventDetailsModal(ev store.Event) {
 			}
 			sb.WriteString("\n")
 
-			// Enrichments
+			// Enrichments, grouped into one card per indicator — the same
+			// rendering the main detail pane uses.
 			sb.WriteString(fmt.Sprintf("[%s]Enrichments[-]\n", lbl))
 			if len(enrichments) == 0 {
 				sb.WriteString("  (none)\n")
 			} else {
-				for _, enr := range enrichments {
-					sb.WriteString(fmt.Sprintf("  [%s]%s[-] (%s)\n", acc, strings.ToUpper(enr.Source), enr.Type))
-					// Render selected fields from JSON data (compact)
-					if len(enr.Data) == 0 {
-						sb.WriteString("    - (no data)\n")
-					} else {
-						// Show up to 8 keys in alpha order
-						keys := make([]string, 0, len(enr.Data))
-						for k := range enr.Data {
-							keys = append(keys, k)
-						}
-						sort.Strings(keys)
-						max := 8
-						if len(keys) < max {
-							max = len(keys)
-						}
-						for i := 0; i < max; i++ {
-							k := keys[i]
-							v := enr.Data[k]
-							// Format value as JSON (single line, truncated)
-							jsonVal, _ := json.Marshal(v)
-							txt := string(jsonVal)
-							if len(txt) > 120 {
-								txt = txt[:117] + "..."
-							}
-							sb.WriteString(fmt.Sprintf("    - [%s]%s[-]: [%s]%s[-]\n", val, k, cm.theme.TagMuted, txt))
-						}
-						if len(keys) > max {
-							sb.WriteString("    - ...\n")
-						}
-					}
-				}
+				cards := groupEnrichments(enrichments, eventIndicatorValues(observables, &ev))
+				renderEnrichmentCards(&sb, cm.theme, cards, enrichmentRenderOptions{
+					Indent:      "  ",
+					MaxFields:   12,
+					MaxValueLen: 120,
+				})
 			}
 			// Append a persistent hint at the bottom after enrichments load
 			sb.WriteString(fmt.Sprintf("\n\n[%s][Esc or q] close[-]", cm.theme.TagMuted))
@@ -1129,6 +1141,7 @@ func (cm *CaseManagement) renderOverview() {
 		sb.WriteString(fmt.Sprintf("  [%s]Description:[-] [%s]%s[-]\n", lbl, val, desc))
 	}
 	sb.WriteString(fmt.Sprintf("  [%s]Status:[-] [%s]%s[-]\n", lbl, val, strings.ToUpper(cm.caseData.Status)))
+	sb.WriteString(fmt.Sprintf("  [%s]Findings:[-] [%s]%d[-]  [%s](press 2)[-]\n", lbl, val, len(cm.caseFindings), cm.theme.TagMuted))
 	sb.WriteString(fmt.Sprintf("  [%s]Events:[-] [%s]%d[-]\n", lbl, val, len(cm.events)))
 	// Primary timespan: prefer case creation -> now (duration). Fallback to event min/max when case CreatedAt is not available.
 	if !cm.caseData.CreatedAt.IsZero() {
@@ -1693,6 +1706,7 @@ func (cm *CaseManagement) buildTabs() {
 
 	// Add pages in required order: overview, events, timeline, iocs, notes, activity
 	cm.tabsPages.AddPage("overview", cm.overviewView, true, true)
+	cm.tabsPages.AddPage("findings", cm.findingsTable, true, false)
 	cm.tabsPages.AddPage("events", cm.eventsTable, true, false)
 	cm.tabsPages.AddPage("timeline", cm.timelineView, true, false)
 	cm.tabsPages.AddPage("iocs", cm.iocsTable, true, false)
@@ -1700,26 +1714,15 @@ func (cm *CaseManagement) buildTabs() {
 	cm.tabsPages.AddPage("activity", cm.activityView, true, false)
 
 	// Ensure a valid active tab, default to Overview
-	if cm.activeTab < 0 || cm.activeTab > 5 {
-		cm.activeTab = 0
+	if cm.activeTab < 0 || cm.activeTab >= len(caseTabNames) {
+		cm.activeTab = tabOverview
 	}
-	switch cm.activeTab {
-	case 0:
-		cm.tabsPages.SwitchToPage("overview")
-	case 1:
-		cm.tabsPages.SwitchToPage("events")
-	case 2:
-		cm.tabsPages.SwitchToPage("timeline")
-	case 3:
-		cm.tabsPages.SwitchToPage("iocs")
-	case 4:
-		cm.tabsPages.SwitchToPage("notes")
-	case 5:
-		cm.tabsPages.SwitchToPage("activity")
-	}
+	cm.tabsPages.SwitchToPage(caseTabPages[cm.activeTab].page)
 
 	// Initial renders
 	cm.renderOverview()
+	cm.renderCaseFindings()
+	cm.loadCaseFindings()
 	cm.renderIOCs()
 	cm.renderActivityLog()
 
@@ -1729,7 +1732,7 @@ func (cm *CaseManagement) buildTabs() {
 func (cm *CaseManagement) renderTabBar() {
 	// Browser-style framed tabs using Unicode line characters.
 	// Active tab appears "brought forward" by leaving an underline gap beneath it.
-	names := []string{"Overview", "Events", "Timeline", "Artifacts/IOCs", "Notes", "Activity Log"}
+	names := caseTabNames
 	active := cm.activeTab
 	if active < 0 || active >= len(names) {
 		active = 0
@@ -1776,29 +1779,16 @@ func (cm *CaseManagement) renderTabBar() {
 }
 
 func (cm *CaseManagement) switchTab(idx int) {
-	if idx < 0 || idx > 5 {
+	if idx < 0 || idx >= len(caseTabNames) {
 		return
 	}
 	cm.activeTab = idx
-	switch idx {
-	case 0:
-		cm.tabsPages.SwitchToPage("overview")
-		cm.setFocusPane(FocusOverview)
-	case 1:
-		cm.tabsPages.SwitchToPage("events")
-		cm.setFocusPane(FocusEvents)
-	case 2:
-		cm.tabsPages.SwitchToPage("timeline")
-		cm.setFocusPane(FocusTimeline)
-	case 3:
-		cm.tabsPages.SwitchToPage("iocs")
-		cm.setFocusPane(FocusIOCs)
-	case 4:
-		cm.tabsPages.SwitchToPage("notes")
-		cm.setFocusPane(FocusNotes)
-	case 5:
-		cm.tabsPages.SwitchToPage("activity")
-		cm.setFocusPane(FocusActivity)
+	cm.tabsPages.SwitchToPage(caseTabPages[idx].page)
+	cm.setFocusPane(caseTabPages[idx].focus)
+	if idx == tabFindings {
+		// Refresh on entry: a finding may have been escalated into this case
+		// since the screen was opened.
+		cm.loadCaseFindings()
 	}
 	cm.renderTabBar()
 }
@@ -1806,20 +1796,9 @@ func (cm *CaseManagement) switchTab(idx int) {
 func (cm *CaseManagement) toggleLeftRightFocus() {
 	if cm.focusedPane == FocusCopilot {
 		// Return to active left tab
-		switch cm.activeTab {
-		case 0:
-			cm.setFocusPane(FocusOverview)
-		case 1:
-			cm.setFocusPane(FocusEvents)
-		case 2:
-			cm.setFocusPane(FocusTimeline)
-		case 3:
-			cm.setFocusPane(FocusIOCs)
-		case 4:
-			cm.setFocusPane(FocusNotes)
-		case 5:
-			cm.setFocusPane(FocusActivity)
-		default:
+		if cm.activeTab >= 0 && cm.activeTab < len(caseTabPages) {
+			cm.setFocusPane(caseTabPages[cm.activeTab].focus)
+		} else {
 			cm.setFocusPane(FocusEvents)
 		}
 	} else {
@@ -2072,7 +2051,6 @@ func (cm *CaseManagement) processCopilotMessage(message string) {
 		req := llm.ChatRequest{
 			Messages:  msgs,
 			Persona:   cm.currentPersona,
-			MCPMode:   "local",
 			MaxTokens: 500,
 		}
 
@@ -2471,7 +2449,7 @@ func (cm *CaseManagement) executeCaseSummary(prompt string, events []store.Event
 			cost    float64
 		)
 
-		// Prefer Chat (with persona and MCP mode)
+		// Prefer Chat (persona-aware) over the plain completion path
 		req := llm.ChatRequest{
 			Messages: []llm.ChatMessage{{
 				Role:      "user",
@@ -2480,7 +2458,6 @@ func (cm *CaseManagement) executeCaseSummary(prompt string, events []store.Event
 				Persona:   cm.currentPersona,
 			}},
 			Persona:   cm.currentPersona,
-			MCPMode:   "local",
 			MaxTokens: 700,
 		}
 		resp, err := cm.llm.Chat(cm.ctx, req)
@@ -2613,6 +2590,11 @@ func (cm *CaseManagement) setFocusPane(pane int) {
 			cm.app.SetFocus(cm.overviewView)
 		}
 		cm.updateStatus("Focus: Overview")
+	case FocusFindings:
+		if cm.findingsTable != nil {
+			cm.app.SetFocus(cm.findingsTable)
+		}
+		cm.updateStatus("Focus: Findings - Enter=open, the findings this case is about")
 	case FocusEvents:
 		cm.app.SetFocus(cm.eventsTable)
 		cm.updateStatus("Focus: Events - Space=select, e=export, f/F=filter/clear")
@@ -2688,6 +2670,9 @@ func (cm *CaseManagement) applyTheme() {
 	cm.metadataBar.SetTextColor(cm.theme.TextPrimary)
 
 	cm.eventsTable.SetBackgroundColor(cm.theme.Surface)
+	if cm.findingsTable != nil {
+		cm.findingsTable.SetBackgroundColor(cm.theme.Surface)
+	}
 	if cm.iocsTable != nil {
 		cm.iocsTable.SetBackgroundColor(cm.theme.Surface)
 	}
@@ -2731,6 +2716,9 @@ func (cm *CaseManagement) applyTheme() {
 
 	// Apply borders
 	cm.eventsTable.SetBorderColor(cm.theme.Border)
+	if cm.findingsTable != nil {
+		cm.findingsTable.SetBorderColor(cm.theme.Border)
+	}
 	cm.timelineView.SetBorderColor(cm.theme.Border)
 	cm.copilotPanel.SetBorderColor(cm.theme.Border)
 	if cm.notesViewer != nil {
@@ -2748,6 +2736,10 @@ func (cm *CaseManagement) applyTheme() {
 	if cm.activityView != nil {
 		cm.activityView.SetBorderColor(cm.theme.Border)
 	}
+
+	// Re-render the findings table so its cell colours follow the theme; the
+	// widget-level calls above only restyle the frame.
+	cm.renderCaseFindings()
 
 	// Re-render tab bar to reflect theme changes
 	if cm.tabBar != nil {
@@ -3244,9 +3236,9 @@ func (cm *CaseManagement) applyModalTheme(form *tview.Form) {
 }
 
 // showLLMSettingsModal opens a provider selection dialog (Shift+L) to configure the LLM used by Copilot and Overview summary.
-// Settings are persisted to config/llm_settings.json and applied live.
+// Settings are persisted to the per-user config directory and applied live.
 func (cm *CaseManagement) showLLMSettingsModal() {
-	const cfgPath = "config/llm_settings.json"
+	cfgPath := paths.Current().ConfigFile(paths.LLMSettingsName)
 
 	// Load current settings (defaults to Ollama localhost qwen3:0.6b)
 	settings, _ := llm.LoadSettings(cfgPath)
