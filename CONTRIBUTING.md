@@ -20,7 +20,7 @@ This document explains the workflow, coding standards, and how to run checks loc
 
 ## Prerequisites
 
-- Go ≥ 1.23 (see [docs/build.md](docs/build.md:7))
+- Go ≥ 1.23 (see [docs/build.md](docs/build.md))
 - Docker (optional — only for the experimental Redis-based threat-intel plugins)
 - Make
 
@@ -114,7 +114,7 @@ go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
 ## Security
 
-Do not include secrets in code, configs, tests, or logs. See [SECURITY.md](SECURITY.md:1) for reporting vulnerabilities.
+Do not include secrets in code, configs, tests, or logs. See [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
 
 ## Enrichment & plugins
 
