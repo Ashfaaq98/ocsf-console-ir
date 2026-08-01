@@ -139,9 +139,16 @@ func metric(label, value, delta string, tone string, theme Theme) string {
 		valColor = theme.TagTextPrimary
 	}
 
-	res := fmt.Sprintf("[%s]%s[-:-:-]\n[%s:b]%s[-:-:-]", theme.TagMuted, label, valColor, value)
+	// An empty label emits no line at all. It used to emit a blank one, which
+	// cost a row: in a card sized to its content that pushed the value off the
+	// bottom and rendered the card empty.
+	var res string
+	if label != "" {
+		res = fmt.Sprintf("[%s]%s[-:-:-]\n", theme.TagMuted, label)
+	}
+	res += fmt.Sprintf("[%s:b]%s[-:-:-]", valColor, value)
 	if delta != "" {
-		res += fmt.Sprintf(" [%s]%s[-:-:-]", theme.TagMuted, delta)
+		res += fmt.Sprintf("   [%s]%s[-:-:-]", theme.TagMuted, delta)
 	}
 	return res
 }

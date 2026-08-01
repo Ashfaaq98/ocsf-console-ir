@@ -426,7 +426,6 @@ type UI struct {
 	layout       *tview.Flex
 	leftCol      *tview.Flex
 	appTitle     *tview.TextView
-	allList      *tview.List
 	allCasesInfo *tview.TextView
 	sidebar      *tview.List
 	mainPanel    *tview.Flex
@@ -482,6 +481,26 @@ type UI struct {
 	filterStart time.Time
 	filterEnd   time.Time
 
+	// home is the Analyst Home screen while it is open. It owns timers, so it
+	// has to be closed when the screen is replaced.
+	home *homeView
+
+	// navRail is the destination list shown on every screen wider than 80
+	// columns, and destination is the entry it marks. See nav.go.
+	navRail     *tview.TextView
+	destination destinationID
+
+	// railShown is the navigation rail's current width, and needsClear marks a
+	// frame that must clear the screen before drawing. See applyRailVisibility.
+	railShown  int
+	needsClear bool
+
+	// watcher and enrichment report subsystem health to the evidence pulse.
+	// Function-typed so the ui package depends on a shape rather than on the
+	// ingest package and the plugin manager.
+	watcher    func() WatcherStatus
+	enrichment func() EnrichmentStatus
+
 	// ingestDir is the drop folder actually being watched, so empty-state hints
 	// can name it. Hardcoding a path in those hints is how they came to point at
 	// data/incoming long after the watcher had moved to ./incoming.
@@ -493,7 +512,10 @@ type UI struct {
 	enrichNotify chan string
 
 	// Runtime
-	running    bool
+	// running is set for as long as app.Run() is in its event loop. Atomic
+	// because background loaders read it from their own goroutines to decide
+	// whether queueUpdate can be used. See queueUpdate.
+	running    atomic.Bool
 	helpActive bool
 	lastFocus  tview.Primitive
 
@@ -722,15 +744,6 @@ func (ui *UI) Start(ctx context.Context) error {
 
 	go ui.watchEnrichments()
 
-	// Debug: Check if allList is properly initialized
-	if ui.logger != nil {
-		if ui.allList != nil {
-			ui.logger.Debug("allList is initialized with %d items", ui.allList.GetItemCount())
-		} else {
-			ui.logger.Debug("allList is nil!")
-		}
-	}
-
 	// Show UI immediately, then load data asynchronously
 	ui.logger.Println("Starting tview application...")
 
@@ -790,9 +803,9 @@ func (ui *UI) Start(ctx context.Context) error {
 		}()
 	}
 
-	ui.running = true
+	ui.running.Store(true)
 	err := ui.app.Run()
-	ui.running = false
+	ui.running.Store(false)
 	ui.logger.Printf("app.Run() returned with error: %v", err)
 	return err
 }
@@ -840,35 +853,10 @@ func (ui *UI) setupLayout() {
 	ui.appTitle.SetBackgroundColor(ui.theme.Surface)
 	ui.renderHeader()
 
-	// Navigation Rail list (primary destinations)
-	ui.allList = tview.NewList()
-	ui.allList.SetTitle(" NAVIGATION RAIL ")
-	ui.allList.SetBorder(true)
-	ui.allList.SetTitleAlign(tview.AlignLeft)
-	ui.allList.SetMainTextColor(ui.theme.TextPrimary)
-	ui.allList.SetSecondaryTextColor(ui.theme.TextMuted)
-	ui.allList.SetSelectedTextColor(ui.theme.SelectionFg)
-	ui.allList.SetSelectedBackgroundColor(ui.theme.SelectionBg)
-	ui.allList.SetBorderColor(ui.theme.FocusBorder)
-
-	ui.allList.AddItem("1. Triage", "Ranked findings queue", '1', func() { ui.jumpToFindings() })
-	ui.allList.AddItem("2. Events", "Corroborating OCSF logs", '2', func() { ui.switchToAllEvents() })
-	ui.allList.AddItem("3. Cases", "Briefing room & investigations", '3', func() { ui.switchToCases() })
-	ui.allList.AddItem("4. Indicators", "Observables & watchlists", '4', func() { ui.switchToIndicators() })
-	ui.allList.AddItem("5. Reports", "Export bundles & summaries", '5', func() { ui.switchToReports() })
-	// Up/Down navigation between All and Cases
-	ui.allList.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
-		switch ev.Key() {
-		case tcell.KeyDown:
-			// Move focus into cases list
-			ui.app.SetFocus(ui.sidebar)
-			if ui.sidebar.GetItemCount() > 0 {
-				ui.sidebar.SetCurrentItem(0)
-			}
-			return nil
-		}
-		return ev
-	})
+	// The navigation rail. Its contents come from the destination table in
+	// nav.go, so the rail cannot advertise a screen the keys do not reach.
+	ui.navRail = ui.buildNavRail()
+	ui.renderNavRail()
 
 	// Sidebar list remains for cases (below ALL EVENTS)
 	ui.sidebar.SetTitle(" Cases ")
@@ -886,18 +874,23 @@ func (ui *UI) setupLayout() {
 	ui.allCasesInfo.SetText(fmt.Sprintf("[%s](A) EVENTS (0)[-]\n[%s](C) CASES (0)[-]\n[%s]OPEN[-] - 0  [%s]INVESTIGATING[-] - 0  [%s]CLOSED[-] - 0",
 		ui.theme.TagAccent, ui.theme.TagAccent, ui.theme.TagTextPrimary, ui.theme.TagTextPrimary, ui.theme.TagTextPrimary))
 
-	// Build left column: Title → Navigation Rail → Cases
+	// The left column is the rail and nothing else. It used to carry the app
+	// title and the Cases list too, which is why it needed 45 columns and had
+	// to be hidden on Home.
 	ui.leftCol = tview.NewFlex().
 		SetDirection(tview.FlexRow).
-		AddItem(ui.appTitle, 2, 0, false).
-		AddItem(ui.allList, 12, 0, true).
-		AddItem(ui.sidebar, 0, 1, false)
+		AddItem(ui.navRail, 0, 1, false).
+		AddItem(ui.appTitle, 2, 0, false)
 
 	// Create main layout - wider left column for better display
 	ui.layout = tview.NewFlex().
 		SetDirection(tview.FlexColumn).
-		AddItem(ui.leftCol, 45, 0, true).
+		AddItem(ui.leftCol, navRailWidth, 0, true).
 		AddItem(ui.mainPanel, 0, 1, true)
+	// Track the width the layout was actually built with. Left at the zero
+	// value, applyRailVisibility would read "already hidden" on a first launch
+	// that lands on Home and never hide it.
+	ui.railShown = navRailWidth
 
 	// Create root layout with status bar
 	root := tview.NewFlex().
@@ -907,16 +900,18 @@ func (ui *UI) setupLayout() {
 
 	ui.app.SetRoot(root, true)
 
-	// Responsive layout handling (§2)
+	// Responsive layout handling, plus the rail's visibility, which depends on
+	// the destination as well as on the width.
 	ui.app.SetBeforeDrawFunc(func(screen tcell.Screen) bool {
-		if ui.updateLayoutMode(screen) {
-			switch ui.currentLayoutMode {
-			case LayoutCompact:
-				// Hide navigation rail in compact mode to maximize data visibility
-				ui.layout.ResizeItem(ui.leftCol, 0, 0)
-			case LayoutStandard, LayoutWide:
-				ui.layout.ResizeItem(ui.leftCol, 45, 0)
-			}
+		ui.updateLayoutMode(screen)
+		ui.applyRailVisibility()
+		// tview does not clear between frames, so a panel that shrinks or
+		// disappears leaves its old cells on screen. Hiding the rail vacates 45
+		// columns that nothing then paints over, and switching the main view
+		// leaves the previous screen's borders showing around the new one.
+		if ui.needsClear {
+			screen.Clear()
+			ui.needsClear = false
 		}
 		return false
 	})
@@ -948,19 +943,9 @@ func (ui *UI) setupLayout() {
 		return ev
 	})
 
-	// Set initial focus to ALL EVENTS
-	ui.allList.SetCurrentItem(0)
-	ui.app.SetFocus(ui.allList)
-
-	// Debug: Confirm focus is set
-	if ui.logger != nil {
-		currentFocus := ui.app.GetFocus()
-		if currentFocus == ui.allList {
-			ui.logger.Debug("Focus successfully set to allList")
-		} else {
-			ui.logger.Debug("Focus not set to allList, current focus: %T", currentFocus)
-		}
-	}
+	// The rail is a read-only legend, not a focus target: it is reached with
+	// the digits, from anywhere. Focus starts on the content.
+	ui.app.SetFocus(ui.eventList)
 }
 
 // setupEventHandlers sets up event handlers for UI components
@@ -1146,8 +1131,14 @@ func (ui *UI) setupKeybindings() {
 			// Let the focused primitive handle Enter. The sidebar's own input capture will manage selection.
 			return event
 		case tcell.KeyEsc:
-			// Clear status line softly (UI goroutine safe)
-			ui.setStatusDirect("[%s]Ready[-:-:-]", ui.theme.TagAccent)
+			// Esc moves one level out. Modals consume it before it reaches here,
+			// so at this point the level to leave is the screen, and the level
+			// outside every screen is Home. It never quits.
+			if ui.onHome() {
+				ui.setStatusDirect("[%s]Ready[-:-:-]", ui.theme.TagAccent)
+				return nil
+			}
+			ui.showAnalystHome()
 			return nil
 		case tcell.KeyTab:
 			ui.cycleFocus()
@@ -1343,21 +1334,13 @@ func (ui *UI) setupKeybindings() {
 					ui.toggleFindingsScope()
 					return nil
 				}
-			case '1':
-				ui.jumpToFindings()
-				return nil
-			case '2':
-				ui.switchToAllEvents()
-				return nil
-			case '3':
-				ui.switchToCases()
-				return nil
-			case '4':
-				ui.switchToIndicators()
-				return nil
-			case '5':
-				ui.switchToReports()
-				return nil
+			case '1', '2', '3', '4', '5':
+				// Dispatched from the destination table, so the rail, the
+				// palette and this handler cannot disagree about where a
+				// digit goes. See nav.go.
+				if ui.navigate(event.Rune()) {
+					return nil
+				}
 			case ':':
 				ui.showCommandPalette()
 				return nil
@@ -1520,8 +1503,6 @@ func (ui *UI) refreshCases() error {
 func (ui *UI) updateCasesList() {
 	ui.app.QueueUpdate(func() {
 		ui.sidebar.Clear()
-
-		// Cases list only (ALL EVENTS handled by separate allList)
 
 		if len(ui.cases) == 0 {
 			return
@@ -2257,11 +2238,7 @@ func (ui *UI) restoreMainLayout() {
 	// Restore focus to the previously focused component if available
 	target := ui.lastFocus
 	if target == nil {
-		if ui.allList != nil {
-			target = ui.allList
-		} else {
-			target = ui.sidebar
-		}
+		target = ui.sidebar
 	}
 	ui.app.SetFocus(target)
 	ui.highlightFocus(target)
@@ -2313,12 +2290,9 @@ func (ui *UI) moveSelection(delta int) {
 	switch ui.app.GetFocus() {
 	case ui.sidebar:
 		cur := ui.sidebar.GetCurrentItem()
-		// If at the first case and moving up, jump back to ALL EVENTS list
+		// The rail above is not focusable, so moving up off the first case
+		// stays put rather than focusing a widget the analyst cannot see.
 		if cur == 0 && delta < 0 {
-			if ui.allList != nil {
-				ui.app.SetFocus(ui.allList)
-				ui.allList.SetCurrentItem(0)
-			}
 			return
 		}
 		idx := cur + delta
@@ -2421,7 +2395,7 @@ func (ui *UI) startRedrawHeartbeat() {
 			case <-ui.ctx.Done():
 				return
 			case <-ticker.C:
-				if ui.running {
+				if ui.running.Load() {
 					// Non-blocking repaint request to avoid re-entrancy
 					ui.app.QueueUpdate(func() {})
 				}
@@ -2471,7 +2445,7 @@ func (ui *UI) setStatus(format string, args ...interface{}) {
 		ui.theme.TagMuted,
 		hints)
 
-	if ui.running {
+	if ui.running.Load() {
 		// Use non-blocking QueueUpdate to avoid potential re-entrancy stalls during input handling
 		ui.app.QueueUpdate(func() {
 			ui.statusBar.SetText(statusText)
@@ -2580,18 +2554,14 @@ func (ui *UI) applyTheme() {
 		ui.sidebar.SetBackgroundColor(ui.theme.Surface)
 	}
 
-	// ALL EVENTS list (dedicated)
-	if ui.allList != nil {
-		ui.allList.SetMainTextColor(ui.theme.TextPrimary)
-		ui.allList.SetSecondaryTextColor(ui.theme.TextMuted)
-		ui.allList.SetSelectedTextColor(ui.theme.SelectionFg)
-		ui.allList.SetSelectedBackgroundColor(ui.theme.SelectionBg)
-		ui.allList.SetBorderColor(ui.theme.Border)
-		ui.allList.SetBackgroundColor(ui.theme.Surface)
-		// Ensure the single item markup reflects current accent color
-		if ui.allList.GetItemCount() > 0 {
-			ui.allList.SetItemText(0, fmt.Sprintf("[%s]ALL EVENTS[-]", ui.theme.TagAccent), "All ingested events (watch folder)")
-		}
+	// The navigation rail is rendered from the destination table, so restyling
+	// it is a repaint rather than a list of SetItemText calls. The call this
+	// replaced rewrote the rail's first item to "ALL EVENTS" on every theme
+	// change, advertising a destination that key 1 does not go to.
+	if ui.navRail != nil {
+		stylePanel(ui.navRail.Box, "CONSOLE-IR", PanelRoleRail, ui.theme)
+		ui.navRail.SetBackgroundColor(ui.theme.Bg)
+		ui.renderNavRail()
 	}
 
 	// App title header
@@ -3915,11 +3885,7 @@ func (ui *UI) showDeleteCaseConfirm() {
 				ui.restoreMainLayout()
 				ui.selectedCaseID = ""
 				ui.showAll = true
-				// Focus and select ALL EVENTS
-				if ui.allList != nil {
-					ui.allList.SetCurrentItem(0)
-					ui.app.SetFocus(ui.allList)
-				}
+				ui.app.SetFocus(ui.eventList)
 				go ui.loadAllEvents()
 				ui.setStatusDirect("[%s]Case deleted. Events moved to ALL EVENTS.[-:-:-]", ui.theme.TagSuccess)
 			})
@@ -3954,7 +3920,9 @@ func (ui *UI) buildShortcutHints() string {
 	}
 	inEvents := focused == ui.eventList
 	inSidebar := focused == ui.sidebar
-	inAll := focused == ui.allList
+	// The navigation rail is not focusable, so no hint is scoped to it. The
+	// digits work from every screen and are listed on the rail itself.
+	inAll := false
 
 	// Snapshot state
 	selectionCount := len(ui.selectedEventIDs)
@@ -4520,20 +4488,47 @@ func (ui *UI) renderHeader() {
 	if ui.appTitle == nil {
 		return
 	}
-	// The title panel is ~44 columns, so the fields are stacked rather than
-	// spread: padding the date to the right edge wrapped it onto a third line
-	// and pushed the schema version out of view entirely.
+	// The version block sits at the foot of the navigation rail, which is 22
+	// columns wide. Two lines, and the build date is gone: it did not fit beside
+	// the schema version, and of the three it is the one nobody reads. It is
+	// still in `console-ir version`.
 	ui.appTitle.SetText(fmt.Sprintf(
-		" [%s]Console-IR[-] [%s]%s[-]\n [%s]OCSF %s · %s[-]",
+		" [%s]Console-IR[-] [%s]%s[-]\n [%s]OCSF %s[-]",
 		ui.theme.TagAccent,
 		ui.theme.TagMuted, buildinfo.Display(ui.version),
-		ui.theme.TagMuted, ocsf.SchemaVersion(), time.Now().Format("2006-01-02"),
+		ui.theme.TagMuted, ocsf.SchemaVersion(),
 	))
 }
 
 // SetIngestDir records the drop folder being watched, so empty-state hints name
 // the real path rather than a hardcoded one that drifts when the default moves.
 func (ui *UI) SetIngestDir(dir string) { ui.ingestDir = dir }
+
+// SetWatcherStatus supplies folder-ingestion health to the evidence pulse.
+// Without it the pulse says "not watching", which is the truthful answer for a
+// UI built without a watcher (tests, live-events).
+func (ui *UI) SetWatcherStatus(fn func() WatcherStatus) { ui.watcher = fn }
+
+// SetEnrichmentStatus supplies the enrichment backlog to the evidence pulse.
+func (ui *UI) SetEnrichmentStatus(fn func() EnrichmentStatus) { ui.enrichment = fn }
+
+// watcherStatus reports folder-ingestion health, or a zero value when no
+// watcher was wired in.
+func (ui *UI) watcherStatus() WatcherStatus {
+	if ui.watcher == nil {
+		return WatcherStatus{}
+	}
+	return ui.watcher()
+}
+
+// enrichmentStatus reports the enrichment backlog, or a zero value when no
+// plugin manager was wired in.
+func (ui *UI) enrichmentStatus() EnrichmentStatus {
+	if ui.enrichment == nil {
+		return EnrichmentStatus{}
+	}
+	return ui.enrichment()
+}
 
 // watchedDir is the folder to name in hints, falling back to the default when
 // the UI was constructed without one (tests, live-events).
@@ -4544,10 +4539,55 @@ func (ui *UI) watchedDir() string {
 	return ui.ingestDir
 }
 
+// applyRailVisibility hides the navigation rail in compact mode and shows it
+// everywhere else, including Home.
+//
+// Home hid it for one release, because at 45 columns the rail took a third of
+// the screen from the one view that has three panels to fit. At 22 it costs a
+// sixth, and an analyst who cannot see the destinations cannot learn them.
+func (ui *UI) applyRailVisibility() {
+	if ui.layout == nil || ui.leftCol == nil {
+		return
+	}
+	want := navRailWidth
+	if !ui.navRailVisible() {
+		want = 0
+	}
+	if want == ui.railShown {
+		return
+	}
+	ui.railShown = want
+	ui.needsClear = true
+	ui.layout.ResizeItem(ui.leftCol, want, 0)
+}
+
+// queueUpdate applies fn on the UI goroutine and redraws.
+//
+// tview's QueueUpdateDraw is synchronous: it blocks until the application's
+// event loop picks the update up. Called before app.Run() has started — or from
+// a test, which never starts it — that is a deadlock, not a slow path. Running
+// fn directly in that case is safe precisely because nothing is drawing yet.
+func (ui *UI) queueUpdate(fn func()) {
+	if !ui.running.Load() {
+		fn()
+		return
+	}
+	ui.app.QueueUpdateDraw(fn)
+}
+
 func (ui *UI) setMainView(p tview.Primitive) {
 	if ui.mainPanel == nil {
 		return
 	}
+	// Home owns a clock and a refresh ticker. Leaving them running behind
+	// another screen leaks a goroutine and keeps queueing redraws for a screen
+	// nobody is looking at.
+	if ui.home != nil && p != ui.home.root {
+		ui.home.close()
+		ui.home = nil
+	}
+	// The outgoing screen's borders are not painted over by the incoming one.
+	ui.needsClear = true
 	ui.copilotOpen = false
 	ui.copilotPanel = nil
 	ui.mainPanel.Clear()
@@ -4613,11 +4653,18 @@ func (ui *UI) switchToAllEvents() {
 func (ui *UI) switchToCases() {
 	ui.showFindings = false
 	ui.showAll = false
-	if len(ui.cases) > 0 {
-		ui.setMainView(ui.buildCaseBriefingTab(ui.cases[0]))
-	} else {
-		ui.setMainView(ui.buildHomeDashboard(ui.ctx))
+	if len(ui.cases) == 0 {
+		// An empty Cases screen, not a bounce to Home. Sending the analyst
+		// somewhere else makes the key look broken — and now that the rail
+		// marks the destination, it visibly contradicts itself.
+		ui.setMainView(emptyState("",
+			"No investigations yet",
+			"A case is what you escalate a finding into.",
+			[]string{"1 Triage", "c New case"}, ui.theme))
+		ui.setStatusDirect("[%s]Cases • press 'c' to create one[-:-:-]", ui.theme.TagAccent)
+		return
 	}
+	ui.setMainView(ui.buildCaseBriefingTab(ui.cases[0]))
 	ui.setStatusDirect("[%s]Case Management Room • Select a case or press 'c' to create[-:-:-]", ui.theme.TagAccent)
 }
 

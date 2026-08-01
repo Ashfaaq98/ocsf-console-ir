@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -36,6 +37,11 @@ type DefaultPluginManager struct {
 	// In-process enrichment queue driving embedded core plugins
 	eventQueue chan bus.EventMessage
 	workerWG   sync.WaitGroup
+
+	// Enrichment counters, read by the dashboard from another goroutine.
+	// Atomic rather than under mu: the workers must never wait on a reader.
+	enrichFailed  int64
+	enrichDropped int64
 }
 
 // In-process enrichment tuning. The queue is bounded so a slow enrichment
@@ -152,7 +158,39 @@ func (pm *DefaultPluginManager) EnqueueEvent(event bus.EventMessage) {
 	select {
 	case pm.eventQueue <- event:
 	default:
+		atomic.AddInt64(&pm.enrichDropped, 1)
 		pm.logger.Printf("enrichment queue full, dropping event %s", event.EventID)
+	}
+}
+
+// EnrichmentQueue reports the in-process enrichment backlog.
+//
+// Dropped is counted separately from Failed because they are different
+// problems: a failure is one lookup that did not answer, a drop is an event
+// that was never enriched at all because ingestion outran enrichment. Both were
+// previously visible only as log lines, which meant a dashboard could show a
+// healthy pipeline while silently shedding events.
+type EnrichmentQueue struct {
+	Pending  int
+	Capacity int
+	Failed   int
+	Dropped  int
+}
+
+// Idle reports whether there is nothing to report, which is the common case and
+// the one the evidence pulse renders as a single word.
+func (q EnrichmentQueue) Idle() bool {
+	return q.Pending == 0 && q.Failed == 0 && q.Dropped == 0
+}
+
+// EnrichmentQueue returns the current enrichment backlog. Safe to call from any
+// goroutine; it takes no lock the workers contend on.
+func (pm *DefaultPluginManager) EnrichmentQueue() EnrichmentQueue {
+	return EnrichmentQueue{
+		Pending:  len(pm.eventQueue),
+		Capacity: cap(pm.eventQueue),
+		Failed:   int(atomic.LoadInt64(&pm.enrichFailed)),
+		Dropped:  int(atomic.LoadInt64(&pm.enrichDropped)),
 	}
 }
 
@@ -167,6 +205,7 @@ func (pm *DefaultPluginManager) enrichWorker() {
 			return
 		case event := <-pm.eventQueue:
 			if err := pm.ProcessEvent(pm.ctx, event); err != nil {
+				atomic.AddInt64(&pm.enrichFailed, 1)
 				pm.logger.Printf("enrichment error for event %s: %v", event.EventID, err)
 			}
 		}

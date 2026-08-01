@@ -608,6 +608,12 @@ func (ui *UI) currentAnalyst() string {
 // with events on every theme change — the detail pane kept showing the finding,
 // because only the table was rebuilt.
 func (ui *UI) repaintCurrentList() {
+	// Home is not a list. Restyling it means rebuilding it against the new
+	// theme, which is what re-entering it does.
+	if ui.home != nil && ui.onHome() {
+		ui.showAnalystHome()
+		return
+	}
 	// The table may not exist yet: setTheme runs while restoring the persisted
 	// choice, before the layout is assembled.
 	if ui.eventList == nil {
@@ -626,6 +632,12 @@ func (ui *UI) repaintCurrentList() {
 // scheduleEventsReload, so refreshing the findings queue replaced it with
 // events. Every user-initiated refresh should come through here.
 func (ui *UI) refreshCurrentView(source string) {
+	// Home owns its own panels and their loading states, so it refreshes itself
+	// rather than being repainted from the event/finding loaders.
+	if ui.home != nil && ui.onHome() {
+		ui.home.refresh()
+		return
+	}
 	if ui.showFindings {
 		go ui.loadFindings()
 		return

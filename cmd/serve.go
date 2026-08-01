@@ -338,13 +338,35 @@ func runServe(cmd *cobra.Command, args []string) error {
 				}
 			}()
 
-			ui := ui.NewUI(ctx, st, llmProvider, uiLogger, GetVersion())
+			tui := ui.NewUI(ctx, st, llmProvider, uiLogger, GetVersion())
 			// So empty-state hints name the folder that is genuinely watched,
 			// which --ingest-dir can move.
-			ui.SetIngestDir(ingestDir)
+			tui.SetIngestDir(ingestDir)
+
+			// The evidence pulse reports on two subsystems the store knows
+			// nothing about. Both are read through a function so the ui package
+			// depends on a shape rather than on ingest and plugins.
+			tui.SetWatcherStatus(func() ui.WatcherStatus {
+				s := fing.Status()
+				return ui.WatcherStatus{
+					Dir:      s.Dir,
+					Active:   s.Watching,
+					Errors:   s.Errors,
+					LastErr:  s.LastErr,
+					Ingested: s.Ingested,
+				}
+			})
+			tui.SetEnrichmentStatus(func() ui.EnrichmentStatus {
+				q := pluginManager.EnrichmentQueue()
+				return ui.EnrichmentStatus{
+					Pending: q.Pending,
+					Failed:  q.Failed,
+					Dropped: q.Dropped,
+				}
+			})
 
 			// Start TUI directly - tcell can handle terminal compatibility
-			if err := ui.Start(ctx); err != nil {
+			if err := tui.Start(ctx); err != nil {
 				return fmt.Errorf("TUI error: %w", err)
 			}
 		}
