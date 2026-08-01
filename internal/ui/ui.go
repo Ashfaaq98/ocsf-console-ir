@@ -442,11 +442,10 @@ type UI struct {
 	selectedEventIDs map[string]bool
 
 	// map of selected finding IDs for multi-select actions
-	selectedFindingIDs map[string]bool             // multi-select state for events
-	loadingEvents      int32                       // atomic flag to prevent concurrent event loads
-	lastLoadStart      int64                       // unix nano timestamp of last load start (for watchdog)
-	showAll            bool                        // when true, sidebar selection is "ALL EVENTS"
-	queryStates        map[string]*EventQueryState // per-context (ALL or caseID) filter+pagination
+	loadingEvents int32                       // atomic flag to prevent concurrent event loads
+	lastLoadStart int64                       // unix nano timestamp of last load start (for watchdog)
+	showAll       bool                        // when true, sidebar selection is "ALL EVENTS"
+	queryStates   map[string]*EventQueryState // per-context (ALL or caseID) filter+pagination
 
 	// Findings triage queue. Findings are the analyst's unit of work; ALL EVENTS
 	// remains available alongside it for raw-log triage.
@@ -487,6 +486,20 @@ type UI struct {
 
 	// casesPane is the Cases screen: the case list beside a briefing.
 	casesPane *tview.Flex
+
+	// Triage state. The filter is what the chip row shows and what the loader
+	// turns into a query; the selection is keyed by finding uid so it survives
+	// refresh, sort and filter changes.
+	triage    *triageFilter
+	triageSel *triageSelection
+	chipRow   *tview.TextView
+	strip     *tview.TextView
+
+	// findingsUnfiltered is how many findings exist ignoring the filter, which
+	// is what tells the two empty states apart. findingsErr degrades the table
+	// body without replacing the screen.
+	findingsUnfiltered int
+	findingsErr        error
 
 	// navRail is the destination list shown on every screen wider than 80
 	// columns, and destination is the entry it marks. See nav.go.
@@ -1296,7 +1309,9 @@ func (ui *UI) setupKeybindings() {
 				return nil
 			case 'F':
 				if ui.showFindings {
-					ui.setStatusDirect("[%s]Findings: o toggles open/all • s status • v verdict[-:-:-]", ui.theme.TagAccent)
+					// Was a hint string with no effect. F is what the
+					// filtered-out empty state tells the analyst to press.
+					ui.clearTriageFilters()
 					return nil
 				}
 				// Gated by focus: Cases sidebar clears CASE filters, otherwise clear Events filters
@@ -1346,7 +1361,20 @@ func (ui *UI) setupKeybindings() {
 				}
 			case 'o':
 				if ui.showFindings {
-					ui.toggleFindingsScope()
+					ui.toggleTriageChip(chipOpen)
+					return nil
+				}
+			case 'V':
+				if ui.showFindings {
+					ui.cycleTriageView()
+					return nil
+				}
+			case 'x':
+				if ui.showFindings && ui.triageSelection().count() > 0 {
+					ui.triageSelection().clear()
+					ui.updateFindingsList(ui.findingsTotal)
+					ui.repaintTriageChrome()
+					ui.setStatusDirect("[%s]Selection cleared[-:-:-]", ui.theme.TagAccent)
 					return nil
 				}
 			case '1', '2', '3', '4', '5':
@@ -2793,15 +2821,14 @@ func (ui *UI) toggleEventSelection() {
 
 	if ui.showFindings {
 		if row > 0 && row-1 < len(ui.findings) {
-			findingID := ui.findings[row-1].ID
-			if ui.selectedFindingIDs[findingID] {
-				delete(ui.selectedFindingIDs, findingID)
-				ui.setStatusDirect("[%s]Finding deselected (%d selected)[-:-:-]", ui.theme.TagAccent, len(ui.selectedFindingIDs))
-			} else {
-				ui.selectedFindingIDs[findingID] = true
-				ui.setStatusDirect("[%s]Finding selected (%d selected)[-:-:-]", ui.theme.TagSuccess, len(ui.selectedFindingIDs))
-			}
-			ui.updateFindingsList(ui.findingsTotal) // Refresh to show selection indicators
+			// Keyed by finding uid, not by row: the selection has to survive a
+			// refresh, a re-sort and a filter change, and a row index survives
+			// none of them.
+			sel := ui.triageSelection()
+			sel.toggle(ui.findings[row-1].FindingUID)
+			ui.updateFindingsList(ui.findingsTotal)
+			ui.repaintTriageChrome()
+			ui.setStatusDirect("[%s]%d selected[-:-:-]", ui.theme.TagAccent, sel.count())
 		}
 		return
 	}
@@ -4630,18 +4657,100 @@ func (ui *UI) restoreEventsView() {
 	ui.mainPanel.SetDirection(tview.FlexRow)
 
 	if ui.showFindings {
-		// Visual quick-filter chips
-		chipsText := fmt.Sprintf("  [%s:b] Open [-:-:-]   [%s] Severity >= High [-:-:-] ", ui.theme.TagTextPrimary, ui.theme.TagMuted)
-		if !ui.findingsOpenOnly {
-			chipsText = fmt.Sprintf("  [%s] Open [-:-:-]   [%s] Severity >= High [-:-:-] ", ui.theme.TagMuted, ui.theme.TagMuted)
-		}
-		chips := tview.NewTextView().SetDynamicColors(true).SetText(chipsText)
-		ui.mainPanel.AddItem(chips, 1, 0, false)
+		ui.mainPanel.AddItem(ui.triageChipRow(), 1, 0, false)
 	}
 
-	ui.mainPanel.AddItem(ui.eventList, 0, 2, true).
-		AddItem(ui.eventDetail, 0, 1, false)
+	// Table and inspector side by side once there is room for both, stacked
+	// below that. The inspector used to be stacked at every width, which on a
+	// 140-column terminal wasted half the screen to show six fields.
+	body := tview.NewFlex()
+	if ui.currentLayoutMode == LayoutWide {
+		body.SetDirection(tview.FlexColumn)
+		body.AddItem(ui.eventList, 0, 2, true).
+			AddItem(ui.eventDetail, 0, 1, false)
+	} else {
+		body.SetDirection(tview.FlexRow)
+		body.AddItem(ui.eventList, 0, 2, true).
+			AddItem(ui.eventDetail, 0, 1, false)
+	}
+	ui.mainPanel.AddItem(body, 0, 1, true)
+
+	if ui.showFindings {
+		ui.mainPanel.AddItem(ui.triageStrip(), 1, 0, false)
+	}
 	ui.app.SetFocus(ui.eventList)
+}
+
+// triageChipRow returns the quick-filter row, creating it on first use.
+func (ui *UI) triageChipRow() *tview.TextView {
+	if ui.chipRow == nil {
+		ui.chipRow = tview.NewTextView().SetDynamicColors(true)
+	}
+	ui.chipRow.SetBackgroundColor(ui.theme.Bg)
+	ui.chipRow.SetText(ui.triageFilterState().renderChips(ui.theme))
+	return ui.chipRow
+}
+
+// triageStrip returns the bar below the table: the action bar normally, and the
+// selection strip whenever rows are selected.
+//
+// It replaces the action bar rather than joining it. With a selection live, the
+// bulk actions are the only ones that apply, and offering both invites pressing
+// a single-row action on a multi-row selection.
+func (ui *UI) triageStrip() *tview.TextView {
+	if ui.strip == nil {
+		ui.strip = tview.NewTextView().SetDynamicColors(true)
+	}
+	ui.strip.SetBackgroundColor(ui.theme.Bg)
+	ui.strip.SetText(ui.renderTriageStrip())
+	return ui.strip
+}
+
+func (ui *UI) renderTriageStrip() string {
+	t := ui.theme
+	if n := ui.triageSelection().count(); n > 0 {
+		return fmt.Sprintf("  [%s:-:b]%d selected[-:-:-]  %s", t.TagAccent, n, actionBar(t,
+			keyHint{"c", "Create case"},
+			keyHint{"a", "Add to case"},
+			keyHint{"s", "Status"},
+			keyHint{"v", "Verdict"},
+			keyHint{"x", "Clear"},
+		))
+	}
+	return "  " + actionBar(t,
+		keyHint{"Enter", "Open"},
+		keyHint{"Space", "Select"},
+		keyHint{"s", "Status"},
+		keyHint{"v", "Verdict"},
+		keyHint{"e", "Escalate"},
+		keyHint{"/", "Filter"},
+	)
+}
+
+// triageFilterState returns the filter, creating it on first use.
+func (ui *UI) triageFilterState() *triageFilter {
+	if ui.triage == nil {
+		ui.triage = newTriageFilter()
+	}
+	return ui.triage
+}
+
+// triageSelection returns the selection, creating it on first use.
+func (ui *UI) triageSelection() *triageSelection {
+	if ui.triageSel == nil {
+		ui.triageSel = newTriageSelection()
+	}
+	return ui.triageSel
+}
+
+// repaintTriageChrome repaints the chip row and the strip without re-querying.
+func (ui *UI) repaintTriageChrome() {
+	if ui.chipRow != nil {
+		ui.chipRow.SetText(ui.triageFilterState().renderChips(ui.theme))
+	}
+	if ui.strip != nil {
+		ui.strip.SetText(ui.renderTriageStrip())
+	}
 }
 
 func (ui *UI) switchToAllEvents() {

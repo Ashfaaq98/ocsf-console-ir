@@ -3,7 +3,6 @@ package ui
 import (
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -38,8 +37,28 @@ func (ui *UI) jumpToFindings() {
 	go ui.loadFindings()
 }
 
+// triageColumns returns the visible columns for the current width.
+//
+// §7 drops source first, then technique, then asset. The title never truncates
+// below 30 columns, which is why it is never a candidate: a queue of unreadable
+// titles is not a queue.
+func (ui *UI) triageColumns() []string {
+	all := []string{"!", "Risk", "Age", "Status", "Title", "Asset", "Tactic", "Source"}
+	_, _, width, _ := ui.eventList.GetInnerRect()
+	switch {
+	case width >= 120:
+		return all
+	case width >= 100:
+		return all[:7] // drop Source
+	case width >= 84:
+		return all[:6] // drop Tactic
+	default:
+		return all[:5] // drop Asset
+	}
+}
+
 func (ui *UI) setFindingsHeaders() {
-	headers := []string{"!", "Risk", "Age", "Status", "Title", "Asset", "Tactic", "Source"}
+	headers := ui.triageColumns()
 	for col, header := range headers {
 		ui.eventList.SetCell(0, col, tview.NewTableCell(header).
 			SetTextColor(ui.theme.TableHeader).
@@ -68,10 +87,14 @@ func (ui *UI) loadFindings() {
 		}
 	}()
 
-	filter := store.FindingFilter{OpenOnly: ui.findingsOpenOnly}
+	// Filtering re-queries. It does not filter a loaded page in Go, which is
+	// only correct while the page happens to be the whole result set.
+	filter := ui.triageFilterState().storeFilter(time.Now(), triagePageSize, 0)
 	findings, err := ui.store.GetFindings(ui.ctx, filter)
 	if err != nil {
-		ui.app.QueueUpdateDraw(func() {
+		ui.queueUpdate(func() {
+			ui.findingsErr = err
+			ui.updateFindingsList(0)
 			ui.setStatusDirect("[%s]Error loading findings: %v[-:-:-]", ui.theme.TagError, err)
 		})
 		return
@@ -82,18 +105,28 @@ func (ui *UI) loadFindings() {
 		total = len(findings)
 	}
 
-	ui.app.QueueUpdateDraw(func() {
+	// A second count, unfiltered. Without it an empty screen cannot say whether
+	// there are no findings or whether the filter removed them all, and §7
+	// forbids showing the first message when the second is true.
+	unfiltered, err := ui.store.CountFindings(ui.ctx, store.FindingFilter{})
+	if err != nil {
+		unfiltered = total
+	}
+
+	ui.queueUpdate(func() {
 		ui.findings = findings
 		ui.findingsTotal = total
+		ui.findingsUnfiltered = unfiltered
+		ui.findingsErr = nil
 		ui.updateFindingsList(total)
-		scope := "all"
-		if ui.findingsOpenOnly {
-			scope = "open"
-		}
-		ui.setStatusDirect("[%s]%d findings (%s) • s: status • v: verdict • e: escalate • o: open/all • Enter: details[-:-:-]",
-			ui.theme.TagSuccess, len(findings), scope)
+		ui.repaintTriageChrome()
+		ui.setStatusDirect("[%s]%d of %d findings • %s[-:-:-]",
+			ui.theme.TagSuccess, len(findings), unfiltered, ui.triageFilterState().describe())
 	})
 }
+
+// triagePageSize bounds one query. §7: paginate, never load an unbounded set.
+const triagePageSize = 200
 
 // updateFindingsList renders the findings queue into the main table.
 func (ui *UI) updateFindingsList(total int) {
@@ -102,28 +135,47 @@ func (ui *UI) updateFindingsList(total int) {
 		Background(ui.theme.SelectionBg).Foreground(ui.theme.SelectionFg))
 	ui.eventList.SetBorderColor(ui.theme.Border)
 
-	scope := "All"
-	if ui.findingsOpenOnly {
-		scope = "Open"
-	}
-	ui.eventList.SetTitle(fmt.Sprintf(" Findings (%s, %d) ", scope, total))
+	ui.eventList.SetTitle(fmt.Sprintf(" FINDINGS  ·  %d of %d ", total, ui.findingsUnfiltered))
 	ui.setFindingsHeaders()
 
-	if len(ui.findings) == 0 {
-		hint := []string{
-			"No findings yet.",
+	// One panel failing does not replace the screen, and the filters stay
+	// usable so the analyst can narrow their way out of a slow query.
+	if ui.findingsErr != nil {
+		for i, line := range []string{
+			"Could not load findings.",
 			"",
-			"Findings are OCSF detections — class_uid 2001-2008, or any event with is_alert=true.",
-			"They are what a SIEM or EDR emits when something is worth an analyst's attention.",
+			ui.findingsErr.Error(),
 			"",
-			fmt.Sprintf("Drop a Detection Finding into  %s  to see it here.", ui.watchedDir()),
-			"Press  A  to browse all raw events instead.",
+			"[r] Retry",
+		} {
+			ui.eventList.SetCell(1+i, 0, tview.NewTableCell(tview.Escape(line)).
+				SetTextColor(ui.theme.TableRowMuted).SetExpansion(1).SetSelectable(false))
 		}
-		if ui.findingsOpenOnly {
+		return
+	}
+
+	if len(ui.findings) == 0 {
+		// Two distinct empty states. Telling an analyst there are no findings
+		// when a filter removed them is telling them their data is gone.
+		var hint []string
+		switch emptyKind(len(ui.findings), ui.findingsUnfiltered) {
+		case triageFilteredOut:
 			hint = []string{
-				"No open findings.",
+				"No findings match these filters.",
 				"",
-				"Everything has been triaged. Press  o  to include resolved and suppressed findings.",
+				ui.triageFilterState().describe(),
+				"",
+				"[F] Clear filters      [V] Next saved view",
+			}
+		default:
+			hint = []string{
+				"No findings yet.",
+				"",
+				"Findings are OCSF detections — class_uid 2001-2008, or any event with is_alert=true.",
+				"They are what a SIEM or EDR emits when something is worth an analyst's attention.",
+				"",
+				fmt.Sprintf("Drop a Detection Finding into  %s  to see it here.", ui.watchedDir()),
+				"Press  2  to browse all raw events instead.",
 			}
 		}
 		for i, line := range hint {
@@ -138,18 +190,11 @@ func (ui *UI) updateFindingsList(total int) {
 		return
 	}
 
-	// Highest risk first, then most recent: the queue should put what matters at
-	// the top rather than making the analyst sort it themselves.
-	sort.SliceStable(ui.findings, func(i, j int) bool {
-		a, b := ui.findings[i], ui.findings[j]
-		if a.RiskScore != b.RiskScore {
-			return a.RiskScore > b.RiskScore
-		}
-		if a.SeverityID != b.SeverityID {
-			return a.SeverityID > b.SeverityID
-		}
-		return a.LastSeen.After(b.LastSeen)
-	})
+	// The ordering is the query's, not this function's. Sorting here would sort
+	// only the page that happens to be loaded, which is right until the result
+	// exceeds one page and then silently wrong.
+
+	visible := len(ui.triageColumns())
 
 	for i, f := range ui.findings {
 		row := i + 1
@@ -173,9 +218,8 @@ func (ui *UI) updateFindingsList(total int) {
 			asset = "Endpoint" // naive placeholder
 		}
 
-		// Selection indicator
 		selPrefix := " "
-		if ui.selectedFindingIDs[f.ID] {
+		if ui.triageSelection().has(f.FindingUID) {
 			selPrefix = "✓"
 		}
 
@@ -193,6 +237,9 @@ func (ui *UI) updateFindingsList(total int) {
 			{source, ui.theme.TextMuted},
 		}
 		for col, c := range cells {
+			if col >= visible {
+				break
+			}
 			cell := tview.NewTableCell(c.text).SetTextColor(c.color)
 			if col == 4 { // Title is col 4
 				cell.SetExpansion(1)
@@ -259,6 +306,9 @@ func (ui *UI) showFindingDetails() {
 		return
 	}
 	ui.selectedFindingID = f.ID
+	// Named for what it holds. It said "Event Details" on a screen that shows
+	// findings, which is the distinction the whole product turns on.
+	ui.eventDetail.SetTitle(" SELECTED FINDING ")
 
 	var b strings.Builder
 	line := func(label, value string) {
@@ -268,40 +318,64 @@ func (ui *UI) showFindingDetails() {
 		fmt.Fprintf(&b, "[%s]%-14s[-] %s\n", ui.theme.TagMuted, label+":", value)
 	}
 
+	// §7 order, identical to the inspector on Analyst Home so a finding reads
+	// the same wherever it is seen: title, the one-line verdict, how it was
+	// found, when — then why it matters, then the counts, and only then the
+	// raw record. A human explanation always precedes the JSON.
 	fmt.Fprintf(&b, "[%s]%s[-]\n\n", ui.theme.TagAccent, f.Title)
 
+	risk := "—"
+	if f.RiskScore > 0 {
+		risk = fmt.Sprintf("%d", f.RiskScore)
+	}
+	fmt.Fprintf(&b, "[%s]risk[-] %s · %s · %s\n\n",
+		ui.theme.TagMuted, risk, formatSeverityBadge(f.Severity, ui.theme), f.StatusName())
+
+	line("Analytic", f.AnalyticName)
+	line("First seen", f.FirstSeen.Format("2006-01-02 15:04:05"))
+	line("Last seen", f.LastSeen.Format("2006-01-02 15:04:05"))
+
+	// Why it matters, before any artifact list. The message is the producer's
+	// own explanation; without it the analyst is reading JSON to find out what
+	// the detection thought it saw.
+	why := strings.TrimSpace(f.Message)
+	if why == "" || why == f.Title {
+		why = "No description was supplied by the producer."
+	}
+	fmt.Fprintf(&b, "\n[%s]WHY IT MATTERS[-]\n%s\n", ui.theme.TagMuted, why)
+
+	// The counts, so the shape of the finding is legible before the detail.
+	fmt.Fprintf(&b, "\n[%s]EVIDENCE[-] %d   [%s]INDICATORS[-] %d   [%s]RELATED EVENTS[-] %d\n",
+		ui.theme.TagMuted, len(f.Evidences()),
+		ui.theme.TagMuted, len(f.AttackTechniques()),
+		ui.theme.TagMuted, len(f.RelatedEvents()))
+
+	caseLabel := "none"
+	if f.CaseID != "" {
+		caseLabel = f.CaseID
+	}
+	fmt.Fprintf(&b, "[%s]RELATED CASES[-] %s\n", ui.theme.TagMuted, caseLabel)
+
+	fmt.Fprintf(&b, "\n[%s]  j  raw OCSF[-]\n", ui.theme.TagAccent)
+
+	// Reference detail below the summary, in the order it was.
+	fmt.Fprintf(&b, "\n[%s]%s[-]\n", ui.theme.TagMuted, strings.Repeat("─", 30))
 	line("Class", fmt.Sprintf("%s (%d)", f.ClassName(), f.ClassUID))
-	line("Status", f.StatusName())
 	if v := f.VerdictName(); v != "" {
 		line("Verdict", v)
-	}
-	line("Severity", f.Severity)
-	if f.RiskScore > 0 {
-		line("Risk score", fmt.Sprintf("%d", f.RiskScore))
 	}
 	if f.ConfidenceID > 0 {
 		line("Confidence", ocsf.ConfidenceName(f.ConfidenceID))
 	}
-	line("Analytic", f.AnalyticName)
 	line("Finding UID", f.FindingUID)
-	line("First seen", f.FirstSeen.Format("2006-01-02 15:04:05"))
-	line("Last seen", f.LastSeen.Format("2006-01-02 15:04:05"))
 	if f.Assignee != "" {
 		line("Assignee", f.Assignee)
 	}
 	if f.IsSuspectedBreach {
 		line("Breach", "SUSPECTED")
 	}
-	if f.CaseID != "" {
-		line("Case", f.CaseID)
-	}
-
 	if techniques := f.AttackTechniques(); len(techniques) > 0 {
 		line("ATT&CK", strings.Join(techniques, ", "))
-	}
-
-	if f.Message != "" && f.Message != f.Title {
-		fmt.Fprintf(&b, "\n[%s]Message[-]\n%s\n", ui.theme.TagMuted, f.Message)
 	}
 
 	// Evidence artifacts: what the detection actually saw.
@@ -643,4 +717,32 @@ func (ui *UI) refreshCurrentView(source string) {
 		return
 	}
 	ui.scheduleEventsReload(source)
+}
+
+// toggleTriageChip flips one quick filter and re-queries.
+//
+// Re-queries rather than filters what is loaded: the loaded page is at most
+// triagePageSize rows, so filtering it in Go answers correctly right up until
+// the result is larger than one page, and then answers wrongly and silently.
+func (ui *UI) toggleTriageChip(id chipID) {
+	ui.triageFilterState().toggle(id)
+	ui.repaintTriageChrome()
+	go ui.loadFindings()
+}
+
+// clearTriageFilters returns to the default view.
+func (ui *UI) clearTriageFilters() {
+	f := ui.triageFilterState()
+	f.applyView(0)
+	f.search = ""
+	ui.repaintTriageChrome()
+	go ui.loadFindings()
+}
+
+// cycleTriageView moves to the next saved view.
+func (ui *UI) cycleTriageView() {
+	ui.triageFilterState().cycleView()
+	ui.repaintTriageChrome()
+	ui.setStatusDirect("[%s]View: %s[-:-:-]", ui.theme.TagAccent, ui.triageFilterState().viewName())
+	go ui.loadFindings()
 }
