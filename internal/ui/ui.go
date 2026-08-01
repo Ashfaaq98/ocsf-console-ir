@@ -495,6 +495,26 @@ type UI struct {
 	chipRow   *tview.TextView
 	strip     *tview.TextView
 
+	// eventAtRow maps a table row to an index into ui.events. Cluster headers
+	// occupy rows and hold no event, so a row number is no longer an offset.
+	eventAtRow map[int]int
+
+	// pivot is the observable the event list is currently narrowed to, or nil.
+	// It is state rather than a query parameter because the chip that shows it
+	// has to be removable, and an invisible filter is indistinguishable from
+	// missing data.
+	pivot *pivotTarget
+
+	// eventGroup is what the event list clusters by, eventClusters is the
+	// result over the loaded page, and expandedCluster is the one open cluster.
+	//
+	// Expansion is keyed by label rather than by index so it survives a
+	// re-render, and only one is open at a time: a list where everything is
+	// expanded is the wall of log lines clustering exists to avoid.
+	eventGroup      groupKey
+	eventClusters   []eventCluster
+	expandedCluster string
+
 	// findingsUnfiltered is how many findings exist ignoring the filter, which
 	// is what tells the two empty states apart. findingsErr degrades the table
 	// body without replacing the screen.
@@ -980,7 +1000,11 @@ func (ui *UI) setupEventHandlers() {
 			return
 		}
 		if row > 0 && row-1 < len(ui.events) { // Skip header row
-			ui.selectedEventID = ui.events[row-1].ID
+			e := ui.eventForRow(row)
+			if e == nil {
+				return
+			}
+			ui.selectedEventID = e.ID
 			ui.showEventDetails()
 		}
 	})
@@ -992,7 +1016,11 @@ func (ui *UI) setupEventHandlers() {
 			return
 		}
 		if row > 0 && row-1 < len(ui.events) { // Skip header row
-			ui.selectedEventID = ui.events[row-1].ID
+			e := ui.eventForRow(row)
+			if e == nil {
+				return
+			}
+			ui.selectedEventID = e.ID
 			ui.showEventDetails()
 		}
 	})
@@ -1009,8 +1037,10 @@ func (ui *UI) setupEventHandlers() {
 				ui.showFindingDetails()
 				return nil
 			}
-			if row > 0 && row-1 < len(ui.events) {
-				ui.selectedEventID = ui.events[row-1].ID
+			// A cluster header has no event behind it; Enter there is handled
+			// by the global capture, which expands the cluster.
+			if e := ui.eventForRow(row); e != nil {
+				ui.selectedEventID = e.ID
 				ui.showEventDetails()
 			}
 			return nil
@@ -1032,7 +1062,9 @@ func (ui *UI) setupEventHandlers() {
 					}
 				} else {
 					if row > 0 && row-1 < len(ui.events) {
-						ui.copyToClipboard(ui.events[row-1].RawJSON)
+						if e := ui.eventForRow(row); e != nil {
+							ui.copyToClipboard(e.RawJSON)
+						}
 					}
 				}
 				return nil
@@ -1156,6 +1188,14 @@ func (ui *UI) setupKeybindings() {
 			ui.app.Stop()
 			return nil
 		case tcell.KeyEnter:
+			// A cluster header is not an event. Enter on one expands it.
+			if ui.showAll && !ui.showFindings && ui.app.GetFocus() == ui.eventList {
+				row, _ := ui.eventList.GetSelection()
+				if c := ui.clusterAtRow(row); c != nil {
+					ui.toggleCluster(c.Label)
+					return nil
+				}
+			}
 			// Let the focused primitive handle Enter. The sidebar's own input capture will manage selection.
 			return event
 		case tcell.KeyEsc:
@@ -1213,6 +1253,16 @@ func (ui *UI) setupKeybindings() {
 			case 'h':
 				ui.showHelp()
 				return nil
+			case 'z':
+				// §8 assigns `g` to cycle the grouping, but §7 assigns `g`/`G`
+				// to top/bottom, and that idiom is already bound and already
+				// documented on both screens. §6 forbids one key meaning two
+				// things, so grouping takes `z` — vim's fold prefix, which is
+				// what a cluster is. Recorded as a deviation in the spec.
+				if ui.showAll && !ui.showFindings {
+					ui.cycleEventGrouping()
+					return nil
+				}
 			case 'l':
 				ui.focusRight()
 				return nil
@@ -1308,6 +1358,10 @@ func (ui *UI) setupKeybindings() {
 				}
 				return nil
 			case 'F':
+				if !ui.showFindings && ui.pivot != nil {
+					ui.clearPivot()
+					return nil
+				}
 				if ui.showFindings {
 					// Was a hint string with no effect. F is what the
 					// filtered-out empty state tells the analyst to press.
@@ -1400,7 +1454,9 @@ func (ui *UI) setupKeybindings() {
 				if len(ui.events) > 0 {
 					row, _ := ui.eventList.GetSelection()
 					if row > 0 && row-1 < len(ui.events) {
-						ui.showPivotMenu(ui.events[row-1])
+						if e := ui.eventForRow(row); e != nil {
+							ui.showPivotMenu(*e)
+						}
 					}
 				}
 				return nil
@@ -1783,9 +1839,55 @@ func (ui *UI) updateEventsList() {
 		return ui.events[i].Timestamp.After(ui.events[j].Timestamp)
 	})
 
-	// Add event rows
-	for row, event := range ui.events {
-		rowIndex := row + 1
+	// Cluster the page already loaded. Grouping is a display concern: it never
+	// re-queries, and expanding a cluster never re-queries either.
+	ui.eventClusters = clusterEvents(ui.events, ui.eventGroup)
+	ui.eventAtRow = map[int]int{}
+	indexOf := map[string]int{}
+	for i, e := range ui.events {
+		indexOf[e.ID] = i
+	}
+	if ui.expandedCluster == "" && len(ui.eventClusters) > 0 {
+		ui.expandedCluster = ui.eventClusters[0].Label
+	}
+
+	rowIndex := 0
+	for ci := range ui.eventClusters {
+		cluster := &ui.eventClusters[ci]
+		rowIndex++
+		cluster.headerRow = rowIndex
+
+		glyph := "▸"
+		if cluster.Label == ui.expandedCluster {
+			glyph = "▾"
+		}
+		header := tview.NewTableCell(fmt.Sprintf("[%s]%s %s[-:-:-]",
+			ui.theme.TagAccent, glyph, tview.Escape(cluster.Header()))).
+			SetExpansion(1).
+			SetBackgroundColor(ui.theme.Surface)
+		ui.eventList.SetCell(rowIndex, 0, header)
+		for col := 1; col < 6; col++ {
+			ui.eventList.SetCell(rowIndex, col,
+				tview.NewTableCell("").SetBackgroundColor(ui.theme.Surface))
+		}
+
+		if cluster.Label != ui.expandedCluster {
+			continue
+		}
+
+		for _, event := range cluster.Events {
+			rowIndex++
+			ui.eventAtRow[rowIndex] = indexOf[event.ID]
+			ui.renderEventRow(rowIndex, event)
+		}
+	}
+	return
+}
+
+// renderEventRow draws one event beneath its cluster header.
+func (ui *UI) renderEventRow(rowIndex int, event store.Event) {
+	{
+		row := rowIndex
 
 		// Format timestamp
 		timeStr := event.Timestamp.Format("15:04:05")
@@ -1925,16 +2027,32 @@ func (ui *UI) showEventDetails() {
 		}
 
 		cards := groupEnrichments(enrichments, eventIndicatorValues(observables, event))
-		details.WriteString(fmt.Sprintf("\n[%s]Enrichments (%d):[-]\n", ui.theme.TagAccent, len(cards)))
+		details.WriteString(fmt.Sprintf("\n[%s]ENRICHMENT (%d)[-]\n", ui.theme.TagAccent, len(cards)))
 		renderEnrichmentCards(&details, ui.theme, cards, enrichmentRenderOptions{
 			Indent:      "  ",
 			MaxFields:   30,
 			MaxValueLen: 200,
 		})
-	} else if err != nil {
-		// Log failure but don't interrupt the UI
-		if ui.logger != nil {
-			ui.logger.Printf("Failed to load enrichments for event %s: %v", event.ID, err)
+	} else {
+		// §8: the enrichment states must be explicit. An empty region here is a
+		// defect — the analyst cannot tell a lookup that failed from one that
+		// has not run from an indicator nobody enriches, and all three look
+		// identical to a blank space.
+		details.WriteString(fmt.Sprintf("\n[%s]ENRICHMENT[-]\n", ui.theme.TagAccent))
+		switch {
+		case err != nil:
+			if ui.logger != nil {
+				ui.logger.Warn("could not load enrichments for event %s: %v", event.ID, err)
+			}
+			details.WriteString(fmt.Sprintf("  [%s]Lookup failed — see %s[-]\n",
+				ui.theme.TagError, runtimeLogHint()))
+		case ui.enrichmentStatus().Pending > 0:
+			details.WriteString(fmt.Sprintf("  [%s]Enrichment pending …[-]\n", ui.theme.TagWarning))
+		case ui.enrichmentStatus().Failed > 0:
+			details.WriteString(fmt.Sprintf("  [%s]Lookup failed — see %s[-]\n",
+				ui.theme.TagError, runtimeLogHint()))
+		default:
+			details.WriteString(fmt.Sprintf("  [%s]No enrichment available[-]\n", ui.theme.TagMuted))
 		}
 	}
 
@@ -2834,7 +2952,11 @@ func (ui *UI) toggleEventSelection() {
 	}
 
 	if row > 0 && row-1 < len(ui.events) {
-		eventID := ui.events[row-1].ID
+		e := ui.eventForRow(row)
+		if e == nil {
+			return
+		}
+		eventID := e.ID
 		if ui.selectedEventIDs[eventID] {
 			delete(ui.selectedEventIDs, eventID)
 			ui.setStatusDirect("[%s]Event deselected (%d selected)[-:-:-]", ui.theme.TagAccent, len(ui.selectedEventIDs))
@@ -4658,6 +4780,16 @@ func (ui *UI) restoreEventsView() {
 
 	if ui.showFindings {
 		ui.mainPanel.AddItem(ui.triageChipRow(), 1, 0, false)
+	} else if ui.pivot != nil {
+		// A pivot is a filter, so it gets a chip. Narrowing the list without
+		// saying so leaves the analyst looking at a subset they cannot see the
+		// edge of, which is indistinguishable from missing data.
+		chip := tview.NewTextView().SetDynamicColors(true)
+		chip.SetBackgroundColor(ui.theme.Bg)
+		chip.SetText(fmt.Sprintf("  [%s:%s] %s: %s ✕[-:-:-]   [%s]F clears[-:-:-]",
+			ui.theme.TagTextPrimary, ui.theme.TagAccent,
+			ui.pivot.Kind, tview.Escape(ui.pivot.Value), ui.theme.TagMuted))
+		ui.mainPanel.AddItem(chip, 1, 0, false)
 	}
 
 	// Table and inspector side by side once there is room for both, stacked
