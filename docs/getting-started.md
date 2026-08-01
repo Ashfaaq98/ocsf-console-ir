@@ -29,8 +29,15 @@ See [ingestion.md](ingestion.md) for every input path, including stdin and HTTP.
 
 ## The first screen
 
-Console-IR opens on the **findings queue** whenever detections are waiting, and on ALL EVENTS
-otherwise. From the queue:
+With no database yet, Console-IR opens on a **welcome screen**: create an empty database, load the
+demo investigation, import a file, or point it at a folder to watch. It creates nothing until you
+pick one, and quitting leaves the disk untouched.
+
+Once a database exists it opens on **Analyst Home**, which answers "what needs my attention?":
+open findings, active cases, evidence seen today, and a priority queue of the highest-risk
+detections. Keys `1`–`5` reach the other screens from there.
+
+From the findings queue:
 
 - **Enter** opens the finding: evidence artifacts, the events it came from, and its indicators
 - **`s`** sets status, **`v`** sets verdict, **`e`** escalates it into a case

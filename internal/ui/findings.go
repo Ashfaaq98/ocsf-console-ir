@@ -26,6 +26,7 @@ func (ui *UI) jumpToFindings() {
 	ui.showFindings = true
 	ui.showAll = false
 	ui.selectedCaseID = ""
+	ui.restoreEventsView()
 
 	ui.app.SetFocus(ui.eventList)
 	ui.eventList.Clear()
@@ -38,7 +39,7 @@ func (ui *UI) jumpToFindings() {
 }
 
 func (ui *UI) setFindingsHeaders() {
-	headers := []string{"Last Seen", "Sev", "Status", "Verdict", "Risk", "Title", "Analytic", "ATT&CK"}
+	headers := []string{"!", "Risk", "Age", "Status", "Title", "Asset", "Tactic", "Source"}
 	for col, header := range headers {
 		ui.eventList.SetCell(0, col, tview.NewTableCell(header).
 			SetTextColor(ui.theme.TableHeader).
@@ -154,31 +155,46 @@ func (ui *UI) updateFindingsList(total int) {
 		row := i + 1
 		attack := strings.Join(f.AttackTechniques(), ", ")
 
-		verdict := f.VerdictName()
-		if verdict == "" {
-			verdict = "—"
-		}
 		risk := "—"
 		if f.RiskScore > 0 {
 			risk = fmt.Sprintf("%d", f.RiskScore)
+		}
+
+		// Very basic asset/source extraction logic from metadata/raw json
+		asset := "—"
+		source := f.AnalyticName
+		if source == "" {
+			source = "—"
+		}
+
+		// If there is an IP or Hostname in Evidences, we could extract it, but
+		// for now we'll put a placeholder or basic parse.
+		if strings.Contains(f.EvidencesJSON, "hostname") {
+			asset = "Endpoint" // naive placeholder
+		}
+
+		// Selection indicator
+		selPrefix := " "
+		if ui.selectedFindingIDs[f.ID] {
+			selPrefix = "✓"
 		}
 
 		cells := []struct {
 			text  string
 			color tcell.Color
 		}{
-			{f.LastSeen.Format("01-02 15:04"), ui.theme.TextMuted},
-			{strings.ToUpper(shortSeverity(f.Severity)), ui.getSeverityTcellColor(f.Severity)},
-			{f.StatusName(), ui.findingStatusColor(f)},
-			{verdict, ui.findingVerdictColor(f)},
+			{selPrefix + " " + formatSeverityBadge(f.Severity, ui.theme), ui.getSeverityTcellColor(f.Severity)},
 			{risk, ui.theme.TextPrimary},
+			{renderRelativeTime(f.LastSeen), ui.theme.TextMuted},
+			{f.StatusName(), ui.findingStatusColor(f)},
 			{f.Title, ui.theme.TextPrimary},
-			{f.AnalyticName, ui.theme.TextMuted},
+			{asset, ui.theme.TextMuted},
 			{attack, ui.theme.TextMuted},
+			{source, ui.theme.TextMuted},
 		}
 		for col, c := range cells {
 			cell := tview.NewTableCell(c.text).SetTextColor(c.color)
-			if col == 5 {
+			if col == 4 { // Title is col 4
 				cell.SetExpansion(1)
 			}
 			ui.eventList.SetCell(row, col, cell)

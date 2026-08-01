@@ -24,9 +24,12 @@ const defaultThemeName = "dark"
 // been checked against every screen, and shipping an accessibility theme that
 // has not been verified is worse than not claiming one. Tracked in the roadmap.
 var themeBuilders = map[string]func() Theme{
-	"dark":    themeDark,
-	"light":   themeLight,
-	"gruvbox": themeGruvbox,
+	"dark":          themeDark,
+	"light":         themeLight,
+	"gruvbox":       themeGruvbox,
+	"midnight":      themeMidnight,
+	"high-contrast": themeHighContrast,
+	"colorblind":    themeColorblind,
 }
 
 // themeNames returns the theme names in a stable cycle order.
@@ -42,7 +45,9 @@ func themeNames() []string {
 // uiSettings is what persists between sessions. Kept separate from the LLM
 // settings file so a bad provider config cannot cost you your theme.
 type uiSettings struct {
-	Theme string `json:"theme"`
+	Theme        string   `json:"theme"`
+	RecentCases  []string `json:"recent_cases,omitempty"`
+	RecentPivots []string `json:"recent_pivots,omitempty"`
 }
 
 const uiSettingsName = "ui_settings.json"
@@ -52,26 +57,52 @@ const uiSettingsName = "ui_settings.json"
 //
 // Every failure here is silent and falls back: a corrupt preferences file is
 // not a reason to refuse to start.
-func loadThemeName() string {
+// loadUISettings returns the persisted settings or empty defaults.
+func loadUISettings() uiSettings {
 	data, err := os.ReadFile(paths.Current().ConfigFile(uiSettingsName))
 	if err != nil {
-		return defaultThemeName
+		return uiSettings{Theme: defaultThemeName}
 	}
 	var s uiSettings
 	if err := json.Unmarshal(data, &s); err != nil {
-		return defaultThemeName
+		return uiSettings{Theme: defaultThemeName}
 	}
 	if _, ok := themeBuilders[s.Theme]; !ok {
-		return defaultThemeName
+		s.Theme = defaultThemeName
 	}
-	return s.Theme
+	return s
+}
+
+func loadThemeName() string {
+	return loadUISettings().Theme
+}
+
+// ensureUISettings writes the settings file if there is not one yet, so a fresh
+// installation lands on an explicit, editable preference rather than an
+// implicit default. An existing file is never touched: the point is to create
+// the file, not to reset a choice the analyst has already made.
+func ensureUISettings() error {
+	path := paths.Current().ConfigFile(uiSettingsName)
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	}
+	data, err := json.MarshalIndent(uiSettings{Theme: defaultThemeName}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
 }
 
 // saveUISettings persists the current theme. Failures are logged and ignored —
 // losing a preference must never interrupt an investigation.
 func (ui *UI) saveUISettings() {
 	path := paths.Current().ConfigFile(uiSettingsName)
-	data, err := json.MarshalIndent(uiSettings{Theme: ui.themeName}, "", "  ")
+	settings := uiSettings{
+		Theme:        ui.themeName,
+		RecentCases:  ui.recentCases,
+		RecentPivots: ui.recentPivots,
+	}
+	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		ui.logger.Warn("could not encode UI settings: %v", err)
 		return

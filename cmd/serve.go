@@ -138,10 +138,35 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// Pre-determine if we'll use TUI so we can configure logging/bus before starting services
 	willUseTUI = determineTUIMode(cmd, args)
 
-	// Initialize store
-	logger.Println("Initializing database...")
 	baseDir := getWorkingDir()
 	resolvedDBPath := resolvePathRelativeToBase(baseDir, config.Database.Path)
+
+	// Entry routing: a missing database means a first run, which gets the
+	// Welcome Screen. There are exactly two destinations — no database goes to
+	// Welcome, a database goes to the main UI — and no branch on whether that
+	// database holds any findings, cases or events. An existing but empty
+	// database opens the app, which renders its own empty states.
+	//
+	// This runs before store.NewStore below, which would otherwise create the
+	// file and make the check answer yes on every run.
+	if willUseTUI && !databaseExists(resolvedDBPath) {
+		logger.Info("no database at %s; showing the welcome screen", resolvedDBPath)
+		res, err := runWelcome(cmd, resolvedDBPath)
+		if err != nil {
+			return err
+		}
+		if res.Action == ui.WelcomeQuit {
+			logger.Info("welcome screen quit without creating a database")
+			return nil
+		}
+		if res.Action == ui.WelcomeWatch {
+			// So the folder watcher started below is the one that was asked for.
+			ingestDir = res.Path
+		}
+	}
+
+	// Initialize store
+	logger.Println("Initializing database...")
 	logger.Printf("Using database at %s", resolvedDBPath)
 	st, err := store.NewStore(resolvedDBPath)
 	if err != nil {

@@ -7,8 +7,9 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
-Shaping up as 0.2.0. Findings become a first-class entity. Console-IR now opens on a triage queue of detections rather
-than a wall of log lines, and models what OCSF actually says about investigation.
+Shaping up as 0.2.0. Findings become a first-class entity. Console-IR now opens on a dashboard of
+what needs attention rather than a wall of log lines, and models what OCSF actually says about
+investigation.
 
 ### Upgrading from 0.1.x (when this ships)
 
@@ -45,6 +46,12 @@ nothing. Back up the database first if you may roll back.
 - **Many-to-many case membership.** Cases hold findings as *members* and events as *evidence*, and a
   finding can belong to several cases. Cases gained OCSF status, verdict, priority, impact,
   suspected-breach and external ticket links.
+- **A welcome screen on first run.** With no database, Console-IR offers to create one, load the demo
+  investigation, import a file or watch a folder — and creates nothing until you choose. Previously a
+  fresh install opened an empty application, which reads as a broken one.
+- **Startup is deterministic.** No database opens the welcome screen; a database opens Analyst Home.
+  The first screen used to depend on whether the database held findings, then cases, then events, so
+  there was no screen to learn and no stable place to return to.
 - **Stable per-user runtime paths.** Database, config and logs resolve to XDG locations
   (`~/Library` on macOS, `%LOCALAPPDATA%` on Windows) instead of the working directory. Override with
   `--data-dir`, `--config-dir`, `--log-dir` or `--db`; `--portable` restores the old layout.

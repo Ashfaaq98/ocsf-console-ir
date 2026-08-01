@@ -21,7 +21,7 @@ func withTempConfig(t *testing.T) string {
 }
 
 func TestShippedThemes(t *testing.T) {
-	want := []string{"dark", "gruvbox", "light"}
+	want := []string{"colorblind", "dark", "gruvbox", "high-contrast", "light", "midnight"}
 	got := themeNames()
 
 	if len(got) != len(want) {
@@ -34,7 +34,7 @@ func TestShippedThemes(t *testing.T) {
 	}
 
 	// The culled palettes must be gone, not merely unreferenced.
-	for _, dropped := range []string{"neon", "gemini", "claude", "high-contrast", "cb-safe"} {
+	for _, dropped := range []string{"neon", "gemini", "claude"} {
 		if _, ok := themeBuilders[dropped]; ok {
 			t.Errorf("%q is still registered", dropped)
 		}

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"sort"
@@ -33,19 +34,21 @@ import (
 // Theme defines UI color tokens used across widgets and text tags.
 type Theme struct {
 	// Widget colors
-	Bg          tcell.Color
-	Surface     tcell.Color
-	Border      tcell.Color
-	FocusBorder tcell.Color
-	SelectionBg tcell.Color
-	SelectionFg tcell.Color
-	TextPrimary tcell.Color
-	TextMuted   tcell.Color
-	Accent      tcell.Color
-	Success     tcell.Color
-	Warning     tcell.Color
-	Error       tcell.Color
-	Header      tcell.Color
+	Canvas        tcell.Color
+	Bg            tcell.Color
+	Surface       tcell.Color
+	SurfaceRaised tcell.Color
+	Border        tcell.Color
+	FocusBorder   tcell.Color
+	SelectionBg   tcell.Color
+	SelectionFg   tcell.Color
+	TextPrimary   tcell.Color
+	TextMuted     tcell.Color
+	Accent        tcell.Color
+	Success       tcell.Color
+	Warning       tcell.Color
+	Error         tcell.Color
+	Header        tcell.Color
 
 	// Table colors
 	TableHeader   tcell.Color
@@ -81,19 +84,21 @@ func hex(s string) tcell.Color { return tcell.GetColor(s) }
 
 func themeDark() Theme {
 	return Theme{
-		Bg:          hex("#0e1116"),
-		Surface:     hex("#12161e"),
-		Border:      hex("#2b3240"),
-		FocusBorder: hex("#4aa8ff"),
-		SelectionBg: hex("#2b3240"),
-		SelectionFg: hex("#cfd8e3"),
-		TextPrimary: hex("#e6edf3"),
-		TextMuted:   hex("#8a939f"),
-		Accent:      hex("#2dd4bf"),
-		Success:     hex("#22c55e"),
-		Warning:     hex("#f59e0b"),
-		Error:       hex("#ef4444"),
-		Header:      hex("#eab308"),
+		Canvas:        hex("#080b0f"),
+		Bg:            hex("#0e1116"),
+		Surface:       hex("#12161e"),
+		SurfaceRaised: hex("#1c2330"),
+		Border:        hex("#2b3240"),
+		FocusBorder:   hex("#4aa8ff"),
+		SelectionBg:   hex("#2b3240"),
+		SelectionFg:   hex("#cfd8e3"),
+		TextPrimary:   hex("#e6edf3"),
+		TextMuted:     hex("#8a939f"),
+		Accent:        hex("#2dd4bf"),
+		Success:       hex("#22c55e"),
+		Warning:       hex("#f59e0b"),
+		Error:         hex("#ef4444"),
+		Header:        hex("#eab308"),
 
 		// Table colors
 		TableHeader:   hex("#eab308"),
@@ -123,29 +128,158 @@ func themeDark() Theme {
 	}
 }
 
-// themeGruvbox is the gruvbox dark palette, using its published values.
-//
-// It replaces a warm theme that looked like gruvbox but was not: every accent
-// sat at roughly half gruvbox's saturation (#d4976c against #fe8019), and the
-// punchy retro accents are the whole point of the palette.
-//
-// Severity uses gruvbox's own red/orange/yellow/green/blue ramp so the levels
-// stay distinguishable rather than being tinted to match.
+func themeMidnight() Theme {
+	return Theme{
+		Canvas:        hex("#0b1016"),
+		Bg:            hex("#0b1016"),
+		Surface:       hex("#111923"),
+		SurfaceRaised: hex("#182432"),
+		Border:        hex("#1f2d3e"),
+		FocusBorder:   hex("#56d4ff"),
+		SelectionBg:   hex("#182432"),
+		SelectionFg:   hex("#e6edf3"),
+		TextPrimary:   hex("#e6edf3"),
+		TextMuted:     hex("#8b9bad"),
+		Accent:        hex("#56d4ff"),
+		Success:       hex("#67d39a"),
+		Warning:       hex("#f4c95d"),
+		Error:         hex("#ff5c70"),
+		Header:        hex("#56d4ff"),
+
+		TableHeader:   hex("#56d4ff"),
+		TableHeaderBg: hex("#111923"),
+		TableRow:      hex("#e6edf3"),
+		TableRowMuted: hex("#8b9bad"),
+		TableZebra1:   hex("#111923"),
+		TableZebra2:   hex("#0b1016"),
+
+		SeverityCritical: hex("#ff5c70"),
+		SeverityHigh:     hex("#ff9d4d"),
+		SeverityMedium:   hex("#f6d365"),
+		SeverityLow:      hex("#78d6a3"),
+		SeverityInfo:     hex("#56d4ff"),
+
+		TagTextPrimary:      "#e6edf3",
+		TagMuted:            "#8b9bad",
+		TagAccent:           "#56d4ff",
+		TagSuccess:          "#67d39a",
+		TagWarning:          "#f4c95d",
+		TagError:            "#ff5c70",
+		TagSeverityCritical: "#ff5c70",
+		TagSeverityHigh:     "#ff9d4d",
+		TagSeverityMedium:   "#f6d365",
+		TagSeverityLow:      "#78d6a3",
+		TagSeverityInfo:     "#56d4ff",
+	}
+}
+
+func themeHighContrast() Theme {
+	return Theme{
+		Canvas:        hex("#000000"),
+		Bg:            hex("#000000"),
+		Surface:       hex("#1a1a1a"),
+		SurfaceRaised: hex("#333333"),
+		Border:        hex("#ffffff"),
+		FocusBorder:   hex("#ffff00"),
+		SelectionBg:   hex("#ffffff"),
+		SelectionFg:   hex("#000000"),
+		TextPrimary:   hex("#ffffff"),
+		TextMuted:     hex("#cccccc"),
+		Accent:        hex("#ffff00"),
+		Success:       hex("#00ff00"),
+		Warning:       hex("#ffaa00"),
+		Error:         hex("#ff0000"),
+		Header:        hex("#ffff00"),
+
+		TableHeader:   hex("#ffff00"),
+		TableHeaderBg: hex("#333333"),
+		TableRow:      hex("#ffffff"),
+		TableRowMuted: hex("#cccccc"),
+		TableZebra1:   hex("#1a1a1a"),
+		TableZebra2:   hex("#000000"),
+
+		SeverityCritical: hex("#ff0000"),
+		SeverityHigh:     hex("#ffaa00"),
+		SeverityMedium:   hex("#ffff00"),
+		SeverityLow:      hex("#00ff00"),
+		SeverityInfo:     hex("#00ffff"),
+
+		TagTextPrimary:      "#ffffff",
+		TagMuted:            "#cccccc",
+		TagAccent:           "#ffff00",
+		TagSuccess:          "#00ff00",
+		TagWarning:          "#ffaa00",
+		TagError:            "#ff0000",
+		TagSeverityCritical: "#ff0000",
+		TagSeverityHigh:     "#ffaa00",
+		TagSeverityMedium:   "#ffff00",
+		TagSeverityLow:      "#00ff00",
+		TagSeverityInfo:     "#00ffff",
+	}
+}
+
+func themeColorblind() Theme {
+	return Theme{
+		Canvas:        hex("#121212"),
+		Bg:            hex("#121212"),
+		Surface:       hex("#1e1e1e"),
+		SurfaceRaised: hex("#2c2c2c"),
+		Border:        hex("#3d3d3d"),
+		FocusBorder:   hex("#56b4e9"), // Sky blue
+		SelectionBg:   hex("#0072b2"), // Blue
+		SelectionFg:   hex("#ffffff"),
+		TextPrimary:   hex("#ffffff"),
+		TextMuted:     hex("#a0a0a0"),
+		Accent:        hex("#56b4e9"), // Sky blue
+		Success:       hex("#009e73"), // Bluish green
+		Warning:       hex("#f0e442"), // Yellow
+		Error:         hex("#d55e00"), // Vermillion
+		Header:        hex("#56b4e9"),
+
+		TableHeader:   hex("#56b4e9"),
+		TableHeaderBg: hex("#2c2c2c"),
+		TableRow:      hex("#ffffff"),
+		TableRowMuted: hex("#a0a0a0"),
+		TableZebra1:   hex("#1e1e1e"),
+		TableZebra2:   hex("#121212"),
+
+		SeverityCritical: hex("#d55e00"), // Vermillion
+		SeverityHigh:     hex("#e69f00"), // Orange
+		SeverityMedium:   hex("#f0e442"), // Yellow
+		SeverityLow:      hex("#009e73"), // Bluish green
+		SeverityInfo:     hex("#56b4e9"), // Sky blue
+
+		TagTextPrimary:      "#ffffff",
+		TagMuted:            "#a0a0a0",
+		TagAccent:           "#56b4e9",
+		TagSuccess:          "#009e73",
+		TagWarning:          "#f0e442",
+		TagError:            "#d55e00",
+		TagSeverityCritical: "#d55e00",
+		TagSeverityHigh:     "#e69f00",
+		TagSeverityMedium:   "#f0e442",
+		TagSeverityLow:      "#009e73",
+		TagSeverityInfo:     "#56b4e9",
+	}
+}
+
 func themeGruvbox() Theme {
 	return Theme{
-		Bg:          hex("#282828"), // bg0
-		Surface:     hex("#32302f"), // bg0_s
-		Border:      hex("#504945"), // bg2
-		FocusBorder: hex("#fe8019"), // bright orange
-		SelectionBg: hex("#504945"),
-		SelectionFg: hex("#fbf1c7"), // fg0
-		TextPrimary: hex("#ebdbb2"), // fg1
-		TextMuted:   hex("#928374"), // gray
-		Accent:      hex("#fe8019"), // bright orange
-		Success:     hex("#b8bb26"), // bright green
-		Warning:     hex("#fabd2f"), // bright yellow
-		Error:       hex("#fb4934"), // bright red
-		Header:      hex("#fabd2f"),
+		Canvas:        hex("#1d2021"),
+		Bg:            hex("#282828"), // bg0
+		Surface:       hex("#32302f"), // bg0_s
+		SurfaceRaised: hex("#3c3836"),
+		Border:        hex("#504945"), // bg2
+		FocusBorder:   hex("#fe8019"), // bright orange
+		SelectionBg:   hex("#504945"),
+		SelectionFg:   hex("#fbf1c7"), // fg0
+		TextPrimary:   hex("#ebdbb2"), // fg1
+		TextMuted:     hex("#928374"), // gray
+		Accent:        hex("#fe8019"), // bright orange
+		Success:       hex("#b8bb26"), // bright green
+		Warning:       hex("#fabd2f"), // bright yellow
+		Error:         hex("#fb4934"), // bright red
+		Header:        hex("#fabd2f"),
 
 		// Table colors
 		TableHeader:   hex("#fabd2f"),
@@ -177,19 +311,21 @@ func themeGruvbox() Theme {
 
 func themeLight() Theme {
 	return Theme{
-		Bg:          hex("#f6f8fa"),
-		Surface:     hex("#ffffff"),
-		Border:      hex("#d0d7de"),
-		FocusBorder: hex("#1f6feb"),
-		SelectionBg: hex("#e2e8f0"),
-		SelectionFg: hex("#111827"),
-		TextPrimary: hex("#111827"),
-		TextMuted:   hex("#6b7280"),
-		Accent:      hex("#2563eb"),
-		Success:     hex("#15803d"),
-		Warning:     hex("#b45309"),
-		Error:       hex("#b91c1c"),
-		Header:      hex("#1f2937"),
+		Canvas:        hex("#eef2f6"),
+		Bg:            hex("#f6f8fa"),
+		Surface:       hex("#ffffff"),
+		SurfaceRaised: hex("#e2e8f0"),
+		Border:        hex("#d0d7de"),
+		FocusBorder:   hex("#1f6feb"),
+		SelectionBg:   hex("#e2e8f0"),
+		SelectionFg:   hex("#111827"),
+		TextPrimary:   hex("#111827"),
+		TextMuted:     hex("#6b7280"),
+		Accent:        hex("#2563eb"),
+		Success:       hex("#15803d"),
+		Warning:       hex("#b45309"),
+		Error:         hex("#b91c1c"),
+		Header:        hex("#1f2937"),
 
 		// Table colors
 		TableHeader:   hex("#1f2937"),
@@ -219,6 +355,53 @@ func themeLight() Theme {
 	}
 }
 
+// themeBasic is a 16-color safe theme for terminals without truecolor support.
+func themeBasic() Theme {
+	return Theme{
+		Canvas:        tcell.ColorBlack,
+		Bg:            tcell.ColorBlack,
+		Surface:       tcell.ColorBlack,
+		SurfaceRaised: tcell.ColorBlack,
+		Border:        tcell.ColorWhite,
+		FocusBorder:   tcell.ColorBlue,
+		SelectionBg:   tcell.ColorWhite,
+		SelectionFg:   tcell.ColorBlack,
+		TextPrimary:   tcell.ColorWhite,
+		TextMuted:     tcell.ColorGray,
+		Accent:        tcell.ColorBlue,
+		Success:       tcell.ColorGreen,
+		Warning:       tcell.ColorYellow,
+		Error:         tcell.ColorRed,
+		Header:        tcell.ColorYellow,
+
+		// Table colors
+		TableHeader:   tcell.ColorYellow,
+		TableHeaderBg: tcell.ColorBlack,
+		TableRow:      tcell.ColorWhite,
+		TableRowMuted: tcell.ColorGray,
+		TableZebra1:   tcell.ColorBlack,
+		TableZebra2:   tcell.ColorBlack,
+
+		SeverityCritical: tcell.ColorRed,
+		SeverityHigh:     tcell.ColorFuchsia,
+		SeverityMedium:   tcell.ColorYellow,
+		SeverityLow:      tcell.ColorGreen,
+		SeverityInfo:     tcell.ColorBlue,
+
+		TagTextPrimary:      "white",
+		TagMuted:            "gray",
+		TagAccent:           "blue",
+		TagSuccess:          "green",
+		TagWarning:          "yellow",
+		TagError:            "red",
+		TagSeverityCritical: "red",
+		TagSeverityHigh:     "fuchsia",
+		TagSeverityMedium:   "yellow",
+		TagSeverityLow:      "green",
+		TagSeverityInfo:     "blue",
+	}
+}
+
 func detectTrueColor() bool {
 	// Best-effort detection without initializing screen
 	ct := strings.ToLower(os.Getenv("COLORTERM"))
@@ -241,6 +424,7 @@ type UI struct {
 
 	// Layout components
 	layout       *tview.Flex
+	leftCol      *tview.Flex
 	appTitle     *tview.TextView
 	allList      *tview.List
 	allCasesInfo *tview.TextView
@@ -251,15 +435,19 @@ type UI struct {
 	statusBar    *tview.TextView
 
 	// State
-	cases            []store.Case
-	selectedCaseID   string
-	events           []store.Event
-	selectedEventID  string
-	selectedEventIDs map[string]bool             // multi-select state for events
-	loadingEvents    int32                       // atomic flag to prevent concurrent event loads
-	lastLoadStart    int64                       // unix nano timestamp of last load start (for watchdog)
-	showAll          bool                        // when true, sidebar selection is "ALL EVENTS"
-	queryStates      map[string]*EventQueryState // per-context (ALL or caseID) filter+pagination
+	cases           []store.Case
+	selectedCaseID  string
+	events          []store.Event
+	selectedEventID string
+	// map of selected event IDs for multi-select actions
+	selectedEventIDs map[string]bool
+
+	// map of selected finding IDs for multi-select actions
+	selectedFindingIDs map[string]bool             // multi-select state for events
+	loadingEvents      int32                       // atomic flag to prevent concurrent event loads
+	lastLoadStart      int64                       // unix nano timestamp of last load start (for watchdog)
+	showAll            bool                        // when true, sidebar selection is "ALL EVENTS"
+	queryStates        map[string]*EventQueryState // per-context (ALL or caseID) filter+pagination
 
 	// Findings triage queue. Findings are the analyst's unit of work; ALL EVENTS
 	// remains available alongside it for raw-log triage.
@@ -271,12 +459,24 @@ type UI struct {
 	// queue can be repainted (e.g. on a theme change) without re-querying.
 	findingsTotal int
 
+	// Layout state
+	currentLayoutMode LayoutMode
+	isShortScreen     bool
+
+	// Copilot drawer state
+	copilotOpen  bool
+	copilotPanel tview.Primitive
+
 	// Theme state
 	theme          Theme
 	themeName      string
 	hasTrueColor   bool
 	themeApplying  int32
 	filterApplying int32
+
+	// Navigation tracking
+	recentCases  []string
+	recentPivots []string
 
 	// Filters (time window for events list)
 	filterStart time.Time
@@ -466,12 +666,20 @@ func NewUI(ctx context.Context, store *store.Store, llmProvider llm.LLMProvider,
 	// Default theme
 	// Restore the analyst's last choice; the default is used on a fresh
 	// install or if the settings file is missing or unreadable.
-	ui.themeName = loadThemeName()
-	ui.theme = themeBuilders[ui.themeName]()
+	uiSettings := loadUISettings()
+	ui.themeName = uiSettings.Theme
+	ui.recentCases = uiSettings.RecentCases
+	ui.recentPivots = uiSettings.RecentPivots
+	if !ui.hasTrueColor {
+		ui.theme = themeBasic()
+	} else {
+		ui.theme = themeBuilders[ui.themeName]()
+	}
 
 	ui.setupLayout()
 	ui.setupKeybindings()
 	ui.applyTheme() // apply colors after layout assembled
+	ui.app.EnableMouse(true)
 
 	return ui
 }
@@ -536,49 +744,19 @@ func (ui *UI) Start(ctx context.Context) error {
 			})
 		} else {
 			ui.logger.Printf("Loaded %d cases successfully", len(ui.cases))
-			// Set initial focus after data is loaded and auto-load ALL EVENTS
+			// Entry routing: the UI always opens on Analyst Home.
+			//
+			// Whether there is a database at all is decided in cmd, before the
+			// store is opened, and a missing one never reaches here — it gets
+			// the Welcome Screen instead. So by the time the UI starts there is
+			// exactly one destination, and it renders its own empty states.
+			//
+			// This used to branch four ways, on whether there were findings,
+			// then cases, then events. It meant the first screen an analyst saw
+			// changed with the contents of the database, so there was no screen
+			// to learn and no stable place to return to.
 			ui.app.QueueUpdate(func() {
-				// Focus the Events table directly (overview panel is non-selectable)
-				ui.app.SetFocus(ui.eventList)
-
-				// Land on the findings queue when there is triage work waiting;
-				// otherwise fall back to ALL EVENTS so a raw-log-only install is
-				// never greeted by an empty screen.
-				openFindings, cntErr := ui.store.CountFindings(ui.ctx, store.FindingFilter{OpenOnly: true})
-				if cntErr == nil && openFindings > 0 {
-					ui.jumpToFindings()
-					return
-				}
-
-				// Auto-load ALL EVENTS on startup
-				ui.showAll = true
-				ui.showFindings = false
-				ui.selectedCaseID = ""
-
-				// Immediate loading state in events table
-				ui.eventList.Clear()
-				headers := []string{"Time", "Type", "Severity", "Host", "Source", "Message"}
-				for col, header := range headers {
-					ui.eventList.SetCell(0, col, tview.NewTableCell(header).
-						SetTextColor(ui.theme.TableHeader).
-						SetBackgroundColor(ui.theme.TableHeaderBg).
-						SetAttributes(tcell.AttrBold))
-				}
-				ui.eventList.SetCell(1, 0, tview.NewTableCell("Loading...").
-					SetTextColor(ui.theme.TableRowMuted))
-
-				// Watchdog: reset stuck load flag if necessary
-				if atomic.LoadInt32(&ui.loadingEvents) == 1 {
-					started := time.Unix(0, atomic.LoadInt64(&ui.lastLoadStart))
-					if started.IsZero() || time.Since(started) > 3*time.Second {
-						if ui.logger != nil {
-							ui.logger.Printf("startup: resetting stuck loadingEvents since %v", started)
-						}
-						atomic.StoreInt32(&ui.loadingEvents, 0)
-						atomic.StoreInt64(&ui.lastLoadStart, 0)
-					}
-				}
-				go ui.loadAllEvents()
+				ui.showAnalystHome()
 			})
 		}
 	}()
@@ -662,60 +840,22 @@ func (ui *UI) setupLayout() {
 	ui.appTitle.SetBackgroundColor(ui.theme.Surface)
 	ui.renderHeader()
 
-	// Dedicated ALL EVENTS list (single item)
+	// Navigation Rail list (primary destinations)
 	ui.allList = tview.NewList()
-	ui.allList.SetTitle(" ALL EVENTS ")
+	ui.allList.SetTitle(" NAVIGATION RAIL ")
 	ui.allList.SetBorder(true)
-	ui.allList.SetTitleAlign(tview.AlignCenter)
+	ui.allList.SetTitleAlign(tview.AlignLeft)
 	ui.allList.SetMainTextColor(ui.theme.TextPrimary)
 	ui.allList.SetSecondaryTextColor(ui.theme.TextMuted)
 	ui.allList.SetSelectedTextColor(ui.theme.SelectionFg)
 	ui.allList.SetSelectedBackgroundColor(ui.theme.SelectionBg)
-	ui.allList.SetBorderColor(ui.theme.FocusBorder) // Make it more visible
-	ui.allList.AddItem(fmt.Sprintf("[%s]ALL EVENTS[-]", ui.theme.TagAccent), "All ingested events (watch folder)", 'A', nil)
+	ui.allList.SetBorderColor(ui.theme.FocusBorder)
 
-	// Debug logging
-	if ui.logger != nil {
-		ui.logger.Debug("allList created with %d items", ui.allList.GetItemCount())
-	}
-	ui.allList.SetSelectedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
-		// Load ALL EVENTS
-		ui.showAll = true
-		ui.selectedCaseID = ""
-
-		// Reset pagination for ALL context
-		{
-			s := ui.getOrInitState(contextAll)
-			s.pageIndex = 0
-		}
-
-		// Immediate loading state in events table
-		ui.eventList.Clear()
-		headers := []string{"Time", "Type", "Severity", "Host", "Source", "Message"}
-		for col, header := range headers {
-			ui.eventList.SetCell(0, col, tview.NewTableCell(header).
-				SetTextColor(ui.theme.TableHeader).
-				SetBackgroundColor(ui.theme.TableHeaderBg).
-				SetAttributes(tcell.AttrBold))
-		}
-		ui.eventList.SetCell(1, 0, tview.NewTableCell("Loading...").
-			SetTextColor(ui.theme.TableRowMuted))
-		ui.app.SetFocus(ui.eventList)
-		ui.setStatusDirect("[%s]Loading ALL events...[-:-:-]", ui.theme.TagWarning)
-
-		// Watchdog: reset stuck load flag if necessary
-		if atomic.LoadInt32(&ui.loadingEvents) == 1 {
-			started := time.Unix(0, atomic.LoadInt64(&ui.lastLoadStart))
-			if started.IsZero() || time.Since(started) > 3*time.Second {
-				if ui.logger != nil {
-					ui.logger.Printf("allList select: resetting stuck loadingEvents since %v", started)
-				}
-				atomic.StoreInt32(&ui.loadingEvents, 0)
-				atomic.StoreInt64(&ui.lastLoadStart, 0)
-			}
-		}
-		go ui.loadAllEvents()
-	})
+	ui.allList.AddItem("1. Triage", "Ranked findings queue", '1', func() { ui.jumpToFindings() })
+	ui.allList.AddItem("2. Events", "Corroborating OCSF logs", '2', func() { ui.switchToAllEvents() })
+	ui.allList.AddItem("3. Cases", "Briefing room & investigations", '3', func() { ui.switchToCases() })
+	ui.allList.AddItem("4. Indicators", "Observables & watchlists", '4', func() { ui.switchToIndicators() })
+	ui.allList.AddItem("5. Reports", "Export bundles & summaries", '5', func() { ui.switchToReports() })
 	// Up/Down navigation between All and Cases
 	ui.allList.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
 		switch ev.Key() {
@@ -746,17 +886,17 @@ func (ui *UI) setupLayout() {
 	ui.allCasesInfo.SetText(fmt.Sprintf("[%s](A) EVENTS (0)[-]\n[%s](C) CASES (0)[-]\n[%s]OPEN[-] - 0  [%s]INVESTIGATING[-] - 0  [%s]CLOSED[-] - 0",
 		ui.theme.TagAccent, ui.theme.TagAccent, ui.theme.TagTextPrimary, ui.theme.TagTextPrimary, ui.theme.TagTextPrimary))
 
-	// Build left column: Title → All → Cases
-	leftCol := tview.NewFlex().
+	// Build left column: Title → Navigation Rail → Cases
+	ui.leftCol = tview.NewFlex().
 		SetDirection(tview.FlexRow).
 		AddItem(ui.appTitle, 2, 0, false).
-		AddItem(ui.allCasesInfo, 5, 0, false).
+		AddItem(ui.allList, 12, 0, true).
 		AddItem(ui.sidebar, 0, 1, false)
 
 	// Create main layout - wider left column for better display
 	ui.layout = tview.NewFlex().
 		SetDirection(tview.FlexColumn).
-		AddItem(leftCol, 45, 0, true).
+		AddItem(ui.leftCol, 45, 0, true).
 		AddItem(ui.mainPanel, 0, 1, true)
 
 	// Create root layout with status bar
@@ -766,6 +906,20 @@ func (ui *UI) setupLayout() {
 		AddItem(ui.statusBar, 1, 0, false)
 
 	ui.app.SetRoot(root, true)
+
+	// Responsive layout handling (§2)
+	ui.app.SetBeforeDrawFunc(func(screen tcell.Screen) bool {
+		if ui.updateLayoutMode(screen) {
+			switch ui.currentLayoutMode {
+			case LayoutCompact:
+				// Hide navigation rail in compact mode to maximize data visibility
+				ui.layout.ResizeItem(ui.leftCol, 0, 0)
+			case LayoutStandard, LayoutWide:
+				ui.layout.ResizeItem(ui.leftCol, 45, 0)
+			}
+		}
+		return false
+	})
 
 	// Set up event handlers
 	ui.setupEventHandlers()
@@ -868,6 +1022,19 @@ func (ui *UI) setupEventHandlers() {
 				// Toggle selection on current event
 				ui.toggleEventSelection()
 				return nil
+			case 'y':
+				// Copy raw JSON of selected item to clipboard via OSC 52
+				row, _ := ui.eventList.GetSelection()
+				if ui.showFindings {
+					if row > 0 && row-1 < len(ui.findings) {
+						ui.copyToClipboard(ui.findings[row-1].RawJSON)
+					}
+				} else {
+					if row > 0 && row-1 < len(ui.events) {
+						ui.copyToClipboard(ui.events[row-1].RawJSON)
+					}
+				}
+				return nil
 			case 'd':
 				// Delete selected events (with confirmation)
 				if len(ui.selectedEventIDs) == 0 {
@@ -886,7 +1053,24 @@ func (ui *UI) setupEventHandlers() {
 	})
 }
 
-// onSidebarSelect centralizes behavior for selecting the ALL EVENTS item or a specific case.
+// copyToClipboard uses OSC 52 escape sequences to copy text to the system clipboard
+// over SSH or terminal emulators that support it.
+func (ui *UI) copyToClipboard(text string) {
+	// Print OSC 52 sequence directly to stdout (bypassing tview briefly, though it might cause a slight flicker,
+	// or write it through tcell if possible. tcell Screen does not have direct OSC 52 methods,
+	// but writing to os.Stdout usually works).
+	// For safety, we'll just log it for now since raw stdout writes can disrupt the TUI.
+	// Actually, fmt.Printf("\033]52;c;%s\007", base64.StdEncoding.EncodeToString([]byte(text)))
+	// works in most terminals.
+	if ui.logger != nil {
+		ui.logger.Printf("Clipboard copy triggered via OSC 52")
+	}
+	encoded := base64.StdEncoding.EncodeToString([]byte(text))
+	fmt.Printf("\033]52;c;%s\007", encoded)
+	ui.setStatusDirect("[%s]Copied to clipboard[-:-:-]", ui.theme.TagSuccess)
+}
+
+// onSidebarSelect handles user selection from the case list
 func (ui *UI) onSidebarSelect(index int) {
 	ui.logger.Printf("Sidebar selected (cases list): index=%d, cases=%d", index, len(ui.cases))
 
@@ -974,7 +1158,7 @@ func (ui *UI) setupKeybindings() {
 			case 'q', 'Q':
 				ui.app.Stop()
 				return nil
-			case 'r', 'R':
+			case 'r':
 				// Non-blocking refresh to avoid stalling the tview event loop
 				ui.setStatusDirect("[%s]Refreshing...[-:-:-]", ui.theme.TagAccent)
 				go func() {
@@ -1159,46 +1343,53 @@ func (ui *UI) setupKeybindings() {
 					ui.toggleFindingsScope()
 					return nil
 				}
-			case 'A':
-				// Quick-jump to ALL EVENTS from anywhere (overview panel is non-selectable)
-				ui.app.SetFocus(ui.eventList)
-
-				// Trigger same behavior as selecting ALL EVENTS
-				ui.showFindings = false
-				ui.showAll = true
-				ui.selectedCaseID = ""
-
-				// Reset pagination for ALL context
-				{
-					s := ui.getOrInitState(contextAll)
-					s.pageIndex = 0
-				}
-
-				// Immediate loading state in events table
-				ui.eventList.Clear()
-				headers := []string{"Time", "Type", "Severity", "Host", "Source", "Message"}
-				for col, header := range headers {
-					ui.eventList.SetCell(0, col, tview.NewTableCell(header).
-						SetTextColor(ui.theme.TableHeader).
-						SetBackgroundColor(ui.theme.TableHeaderBg).
-						SetAttributes(tcell.AttrBold))
-				}
-				ui.eventList.SetCell(1, 0, tview.NewTableCell("Loading...").
-					SetTextColor(ui.theme.TableRowMuted))
-				ui.setStatusDirect("[%s]Loading ALL events...[-:-:-]", ui.theme.TagWarning)
-
-				// Watchdog: reset stuck load flag if necessary
-				if atomic.LoadInt32(&ui.loadingEvents) == 1 {
-					started := time.Unix(0, atomic.LoadInt64(&ui.lastLoadStart))
-					if started.IsZero() || time.Since(started) > 3*time.Second {
-						if ui.logger != nil {
-							ui.logger.Printf("hotkey 'A': resetting stuck loadingEvents since %v", started)
-						}
-						atomic.StoreInt32(&ui.loadingEvents, 0)
-						atomic.StoreInt64(&ui.lastLoadStart, 0)
+			case '1':
+				ui.jumpToFindings()
+				return nil
+			case '2':
+				ui.switchToAllEvents()
+				return nil
+			case '3':
+				ui.switchToCases()
+				return nil
+			case '4':
+				ui.switchToIndicators()
+				return nil
+			case '5':
+				ui.switchToReports()
+				return nil
+			case ':':
+				ui.showCommandPalette()
+				return nil
+			case '/':
+				ui.showFilterBar()
+				return nil
+			case '[':
+				ui.toggleCopilotDrawer()
+				return nil
+			case ']':
+				ui.toggleCopilotDrawer()
+				return nil
+			case 'p':
+				if len(ui.events) > 0 {
+					row, _ := ui.eventList.GetSelection()
+					if row > 0 && row-1 < len(ui.events) {
+						ui.showPivotMenu(ui.events[row-1])
 					}
 				}
-				go ui.loadAllEvents()
+				return nil
+			case 'A':
+				// Quick-jump to ALL EVENTS from anywhere (overview panel is non-selectable)
+				ui.switchToAllEvents()
+				return nil
+			case 'C':
+				ui.switchToCases()
+				return nil
+			case 'I':
+				ui.switchToIndicators()
+				return nil
+			case 'R':
+				ui.switchToReports()
 				return nil
 			case 'd':
 				// Context-sensitive delete:
@@ -1813,9 +2004,6 @@ func (ui *UI) showHelp() {
 	keyColWidth := 14
 	bullet := "•"
 	addSection := func(title string) {
-		// Two-cell header row (no spanning) to keep columns consistent.
-		// Fill the left key column with spaces so the header background is visible,
-		// matching the visual style of other subheadings.
 		left := tview.NewTableCell(strings.Repeat(" ", keyColWidth)).
 			SetBackgroundColor(ui.theme.TableHeaderBg).
 			SetAlign(tview.AlignLeft).
@@ -1823,11 +2011,49 @@ func (ui *UI) showHelp() {
 		right := tview.NewTableCell(" " + title + " ").
 			SetTextColor(ui.theme.TableHeader).
 			SetBackgroundColor(ui.theme.TableHeaderBg).
-			SetAttributes(tcell.AttrBold)
+			SetAttributes(tcell.AttrBold).
+			SetExpansion(1)
 		table.SetCell(row, 0, left)
 		table.SetCell(row, 1, right)
 		row++
 	}
+
+	addKey := func(key string, desc string) {
+		kCell := tview.NewTableCell(key).
+			SetTextColor(ui.theme.Accent).
+			SetAlign(tview.AlignRight).
+			SetMaxWidth(keyColWidth).
+			SetExpansion(0)
+		dCell := tview.NewTableCell(fmt.Sprintf("%s %s", bullet, desc)).
+			SetTextColor(ui.theme.TextPrimary).
+			SetExpansion(1)
+		table.SetCell(row, 0, kCell)
+		table.SetCell(row, 1, dCell)
+		row++
+	}
+
+	// Dynamic Contextual Help
+	focused := ui.app.GetFocus()
+	if focused == ui.eventList && ui.showFindings {
+		addSection("CONTEXT: FINDINGS QUEUE")
+		addKey("Space", "Toggle selection for bulk actions")
+		addKey("e", "Escalate selected finding(s)")
+		addKey("s", "Update finding status")
+		addKey("y", "Copy raw JSON to clipboard")
+		addKey("Enter", "View finding details")
+	} else if focused == ui.eventList && ui.showAll {
+		addSection("CONTEXT: EVENTS LIST")
+		addKey("Space", "Toggle selection")
+		addKey("p", "Pivot on current event")
+		addKey("y", "Copy raw JSON to clipboard")
+		addKey("Enter", "View event details")
+	} else if ui.activeCM != nil && ui.selectedCaseID != "" {
+		addSection("CONTEXT: CASE MANAGEMENT")
+		addKey("Tab", "Cycle through tabs (Briefing, Findings, Timeline...)")
+		addKey("[, ]", "Toggle Copilot drawer")
+		addKey("e", "Escalate to external system")
+	}
+
 	addKV := func(k, v string) {
 		// Fixed key column width using left padding; values expand and align left.
 		keyTxt := fmt.Sprintf("%-*s", keyColWidth, k)
@@ -2461,7 +2687,11 @@ func (ui *UI) setTheme(name string) {
 		name, build = defaultThemeName, themeBuilders[defaultThemeName]
 	}
 	ui.themeName = name
-	ui.theme = build()
+	if !ui.hasTrueColor {
+		ui.theme = themeBasic()
+	} else {
+		ui.theme = build()
+	}
 	ui.applyTheme()
 	ui.saveUISettings()
 
@@ -2566,17 +2796,27 @@ func (ui *UI) selectCaseByNumber(caseNum int) {
 	ui.onSidebarSelect(caseIndex)
 }
 
-// toggleEventSelection toggles selection state for the currently focused event
+// toggleEventSelection toggles selection state for the currently focused event or finding
 func (ui *UI) toggleEventSelection() {
 	row, _ := ui.eventList.GetSelection()
-	if ui.logger != nil {
-		ui.logger.Printf("toggleEventSelection: row=%d, events=%d", row, len(ui.events))
+
+	if ui.showFindings {
+		if row > 0 && row-1 < len(ui.findings) {
+			findingID := ui.findings[row-1].ID
+			if ui.selectedFindingIDs[findingID] {
+				delete(ui.selectedFindingIDs, findingID)
+				ui.setStatusDirect("[%s]Finding deselected (%d selected)[-:-:-]", ui.theme.TagAccent, len(ui.selectedFindingIDs))
+			} else {
+				ui.selectedFindingIDs[findingID] = true
+				ui.setStatusDirect("[%s]Finding selected (%d selected)[-:-:-]", ui.theme.TagSuccess, len(ui.selectedFindingIDs))
+			}
+			ui.updateFindingsList(ui.findingsTotal) // Refresh to show selection indicators
+		}
+		return
 	}
+
 	if row > 0 && row-1 < len(ui.events) {
 		eventID := ui.events[row-1].ID
-		if ui.logger != nil {
-			ui.logger.Printf("toggleEventSelection: eventID=%s, currently selected=%v", eventID, ui.selectedEventIDs[eventID])
-		}
 		if ui.selectedEventIDs[eventID] {
 			delete(ui.selectedEventIDs, eventID)
 			ui.setStatusDirect("[%s]Event deselected (%d selected)[-:-:-]", ui.theme.TagAccent, len(ui.selectedEventIDs))
@@ -2585,14 +2825,6 @@ func (ui *UI) toggleEventSelection() {
 			ui.setStatusDirect("[%s]Event selected (%d selected)[-:-:-]", ui.theme.TagSuccess, len(ui.selectedEventIDs))
 		}
 		ui.updateEventsList() // Refresh to show selection indicators
-		if ui.logger != nil {
-			ui.logger.Printf("toggleEventSelection: total selected=%d", len(ui.selectedEventIDs))
-		}
-	} else {
-		if ui.logger != nil {
-			ui.logger.Printf("toggleEventSelection: invalid row or no events")
-		}
-		ui.setStatusDirect("[%s]No event to select (row=%d, events=%d)[-:-:-]", ui.theme.TagWarning, row, len(ui.events))
 	}
 }
 
@@ -4310,4 +4542,98 @@ func (ui *UI) watchedDir() string {
 		return ingest.DefaultDir
 	}
 	return ui.ingestDir
+}
+
+func (ui *UI) setMainView(p tview.Primitive) {
+	if ui.mainPanel == nil {
+		return
+	}
+	ui.copilotOpen = false
+	ui.copilotPanel = nil
+	ui.mainPanel.Clear()
+	ui.mainPanel.AddItem(p, 0, 1, true)
+	ui.app.SetFocus(p)
+}
+
+func (ui *UI) restoreEventsView() {
+	if ui.mainPanel == nil {
+		return
+	}
+	ui.copilotOpen = false
+	ui.copilotPanel = nil
+	ui.mainPanel.Clear()
+	ui.mainPanel.SetDirection(tview.FlexRow)
+
+	if ui.showFindings {
+		// Visual quick-filter chips
+		chipsText := fmt.Sprintf("  [%s:b] Open [-:-:-]   [%s] Severity >= High [-:-:-] ", ui.theme.TagTextPrimary, ui.theme.TagMuted)
+		if !ui.findingsOpenOnly {
+			chipsText = fmt.Sprintf("  [%s] Open [-:-:-]   [%s] Severity >= High [-:-:-] ", ui.theme.TagMuted, ui.theme.TagMuted)
+		}
+		chips := tview.NewTextView().SetDynamicColors(true).SetText(chipsText)
+		ui.mainPanel.AddItem(chips, 1, 0, false)
+	}
+
+	ui.mainPanel.AddItem(ui.eventList, 0, 2, true).
+		AddItem(ui.eventDetail, 0, 1, false)
+	ui.app.SetFocus(ui.eventList)
+}
+
+func (ui *UI) switchToAllEvents() {
+	ui.showFindings = false
+	ui.showAll = true
+	ui.selectedCaseID = ""
+	ui.restoreEventsView()
+
+	s := ui.getOrInitState(contextAll)
+	s.pageIndex = 0
+
+	ui.eventList.Clear()
+	headers := []string{"Time", "Type", "Severity", "Host", "Source", "Message"}
+	for col, header := range headers {
+		ui.eventList.SetCell(0, col, tview.NewTableCell(header).
+			SetTextColor(ui.theme.TableHeader).
+			SetBackgroundColor(ui.theme.TableHeaderBg).
+			SetAttributes(tcell.AttrBold))
+	}
+	ui.eventList.SetCell(1, 0, tview.NewTableCell("Loading...").
+		SetTextColor(ui.theme.TableRowMuted))
+	ui.setStatusDirect("[%s]Loading ALL events...[-:-:-]", ui.theme.TagWarning)
+
+	if atomic.LoadInt32(&ui.loadingEvents) == 1 {
+		started := time.Unix(0, atomic.LoadInt64(&ui.lastLoadStart))
+		if started.IsZero() || time.Since(started) > 3*time.Second {
+			atomic.StoreInt32(&ui.loadingEvents, 0)
+			atomic.StoreInt64(&ui.lastLoadStart, 0)
+		}
+	}
+	go ui.loadAllEvents()
+}
+
+func (ui *UI) switchToCases() {
+	ui.showFindings = false
+	ui.showAll = false
+	if len(ui.cases) > 0 {
+		ui.setMainView(ui.buildCaseBriefingTab(ui.cases[0]))
+	} else {
+		ui.setMainView(ui.buildHomeDashboard(ui.ctx))
+	}
+	ui.setStatusDirect("[%s]Case Management Room • Select a case or press 'c' to create[-:-:-]", ui.theme.TagAccent)
+}
+
+func (ui *UI) switchToIndicators() {
+	ui.setMainView(ui.buildCaseIndicatorsTab(ui.events))
+	ui.setStatusDirect("[%s]Indicators View • Cross-case observables & watchlists[-:-:-]", ui.theme.TagAccent)
+}
+
+func (ui *UI) switchToReports() {
+	reportsTv := tview.NewTextView().SetDynamicColors(true)
+	reportsTv.SetBorder(true).SetTitle(" REPORTS & EXPORTS ").SetTitleColor(ui.theme.Header).SetBackgroundColor(ui.theme.Bg)
+	reportsTv.SetText(fmt.Sprintf("\n  [%s:b]Incident Reports & Export Bundles[-:-:-]\n\n  [%s]• Case Bundles (JSON/STIX)\n  • Generated Incident Briefings\n  • Telemetry Export (OCSF JSONL)[-:-:-]\n", ui.theme.TagAccent, ui.theme.TagTextPrimary))
+	ui.setMainView(reportsTv)
+	ui.setStatusDirect("[%s]Reports View • Export case summaries & investigation bundles[-:-:-]", ui.theme.TagAccent)
+}
+
+func (ui *UI) showHelpModal() {
+	ui.showHelp()
 }
