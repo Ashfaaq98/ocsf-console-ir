@@ -485,6 +485,9 @@ type UI struct {
 	// has to be closed when the screen is replaced.
 	home *homeView
 
+	// casesPane is the Cases screen: the case list beside a briefing.
+	casesPane *tview.Flex
+
 	// navRail is the destination list shown on every screen wider than 80
 	// columns, and destination is the entry it marks. See nav.go.
 	navRail     *tview.TextView
@@ -1059,6 +1062,18 @@ func (ui *UI) copyToClipboard(text string) {
 func (ui *UI) onSidebarSelect(index int) {
 	ui.logger.Printf("Sidebar selected (cases list): index=%d, cases=%d", index, len(ui.cases))
 
+	// On the Cases screen the list sits beside a briefing, and selecting a case
+	// swaps that briefing. The path below loads the case's events into
+	// ui.eventList, which is not on screen here — it would have written to a
+	// widget nobody can see.
+	if ui.onCases() {
+		if index >= 0 && index < len(ui.cases) {
+			ui.selectedCaseID = ui.cases[index].ID
+			ui.showCaseBriefing(ui.cases[index])
+		}
+		return
+	}
+
 	// Prepare UI to show a loading state immediately and focus the Events table.
 	showLoading := func(title string) {
 		ui.eventList.Clear()
@@ -1427,22 +1442,21 @@ func (ui *UI) refreshCases() error {
 		return err
 	}
 
-	// Filter out noisy/auto-created cases (e.g., legacy "Ingested Events" duplicates)
-	// and de-duplicate by Title to keep the sidebar clean.
-	filtered := make([]store.Case, 0, len(cases))
-	seenTitles := make(map[string]bool)
-	for _, c := range cases {
-		if strings.EqualFold(c.Title, "Ingested Events") {
-			continue
-		}
-		if seenTitles[c.Title] {
-			continue
-		}
-		seenTitles[c.Title] = true
-		filtered = append(filtered, c)
-	}
+	// Every case in the database is shown.
+	//
+	// This used to drop any case titled "Ingested Events" — the exact title the
+	// folder ingestor gives the case it creates — and then de-duplicate by
+	// title. So `console-ir list cases` reported a case the TUI insisted did
+	// not exist, and two genuinely different investigations that happened to
+	// share a name became one. Analyst Home reads the store directly and showed
+	// it in RECENT CASES, so the application contradicted itself on two screens
+	// at once.
+	//
+	// If auto-created cases are noise, the fix is not to create them, or to
+	// mark them; it is not to hide rows the analyst can see from the CLI.
+	filtered := cases
 
-	ui.logger.Printf("Loaded %d cases from database, showing %d after filtering", len(cases), len(filtered))
+	ui.logger.Printf("Loaded %d cases from database", len(cases))
 	// Store source list and apply CASE filters
 	ui.allCases = filtered
 	ui.cases = ui.applyCaseFilters(ui.allCases)
@@ -3915,7 +3929,7 @@ func (ui *UI) showDeleteCaseConfirm() {
 
 // buildShortcutHints returns a colored, space-separated list of the most relevant
 // shortcuts based on current focus and UI state. It caps the list to a small,
-// readable set to avoid clutter. Ensures `h:help` is always shown and omits
+// readable set to avoid clutter. Ensures `?:help` is always shown and omits
 // `A:all events` when already in ALL EVENTS to free a slot.
 func (ui *UI) buildShortcutHints() string {
 	accent := ui.theme.TagAccent
@@ -3998,13 +4012,15 @@ func (ui *UI) buildShortcutHints() string {
 
 	// Post-process:
 	// - Omit "A" when already in ALL EVENTS to free a slot.
-	// - Pin "h:help" so it's always visible.
+	// - Pin help so it's always visible.
 	final := make([]kv, 0, 16)
 	seen := map[string]bool{}
 
-	// Always start with help
-	final = append(final, kv{"h", "help"})
-	seen["h"] = true
+	// Always start with help, under the key the rail and every screen footer
+	// advertise. This strip said "h:help" while the footer beside it said
+	// "? Help" — two answers to the same question, on screen at once.
+	final = append(final, kv{"?", "help"})
+	seen["?"] = true
 
 	for _, h := range base {
 		if h.key == "A" && ui.showAll {
@@ -4673,8 +4689,36 @@ func (ui *UI) switchToCases() {
 		ui.setStatusDirect("[%s]Cases • press 'c' to create one[-:-:-]", ui.theme.TagAccent)
 		return
 	}
-	ui.setMainView(ui.buildCaseBriefingTab(ui.cases[0]))
-	ui.setStatusDirect("[%s]Case Management Room • Select a case or press 'c' to create[-:-:-]", ui.theme.TagAccent)
+	// The case list beside the briefing of whichever case is selected.
+	//
+	// The list used to be pinned under the navigation rail on every screen,
+	// which is why the rail needed 45 columns. It belongs here: on the Cases
+	// screen it is the content, and everywhere else it was furniture.
+	ui.casesPane = tview.NewFlex().SetDirection(tview.FlexColumn)
+	ui.casesPane.SetBackgroundColor(ui.theme.Bg)
+	ui.casesPane.AddItem(ui.sidebar, casesListWidth, 0, true)
+	ui.casesPane.AddItem(ui.buildCaseBriefingTab(ui.cases[0]), 0, 1, false)
+
+	ui.setMainView(ui.casesPane)
+	ui.app.SetFocus(ui.sidebar)
+	if ui.sidebar.GetItemCount() > 0 {
+		ui.sidebar.SetCurrentItem(0)
+	}
+	ui.setStatusDirect("[%s]Cases • Enter opens a case · c creates one[-:-:-]", ui.theme.TagAccent)
+}
+
+// casesListWidth is the case list's width on the Cases screen.
+const casesListWidth = 38
+
+// showCaseBriefing swaps the briefing pane to a different case, keeping the
+// list beside it. Without this the list could select a case it could not open.
+func (ui *UI) showCaseBriefing(c store.Case) {
+	if ui.casesPane == nil || ui.casesPane.GetItemCount() < 2 {
+		ui.setMainView(ui.buildCaseBriefingTab(c))
+		return
+	}
+	ui.casesPane.RemoveItem(ui.casesPane.GetItem(1))
+	ui.casesPane.AddItem(ui.buildCaseBriefingTab(c), 0, 1, false)
 }
 
 func (ui *UI) switchToIndicators() {

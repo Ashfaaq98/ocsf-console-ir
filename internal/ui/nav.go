@@ -202,3 +202,15 @@ func (ui *UI) navKeyReference() string {
 	fmt.Fprintf(&b, "  Esc      Home — %s\n", homeDestination().desc)
 	return b.String()
 }
+
+// onCases reports whether the Cases screen is the one currently showing.
+//
+// Derived from the widget tree rather than a flag, for the same reason onHome
+// is: a flag has to be cleared by every other screen, and the one that forgets
+// sends input to a screen that has already been replaced.
+func (ui *UI) onCases() bool {
+	if ui.casesPane == nil || ui.mainPanel == nil {
+		return false
+	}
+	return ui.mainPanel.GetItemCount() > 0 && ui.mainPanel.GetItem(0) == ui.casesPane
+}
