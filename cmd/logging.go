@@ -87,14 +87,6 @@ func runtimeLoggerConsole(component string, console io.Writer) *logging.Logger {
 	return logging.New(io.MultiWriter(runtimeLogFile, console), runtimeLogLevel, component)
 }
 
-// runtimeLogWriter returns the shared log file as an io.Writer, or io.Discard.
-func runtimeLogWriter() io.Writer {
-	if f := runtimeLog(); f != nil {
-		return f
-	}
-	return io.Discard
-}
-
 // runtimeLogPath is the file logs are being written to, for user-facing hints.
 func runtimeLogPath() string {
 	if f := runtimeLog(); f != nil {

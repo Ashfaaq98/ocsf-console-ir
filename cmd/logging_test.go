@@ -20,11 +20,11 @@ func TestRuntimeLoggersShareOneFile(t *testing.T) {
 
 	serve := runtimeLogger("[serve] ")
 	ui := runtimeLogger("[UI] ")
-	live := runtimeLogger("[live-events] ")
+	ingest := runtimeLogger("[ingest] ")
 
 	serve.Println("serve is up")
 	ui.Println("ui is up")
-	live.Println("live is up")
+	ingest.Println("ingest is up")
 
 	// Exactly one log file, whatever the launch path.
 	entries, err := filepath.Glob(filepath.Join(dir, "*.log*"))
@@ -42,7 +42,7 @@ func TestRuntimeLoggersShareOneFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"[serve] ", "[UI] ", "[live-events] "} {
+	for _, want := range []string{"[serve] ", "[UI] ", "[ingest] "} {
 		if !strings.Contains(string(data), want) {
 			t.Errorf("%s is missing records from %q", logName, want)
 		}

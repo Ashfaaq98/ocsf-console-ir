@@ -72,6 +72,11 @@ Examples:
 
   # Start without TUI (experimental headless mode)
   console-ir serve --no-tui`,
+	// The same guard the root command carries, and for the same reason: without
+	// it any stray word launches the TUI instead of reporting an unknown
+	// command. `serve live-events` was a real subcommand until recently, so it
+	// has to say it is gone rather than silently open the interface.
+	Args: cobra.NoArgs,
 	RunE: runServe,
 }
 
