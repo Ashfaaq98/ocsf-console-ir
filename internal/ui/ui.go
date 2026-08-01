@@ -1196,6 +1196,12 @@ func (ui *UI) setupKeybindings() {
 			switch event.Key() {
 			case tcell.KeyTab, tcell.KeyBacktab:
 				return event
+			case tcell.KeyRune:
+				// The case has its own copilot — a transcript with an input,
+				// not the read-only drawer this handler would open.
+				if r := event.Rune(); r == '[' || r == ']' {
+					return event
+				}
 			}
 		}
 

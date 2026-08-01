@@ -56,11 +56,14 @@ type CaseManagement struct {
 	notes      []store.Note
 
 	// UI Layout components
-	layout            *tview.Flex
-	metadataBar       *tview.TextView
-	eventsTable       *tview.Table
-	timelineView      *tview.TextView
-	copilotPanel      *tview.Flex
+	layout       *tview.Flex
+	metadataBar  *tview.TextView
+	eventsTable  *tview.Table
+	timelineView *tview.TextView
+	copilotPanel *tview.Flex
+	// caseBody holds the tabs and, when open, the copilot drawer beside them.
+	caseBody          *tview.Flex
+	copilotOpen       bool
 	copilotDropdown   *tview.DropDown
 	copilotTranscript *tview.TextView
 	copilotEstimate   *tview.TextView
@@ -283,10 +286,15 @@ func (cm *CaseManagement) setupLayout() {
 		AddItem(cm.tabBar, 2, 0, true).
 		AddItem(cm.tabsPages, 0, 1, false)
 
-	// Right side: Copilot full-height column
-	main := tview.NewFlex().SetDirection(tview.FlexColumn).
-		AddItem(leftTabs, 0, 2, true).
-		AddItem(cm.copilotPanel, 50, 0, false) // Fixed width for copilot
+	// Copilot is a drawer, not a column.
+	//
+	// It was a permanent 50 columns, which clipped the tab bar to "Activity L"
+	// and left the case around 100 columns on a 150-column terminal — on the
+	// one screen that has seven tabs and two-column layouts to fit. Closed by
+	// default; `]` opens it and `[` closes it.
+	cm.caseBody = tview.NewFlex().SetDirection(tview.FlexColumn)
+	cm.caseBody.AddItem(leftTabs, 0, 1, true)
+	main := cm.caseBody
 
 	// Two-row metadata (increase height), then main content, then status bar
 	cm.layout = tview.NewFlex().SetDirection(tview.FlexRow).
@@ -490,11 +498,18 @@ func (cm *CaseManagement) setupKeybindings() {
 				// Global hotkey: Shift+L opens LLM Settings anywhere in Case Management
 				cm.showLLMSettingsModal()
 				return nil
-			case 'h':
+			case 'h', 'l':
 				cm.toggleLeftRightFocus()
 				return nil
-			case 'l':
-				cm.toggleLeftRightFocus()
+			case ']':
+				if !cm.copilotOpen {
+					cm.toggleCaseCopilot()
+				}
+				return nil
+			case '[':
+				if cm.copilotOpen {
+					cm.toggleCaseCopilot()
+				}
 				return nil
 			case 'p', 'P':
 				// Allow pin on Timeline tab
@@ -4191,4 +4206,33 @@ func iocSourceColor(theme Theme, it IOCItem) tcell.Color {
 		return theme.Accent
 	}
 	return theme.TableRowMuted
+}
+
+// copilotDrawerWidth is the drawer's width when open. Narrower than the column
+// it replaces: it is a conversation, not a second screen.
+const copilotDrawerWidth = 44
+
+// toggleCaseCopilot opens or closes the copilot drawer.
+//
+// The case owns this rather than the global drawer in copilot_drawer.go: that
+// one is a read-only text pane, while the case's copilot is a transcript, a
+// persona selector and an input. Opening the wrong one inside a case would
+// present an assistant that cannot be typed to.
+func (cm *CaseManagement) toggleCaseCopilot() {
+	if cm.caseBody == nil || cm.copilotPanel == nil {
+		return
+	}
+	if cm.copilotOpen {
+		cm.caseBody.RemoveItem(cm.copilotPanel)
+		cm.copilotOpen = false
+		cm.setFocusPane(caseTabPages[cm.activeTab].focus)
+		cm.updateStatus("Copilot closed")
+		return
+	}
+	cm.caseBody.AddItem(cm.copilotPanel, copilotDrawerWidth, 0, false)
+	cm.copilotOpen = true
+	if cm.copilotInput != nil {
+		cm.app.SetFocus(cm.copilotInput)
+	}
+	cm.updateStatus("Copilot open — [ closes it")
 }
