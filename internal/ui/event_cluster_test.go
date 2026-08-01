@@ -1,10 +1,12 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
+	"github.com/rivo/tview"
 )
 
 func at(hhmm string) time.Time {
@@ -235,5 +237,27 @@ func TestTimeClusterHeaderDoesNotRepeatItself(t *testing.T) {
 	h := clusterEvents([]store.Event{ev("10:05:30", "fw-edge-01", "p", "a")}, groupByHost)[0]
 	if got := h.Header(); got != "fw-edge-01 · 10:05 · 1 event" {
 		t.Errorf("host header = %q", got)
+	}
+}
+
+// The empty states are the only instructions on an otherwise blank screen, and
+// tview eats a bracketed key in a table cell exactly as it does in a TextView.
+// This is the same defect the welcome card had, in a different widget.
+func TestEmptyStateKeysSurviveTableCells(t *testing.T) {
+	for _, line := range []string{
+		"[F] Clear the search      [Esc] restores the previous list",
+		"[F] Clear the pivot",
+		"[F] Clear filters      [V] Next saved view",
+		"[r] Retry",
+	} {
+		cell := tview.NewTableCell(tview.Escape(line))
+		tv := tview.NewTextView().SetDynamicColors(true)
+		tv.SetText(cell.Text)
+		if got := tv.GetText(true); !strings.Contains(got, "[F]") && strings.Contains(line, "[F]") {
+			t.Errorf("the F key was swallowed from %q, leaving %q", line, got)
+		}
+		if strings.Contains(line, "[r]") && !strings.Contains(tv.GetText(true), "[r]") {
+			t.Errorf("the retry key was swallowed from %q", line)
+		}
 	}
 }

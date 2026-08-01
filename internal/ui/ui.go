@@ -499,6 +499,12 @@ type UI struct {
 	// occupy rows and hold no event, so a row number is no longer an offset.
 	eventAtRow map[int]int
 
+	// searchQuery is the active `/` search, empty when none. It is state
+	// because the empty result of a search and the empty result of an unloaded
+	// list say different things, and because the chip that shows it must be
+	// removable.
+	searchQuery string
+
 	// pivot is the observable the event list is currently narrowed to, or nil.
 	// It is state rather than a query parameter because the chip that shows it
 	// has to be removable, and an invisible filter is indistinguishable from
@@ -1358,6 +1364,10 @@ func (ui *UI) setupKeybindings() {
 				}
 				return nil
 			case 'F':
+				if !ui.showFindings && ui.searchQuery != "" {
+					ui.clearSearch()
+					return nil
+				}
 				if !ui.showFindings && ui.pivot != nil {
 					ui.clearPivot()
 					return nil
@@ -1798,7 +1808,21 @@ func (ui *UI) updateEventsList() {
 			maxPages = 1
 		}
 	}
-	ui.eventList.SetTitle(fmt.Sprintf(" Events (Page %d/%d, Total %d) ", s.pageIndex+1, maxPages, s.totalCount))
+	// The title describes the list beneath it. It used to report the page count
+	// from before a pivot or a search, so a narrowed list of 2 sat under a
+	// heading claiming 6 — two numbers on one screen, both describing it, and
+	// disagreeing.
+	title := fmt.Sprintf(" EVENTS  ·  %d ", len(ui.events))
+	switch {
+	case ui.searchQuery != "":
+		title = fmt.Sprintf(" EVENTS  ·  %d matching %q ", len(ui.events), ui.searchQuery)
+	case ui.pivot != nil:
+		title = fmt.Sprintf(" EVENTS  ·  %d for %s ", len(ui.events), ui.pivot.Value)
+	case maxPages > 1:
+		title = fmt.Sprintf(" EVENTS  ·  %d of %d · page %d/%d ",
+			len(ui.events), s.totalCount, s.pageIndex+1, maxPages)
+	}
+	ui.eventList.SetTitle(title)
 
 	// Set headers
 	headers := []string{"Time", "Type", "Severity", "Host", "Source", "Message"}
@@ -1810,20 +1834,45 @@ func (ui *UI) updateEventsList() {
 	}
 
 	if len(ui.events) == 0 {
-		// Empty-state onboarding: a fresh install has no data and no obvious next
-		// step. Point the analyst at the drop folder and the shipped sample.
-		hint := []string{
-			"No events yet.",
-			"",
-			fmt.Sprintf("Drop OCSF JSONL files into  %s  to ingest and enrich them.", ui.watchedDir()),
-			// Not "ingest examples/…": examples/ is not in the release archive,
-			// so a brew or curl install has no such file. The demo data is
-			// embedded in the binary, which works everywhere.
-			"Or run   console-ir demo   to explore a sample incident first.",
-			"Then press  r  to refresh this list.",
+		// Two distinct empty states, as on Triage. Telling an analyst to go
+		// ingest data because their own search excluded it is telling them
+		// their data is missing.
+		var hint []string
+		switch {
+		case ui.searchQuery != "":
+			hint = []string{
+				"No events match.",
+				"",
+				fmt.Sprintf("Search: %q", ui.searchQuery),
+				"",
+				"[F] Clear the search      [Esc] restores the previous list",
+			}
+		case ui.pivot != nil:
+			hint = []string{
+				"No events match.",
+				"",
+				fmt.Sprintf("Pivot: %s %s", ui.pivot.Kind, ui.pivot.Value),
+				"",
+				"[F] Clear the pivot",
+			}
+		default:
+			// A fresh install has no data and no obvious next step. Point the
+			// analyst at the drop folder and the shipped sample.
+			hint = []string{
+				"No events yet.",
+				"",
+				fmt.Sprintf("Drop OCSF JSONL files into  %s  to ingest and enrich them.", ui.watchedDir()),
+				// Not "ingest examples/…": examples/ is not in the release
+				// archive, so a brew or curl install has no such file. The demo
+				// data is embedded in the binary, which works everywhere.
+				"Or run   console-ir demo   to explore a sample incident first.",
+				"Then press  r  to refresh this list.",
+			}
 		}
 		for i, line := range hint {
-			cell := tview.NewTableCell(line).
+			// Escaped: a table cell parses colour tags, so "[F]" is read as one
+			// and disappears — taking with it the only instruction on screen.
+			cell := tview.NewTableCell(tview.Escape(line)).
 				SetTextColor(ui.theme.TableRowMuted).
 				SetExpansion(1)
 			if i == 0 {
@@ -1974,11 +2023,19 @@ func (ui *UI) showEventDetails() {
 	lbl := ui.theme.TagWarning
 	val := ui.theme.TagTextPrimary
 
-	details.WriteString(fmt.Sprintf("[%s]Event ID:[-] [%s]%s[-]\n", lbl, val, event.ID))
-	details.WriteString(fmt.Sprintf("[%s]Timestamp:[-] [%s]%s[-]\n", lbl, val, event.Timestamp.Format("2006-01-02 15:04:05")))
-	details.WriteString(fmt.Sprintf("[%s]Type:[-] [%s]%s[-]\n", lbl, val, event.EventType))
-	details.WriteString(fmt.Sprintf("[%s]Severity:[-] [%s]%s[-]\n",
-		lbl, ui.getSeverityColor(event.Severity), strings.ToUpper(event.Severity)))
+	// §8 order: summary first, raw last. This opened with the event id — a
+	// machine identifier nobody will ever type — and put the sentence
+	// describing what happened several lines below it. Triage and Home already
+	// lead with the human summary; this screen was the one that disagreed.
+	summary := strings.TrimSpace(event.Message)
+	if summary == "" {
+		summary = event.EventType
+	}
+	details.WriteString(fmt.Sprintf("[%s:-:b]%s[-:-:-]\n", ui.theme.TagAccent, tview.Escape(summary)))
+	details.WriteString(fmt.Sprintf("[%s]%s · %s · %s[-]\n\n",
+		ui.theme.TagMuted, event.Timestamp.Format("2006-01-02 15:04:05"),
+		event.EventType, strings.ToUpper(event.Severity)))
+
 	details.WriteString(fmt.Sprintf("[%s]Host:[-] [%s]%s[-]\n", lbl, val, event.Host))
 
 	if event.SrcIP != "" {
@@ -2055,6 +2112,8 @@ func (ui *UI) showEventDetails() {
 			details.WriteString(fmt.Sprintf("  [%s]No enrichment available[-]\n", ui.theme.TagMuted))
 		}
 	}
+
+	details.WriteString(fmt.Sprintf("\n[%s]Event ID:[-] [%s]%s[-]\n", lbl, ui.theme.TagMuted, event.ID))
 
 	// Show raw JSON if available (truncated)
 	if event.RawJSON != "" {

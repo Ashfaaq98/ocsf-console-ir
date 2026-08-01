@@ -179,7 +179,9 @@ func (ui *UI) updateFindingsList(total int) {
 			}
 		}
 		for i, line := range hint {
-			cell := tview.NewTableCell(line).
+			// Escaped: a table cell parses colour tags, so "[F]" is read as one
+			// and disappears — taking with it the only instruction on screen.
+			cell := tview.NewTableCell(tview.Escape(line)).
 				SetTextColor(ui.theme.TableRowMuted).
 				SetExpansion(1)
 			if i == 0 {
