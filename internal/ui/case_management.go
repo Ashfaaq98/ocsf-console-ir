@@ -572,16 +572,20 @@ func (cm *CaseManagement) handleCopilotInput(event *tcell.EventKey) *tcell.Event
 	case tcell.KeyCtrlC:
 		cm.copilotInput.SetText("")
 		return nil
-	case tcell.KeyRune:
-		switch event.Rune() {
-		// Copilot sub-focus navigation: '[' to persona dropdown, ']' back to input
-		case '[':
+	case tcell.KeyBacktab:
+		// Persona lives one step back from the input. It used to be on '[',
+		// which now closes the drawer from everywhere in the case — a key that
+		// closes a panel in one pane and moves focus in another is two keys.
+		if cm.copilotDropdown != nil {
 			cm.app.SetFocus(cm.copilotDropdown)
 			cm.updateStatus("Copilot focus: Persona")
-			return nil
-		case ']':
-			cm.app.SetFocus(cm.copilotInput)
-			cm.updateStatus("Copilot focus: Input")
+		}
+		return nil
+	case tcell.KeyRune:
+		switch event.Rune() {
+		case '[':
+			// Closes the drawer from inside it too, so the key means one thing.
+			cm.toggleCaseCopilot()
 			return nil
 		// Focus Copilot transcript (non-alphanumeric key). Use Up/Down/PgUp/PgDn to scroll.
 		case '\\':
