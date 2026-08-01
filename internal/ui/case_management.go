@@ -553,7 +553,7 @@ func (cm *CaseManagement) handleEventsInput(event *tcell.EventKey) *tcell.EventK
 	case tcell.KeyRune:
 		switch event.Rune() {
 		case ' ':
-			cm.toggleEventSelection()
+			cm.togglePinnedEvent()
 			return nil
 		case 'e':
 			cm.exportSelectedEvents()
@@ -676,10 +676,21 @@ func (cm *CaseManagement) loadCaseData() {
 			}
 		}
 
+		// Which of those events the analyst starred. Loaded here so the
+		// briefing and the evidence tab agree without either querying again.
+		pinned, err := cm.store.GetPinnedMemberIDs(cm.ctx, cm.caseData.ID, store.MemberTypeEvent)
+		if err != nil {
+			if cm.logger != nil {
+				cm.logger.Warn("could not read pinned evidence for case %s: %v", cm.caseData.ID, err)
+			}
+			pinned = map[string]bool{}
+		}
+
 		// Update UI on main thread
 		cm.app.QueueUpdateDraw(func() {
 			cm.baseEvents = events
 			cm.events = events
+			cm.pinnedEvents = pinned
 			cm.notes = notes
 			cm.auditLog = audits
 
@@ -687,7 +698,7 @@ func (cm *CaseManagement) loadCaseData() {
 			cm.updateEventsTable()
 			cm.updateTimelineView()
 			cm.updateNotesText()
-			cm.renderOverview()
+			cm.renderBriefing()
 			cm.renderActivityLog()
 			// IOCs render will be computed lazily/placeholder
 			cm.renderIOCs()
@@ -784,10 +795,13 @@ func (cm *CaseManagement) updateEventsTable() {
 		row := i + 1
 
 		// Selection indicator
-		selected := cm.selectedEventIDs[event.ID]
+		// ★ is the analyst's judgement about which of these events actually
+		// prove the case. It surfaces on the briefing and in exports, which is
+		// why it is stored rather than kept in the widget.
+		selected := cm.pinnedEvents[event.ID]
 		indicator := " "
 		if selected {
-			indicator = "✓"
+			indicator = "★"
 		}
 
 		// Row cells
@@ -1149,127 +1163,34 @@ func (cm *CaseManagement) showEventDetailsModal(ev store.Event) {
 }
 
 // Overview rendering (metadata, quick stats, pinned highlights)
-func (cm *CaseManagement) renderOverview() {
+// renderBriefing paints the Briefing tab.
+//
+// The same renderer the Cases screen uses, so the two cannot disagree about a
+// case. It replaced renderOverview, which listed the title, description, status
+// and time span — facts the analyst already had, since they opened this case.
+func (cm *CaseManagement) renderBriefing() {
 	if cm.overviewView == nil {
 		return
 	}
-	// Quick stats
-	byType := map[string]int{}
-	bySev := map[string]int{}
-	var minT, maxT time.Time
-	topHostCount := map[string]int{}
-	for _, ev := range cm.events {
-		byType[ev.EventType]++
-		sev := strings.ToLower(ev.Severity)
-		bySev[sev]++
-		if minT.IsZero() || ev.Timestamp.Before(minT) {
-			minT = ev.Timestamp
-		}
-		if maxT.IsZero() || ev.Timestamp.After(maxT) {
-			maxT = ev.Timestamp
-		}
-		if ev.Host != "" {
-			topHostCount[ev.Host]++
-		}
-	}
-	// Top 5 hosts
-	type kv struct {
-		k string
-		v int
-	}
-	var hosts []kv
-	for h, c := range topHostCount {
-		hosts = append(hosts, kv{h, c})
-	}
-	sort.Slice(hosts, func(i, j int) bool { return hosts[i].v > hosts[j].v })
-	if len(hosts) > 5 {
-		hosts = hosts[:5]
+	d := briefingData{Case: cm.caseData, Events: cm.events, Pinned: cm.pinnedEvents}
+	if d.Pinned == nil {
+		d.Pinned = map[string]bool{}
 	}
 
-	lbl := cm.theme.TagWarning
-	val := cm.theme.TagTextPrimary
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("[::b][%s]Case Overview[-][-]\n\n", lbl))
-	sb.WriteString(fmt.Sprintf("  [%s]Title:[-] [%s]%s[-]\n", lbl, val, cm.caseData.Title))
-	// Show case description (between Title and Status) when present. Truncate to a sensible length to avoid overly large overview blocks.
-	if desc := strings.TrimSpace(cm.caseData.Description); desc != "" {
-		if len(desc) > 400 {
-			desc = desc[:400] + "..."
-		}
-		sb.WriteString(fmt.Sprintf("  [%s]Description:[-] [%s]%s[-]\n", lbl, val, desc))
+	brief, err := cm.store.GetBriefing(cm.ctx, cm.caseData.ID)
+	if err != nil {
+		cm.overviewView.SetText(fmt.Sprintf("\n [%s]Could not load the briefing.[-]\n [%s]%s[-]\n\n [%s]%s[-]",
+			cm.theme.TagError, cm.theme.TagMuted, tview.Escape(err.Error()),
+			cm.theme.TagAccent, tview.Escape("[r] Retry")))
+		return
 	}
-	sb.WriteString(fmt.Sprintf("  [%s]Status:[-] [%s]%s[-]\n", lbl, val, strings.ToUpper(cm.caseData.Status)))
-	sb.WriteString(fmt.Sprintf("  [%s]Findings:[-] [%s]%d[-]  [%s](press 2)[-]\n", lbl, val, len(cm.caseFindings), cm.theme.TagMuted))
-	sb.WriteString(fmt.Sprintf("  [%s]Events:[-] [%s]%d[-]\n", lbl, val, len(cm.events)))
-	// Primary timespan: prefer case creation -> now (duration). Fallback to event min/max when case CreatedAt is not available.
-	if !cm.caseData.CreatedAt.IsZero() {
-		start := cm.caseData.CreatedAt
-		end := time.Now()
-		delta := end.Sub(start)
-		days := int(delta.Hours()) / 24
-		hours := int(delta.Hours()) % 24
-		sb.WriteString(fmt.Sprintf("  [%s]Time Span:[-] [%s]%s[-] → [%s]%s[-] [%s](%dd %dh)[-]\n",
-			lbl,
-			val, start.Format("2006-01-02 15:04"),
-			val, end.Format("2006-01-02 15:04"),
-			val, days, hours,
-		))
-	} else if !minT.IsZero() && !maxT.IsZero() {
-		delta := maxT.Sub(minT)
-		days := int(delta.Hours()) / 24
-		hours := int(delta.Hours()) % 24
-		sb.WriteString(fmt.Sprintf("  [%s]Time Span:[-] [%s]%s[-] → [%s]%s[-] [%s](%dd %dh)[-]\n",
-			lbl,
-			val, minT.Format("2006-01-02 15:04"),
-			val, maxT.Format("2006-01-02 15:04"),
-			val, days, hours,
-		))
+	d.Brief = brief
+
+	_, _, width, _ := cm.overviewView.GetInnerRect()
+	if width <= 0 {
+		width = briefingTwoColumnWidth
 	}
-
-	// (Removed) Events by Type
-
-	// (Removed) Events by Severity
-
-	// LLM Summary block (renders under Case Overview)
-	// If no in-memory summary (and not currently generating), try to load the latest persisted summary note.
-	if !cm.isSummarizing && strings.TrimSpace(cm.overviewSummary) == "" && len(cm.notes) > 0 {
-		var latest store.Note
-		found := false
-		for _, n := range cm.notes {
-			if strings.EqualFold(n.LinkedType, "summary") {
-				if !found || n.CreatedAt.After(latest.CreatedAt) {
-					latest = n
-					found = true
-				}
-			}
-		}
-		if found {
-			cm.overviewSummary = latest.Content
-			cm.summaryAt = latest.CreatedAt
-		}
-	}
-
-	sb.WriteString(fmt.Sprintf("\n[::b][%s]LLM Summary[-][-]\n", lbl))
-	if cm.isSummarizing {
-		sb.WriteString("  Generating case summary...\n")
-	} else if strings.TrimSpace(cm.overviewSummary) == "" {
-		sb.WriteString(fmt.Sprintf("  (none)  [%s][l] Generate summary[-]\n", cm.theme.TagMuted))
-	} else {
-		sb.WriteString(cm.overviewSummary + "\n")
-		if !cm.summaryAt.IsZero() {
-			sb.WriteString(fmt.Sprintf("  [%s]Generated:[-] [%s]%s[-]", lbl, val, cm.summaryAt.Format("2006-01-02 15:04")))
-			if cm.summaryTokens > 0 {
-				sb.WriteString(fmt.Sprintf("  [%s]Tokens:[-] [%s]%d[-]", lbl, val, cm.summaryTokens))
-			}
-			if cm.summaryCost > 0 {
-				sb.WriteString(fmt.Sprintf("  [%s]Cost:[-] [%s]$%.4f[-]", lbl, val, cm.summaryCost))
-			}
-			sb.WriteString("\n")
-		}
-	}
-
-	cm.overviewView.SetText(sb.String())
+	cm.overviewView.SetText(renderBriefing(d, cm.theme, width))
 }
 
 // IOC table rendering with extraction and grouping
@@ -1698,7 +1619,7 @@ func (cm *CaseManagement) buildTabs() {
 
 	// Build additional views
 	cm.overviewView = tview.NewTextView().SetDynamicColors(true).SetScrollable(true)
-	cm.overviewView.SetBorder(true).SetTitle(" Overview ").SetTitleAlign(tview.AlignLeft)
+	cm.overviewView.SetBorder(true).SetTitle(" BRIEFING ").SetTitleAlign(tview.AlignLeft)
 	// Overview tab input capture: l to generate case summary, Tab to toggle focus
 	cm.overviewView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
@@ -1791,7 +1712,7 @@ func (cm *CaseManagement) buildTabs() {
 	cm.tabsPages.SwitchToPage(caseTabPages[cm.activeTab].page)
 
 	// Initial renders
-	cm.renderOverview()
+	cm.renderBriefing()
 	cm.renderCaseFindings()
 	cm.loadCaseFindings()
 	cm.renderIOCs()
@@ -1894,7 +1815,7 @@ func (cm *CaseManagement) OnThemeChanged(theme Theme) {
 	cm.updateMetadataBar()
 	cm.updateEventsTable()
 	cm.updateTimelineView()
-	cm.renderOverview()
+	cm.renderBriefing()
 	cm.renderIOCs()
 	cm.renderActivityLog()
 	cm.renderTabBar()
@@ -2520,7 +2441,7 @@ func (cm *CaseManagement) buildCaseChatContext() string {
 func (cm *CaseManagement) executeCaseSummary(prompt string, events []store.Event, estTokens int) {
 	cm.isSummarizing = true
 	cm.updateStatus("Generating case summary...")
-	cm.renderOverview()
+	cm.renderBriefing()
 
 	go func() {
 		var (
@@ -2555,7 +2476,7 @@ func (cm *CaseManagement) executeCaseSummary(prompt string, events []store.Event
 				cm.app.QueueUpdateDraw(func() {
 					cm.isSummarizing = false
 					cm.updateStatus(fmt.Sprintf("Summary error: %v", ferr))
-					cm.renderOverview()
+					cm.renderBriefing()
 				})
 				return
 			}
@@ -2585,7 +2506,7 @@ func (cm *CaseManagement) executeCaseSummary(prompt string, events []store.Event
 			go cm.store.LogCaseAction(cm.ctx, cm.caseData.ID, "case_summary", cm.getCurrentAnalyst(),
 				map[string]interface{}{"tokens": tokens, "cost": cost})
 
-			cm.renderOverview()
+			cm.renderBriefing()
 			cm.renderActivityLog()
 			cm.updateStatus("Case summary generated")
 		})
@@ -4300,4 +4221,42 @@ func (cm *CaseManagement) nextActionPrompt() string {
 			acc, muted, renderRelativeTime(lastNote))
 	}
 	return ""
+}
+
+// togglePinnedEvent stars or unstars the evidence under the cursor.
+//
+// Persisted immediately rather than on some later save: a star is a judgement,
+// and a judgement that survives only until the screen closes is not one.
+func (cm *CaseManagement) togglePinnedEvent() {
+	row, _ := cm.eventsTable.GetSelection()
+	if row <= 0 || row-1 >= len(cm.events) {
+		return
+	}
+	ev := cm.events[row-1]
+
+	if cm.pinnedEvents == nil {
+		cm.pinnedEvents = map[string]bool{}
+	}
+	pin := !cm.pinnedEvents[ev.ID]
+
+	if err := cm.store.SetMemberPinned(cm.ctx, cm.caseData.ID, store.MemberTypeEvent, ev.ID, pin); err != nil {
+		cm.updateStatus(fmt.Sprintf("Could not pin: %v", err))
+		return
+	}
+	if pin {
+		cm.pinnedEvents[ev.ID] = true
+	} else {
+		delete(cm.pinnedEvents, ev.ID)
+	}
+
+	cm.updateEventsTable()
+	// The briefing lists pinned evidence, so it changes too.
+	cm.renderBriefing()
+
+	n := len(cm.pinnedEvents)
+	if pin {
+		cm.updateStatus(fmt.Sprintf("Pinned · %s pinned", plural(n, "event")))
+	} else {
+		cm.updateStatus(fmt.Sprintf("Unpinned · %s pinned", plural(n, "event")))
+	}
 }
