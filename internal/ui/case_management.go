@@ -248,7 +248,13 @@ func (cm *CaseManagement) setupLayout() {
 			cm.toggleTimelineCard(cm.selectedEventIndex)
 			return nil
 		case tcell.KeyTab:
-			cm.toggleLeftRightFocus()
+			// Tab moves between the case's tabs, which is what §9 lists first
+			// and what an analyst reaches for. Pane focus moved to `h`/`l`,
+			// which are already the focus keys everywhere else.
+			cm.switchTab(wrapTab(cm.activeTab + 1))
+			return nil
+		case tcell.KeyBacktab:
+			cm.switchTab(wrapTab(cm.activeTab - 1))
 			return nil
 		case tcell.KeyRune:
 			switch event.Rune() {
@@ -402,7 +408,13 @@ func (cm *CaseManagement) setupNotesPanel() {
 	cm.notesViewer.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyTab:
-			cm.toggleLeftRightFocus()
+			// Tab moves between the case's tabs, which is what §9 lists first
+			// and what an analyst reaches for. Pane focus moved to `h`/`l`,
+			// which are already the focus keys everywhere else.
+			cm.switchTab(wrapTab(cm.activeTab + 1))
+			return nil
+		case tcell.KeyBacktab:
+			cm.switchTab(wrapTab(cm.activeTab - 1))
 			return nil
 		case tcell.KeyRune:
 			switch event.Rune() {
@@ -443,7 +455,13 @@ func (cm *CaseManagement) setupKeybindings() {
 			}
 			return nil
 		case tcell.KeyTab:
-			cm.toggleLeftRightFocus()
+			// Tab moves between the case's tabs, which is what §9 lists first
+			// and what an analyst reaches for. Pane focus moved to `h`/`l`,
+			// which are already the focus keys everywhere else.
+			cm.switchTab(wrapTab(cm.activeTab + 1))
+			return nil
+		case tcell.KeyBacktab:
+			cm.switchTab(wrapTab(cm.activeTab - 1))
 			return nil
 		case tcell.KeyRune:
 			// Do not process global letter shortcuts when typing in inputs (Copilot/Notes)
@@ -472,15 +490,11 @@ func (cm *CaseManagement) setupKeybindings() {
 				// Global hotkey: Shift+L opens LLM Settings anywhere in Case Management
 				cm.showLLMSettingsModal()
 				return nil
-			case '[':
-				// Tabs move with brackets, not digits. Digits 1-5 are reserved
-				// globally for destinations, so a case tab bound to '3' meant
-				// pressing 3 inside a case did something different from
-				// pressing 3 anywhere else — and the rail said otherwise.
-				cm.switchTab(wrapTab(cm.activeTab - 1))
+			case 'h':
+				cm.toggleLeftRightFocus()
 				return nil
-			case ']':
-				cm.switchTab(wrapTab(cm.activeTab + 1))
+			case 'l':
+				cm.toggleLeftRightFocus()
 				return nil
 			case 'p', 'P':
 				// Allow pin on Timeline tab
@@ -1647,7 +1661,13 @@ func (cm *CaseManagement) buildTabs() {
 	cm.overviewView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyTab:
-			cm.toggleLeftRightFocus()
+			// Tab moves between the case's tabs, which is what §9 lists first
+			// and what an analyst reaches for. Pane focus moved to `h`/`l`,
+			// which are already the focus keys everywhere else.
+			cm.switchTab(wrapTab(cm.activeTab + 1))
+			return nil
+		case tcell.KeyBacktab:
+			cm.switchTab(wrapTab(cm.activeTab - 1))
 			return nil
 		case tcell.KeyRune:
 			switch event.Rune() {
@@ -1668,7 +1688,13 @@ func (cm *CaseManagement) buildTabs() {
 	cm.iocsTable.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyTab:
-			cm.toggleLeftRightFocus()
+			// Tab moves between the case's tabs, which is what §9 lists first
+			// and what an analyst reaches for. Pane focus moved to `h`/`l`,
+			// which are already the focus keys everywhere else.
+			cm.switchTab(wrapTab(cm.activeTab + 1))
+			return nil
+		case tcell.KeyBacktab:
+			cm.switchTab(wrapTab(cm.activeTab - 1))
 			return nil
 		case tcell.KeyRune:
 			switch event.Rune() {

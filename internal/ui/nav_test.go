@@ -185,19 +185,30 @@ func TestRailMarksExactlyOneDestination(t *testing.T) {
 	}
 }
 
-// Digits are reserved globally, so nothing inside a screen may claim one. The
-// case tabs did: they were bound to 1-7, which meant pressing 3 inside a case
-// did something different from pressing 3 anywhere else.
-func TestCaseTabsDoNotClaimGlobalDigits(t *testing.T) {
+// Case tabs move with Tab and Shift+Tab, and with nothing the global handler
+// already claims.
+//
+// This is the binding that was broken twice. Digits route to destinations, so
+// tabs bound to 1-7 never fired. Brackets route to the copilot drawer, so tabs
+// bound to those did not fire either. The global capture runs before any
+// screen's own handler, which is why both failures were silent.
+func TestCaseTabsUseTabNotAGloballyClaimedKey(t *testing.T) {
 	src := readSource(t, "case_management.go")
 
 	if strings.Contains(src, `case '1', '2', '3', '4', '5', '6', '7':`) {
-		t.Error("case tabs are still bound to digits, which are reserved for destinations")
+		t.Error("case tabs are bound to digits, which the global handler routes to destinations")
 	}
-	for _, want := range []string{`case '[':`, `case ']':`} {
+	for _, want := range []string{"case tcell.KeyTab:", "case tcell.KeyBacktab:"} {
 		if !strings.Contains(src, want) {
 			t.Errorf("case tabs are not bound to %s", want)
 		}
+	}
+
+	// And the global handler must let those two through, or the case never
+	// sees them.
+	global := readSource(t, "ui.go")
+	if !strings.Contains(global, "case tcell.KeyTab, tcell.KeyBacktab:") {
+		t.Error("the global handler does not pass Tab through to an open case, so the tabs cannot fire")
 	}
 }
 

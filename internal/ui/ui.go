@@ -1184,6 +1184,21 @@ func (ui *UI) setupKeybindings() {
 			return event
 		}
 
+		// A case owns Tab and Shift+Tab, which move between its seven tabs.
+		//
+		// This handler runs before any primitive's own capture, so anything it
+		// claims never reaches the screen below. That is why case tabs did not
+		// work: they were bound to digits, which this handler routes to
+		// destinations, and then to brackets, which it routes to the copilot
+		// drawer. Global navigation still applies inside a case; only the two
+		// keys the case owns are passed through.
+		if ui.activeCM != nil {
+			switch event.Key() {
+			case tcell.KeyTab, tcell.KeyBacktab:
+				return event
+			}
+		}
+
 		// Log key events to help diagnose input handling
 		if ui.logger != nil {
 			ui.logger.Debug("input: key=%v rune=%q mod=%v", event.Key(), event.Rune(), event.Modifiers())
