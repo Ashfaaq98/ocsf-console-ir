@@ -871,7 +871,7 @@ func (ui *UI) setupLayout() {
 	ui.allCasesInfo.SetTextColor(ui.theme.TextPrimary)
 	ui.allCasesInfo.SetBorderColor(ui.theme.Border)
 	// Default text until cases are loaded
-	ui.allCasesInfo.SetText(fmt.Sprintf("[%s](A) EVENTS (0)[-]\n[%s](C) CASES (0)[-]\n[%s]OPEN[-] - 0  [%s]INVESTIGATING[-] - 0  [%s]CLOSED[-] - 0",
+	ui.allCasesInfo.SetText(fmt.Sprintf("[%s](2) EVENTS (0)[-]\n[%s](3) CASES (0)[-]\n[%s]OPEN[-] - 0  [%s]INVESTIGATING[-] - 0  [%s]CLOSED[-] - 0",
 		ui.theme.TagAccent, ui.theme.TagAccent, ui.theme.TagTextPrimary, ui.theme.TagTextPrimary, ui.theme.TagTextPrimary))
 
 	// The left column is the rail and nothing else. It used to carry the app
@@ -2063,6 +2063,15 @@ func (ui *UI) showHelp() {
 
 	// Sections
 
+	addSection("DESTINATIONS")
+	// Listed from the destination table in nav.go, so the help cannot document
+	// a key the rail does not show or the handler does not dispatch.
+	for _, d := range destinations() {
+		addKV(string(d.key), d.name+" — "+d.desc)
+	}
+	addKV("Esc", "Home — "+homeDestination().desc)
+	addGap()
+
 	addSection("GLOBAL NAVIGATION")
 	addKV("Tab", "Cycle through panels")
 	addKV("Enter", "Select item (All/Case/Event)")
@@ -2073,8 +2082,6 @@ func (ui *UI) showHelp() {
 	addKV("J / K", "Page down/up (table)")
 	addKV("N", "Next page (events)")
 	addKV("P", "Prev page (events)")
-	addKV("1-99", "Quick case selection (multi-digit)")
-	addKV("Esc", "Clear status line")
 	addGap()
 
 	addSection("FINDINGS (TRIAGE)")
@@ -4124,8 +4131,10 @@ func (ui *UI) updateOverview(eventsTotal, casesTotal, open, investigating, close
 	// layer beneath them.
 	openFindings, _ := ui.store.CountFindings(ui.ctx, store.FindingFilter{OpenOnly: true})
 	line0 := fmt.Sprintf("[%s](D) FINDINGS (%d open)[-]", ui.theme.TagAccent, openFindings)
-	line1 := fmt.Sprintf("[%s](A) EVENTS (%d)[-]", ui.theme.TagAccent, eventsTotal)
-	line2 := fmt.Sprintf("[%s](C) CASES (%d)[-]", ui.theme.TagAccent, casesTotal)
+	line1 := fmt.Sprintf("[%s](2) EVENTS (%d)[-]", ui.theme.TagAccent, eventsTotal)
+	// Was "(C) CASES". C had no handler at all, so the panel advertised a key
+	// that did nothing. Cases is destination 3.
+	line2 := fmt.Sprintf("[%s](3) CASES (%d)[-]", ui.theme.TagAccent, casesTotal)
 	line3 := fmt.Sprintf("[%s]OPEN[-] - %d  [%s]INVESTIGATING[-] - %d  [%s]CLOSED[-] - %d",
 		ui.theme.TagTextPrimary, open,
 		ui.theme.TagTextPrimary, investigating,

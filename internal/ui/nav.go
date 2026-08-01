@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/rivo/tview"
 )
@@ -165,4 +166,39 @@ func (ui *UI) renderNavRail() {
 // analyst who cannot see the destinations cannot learn them.
 func (ui *UI) navRailVisible() bool {
 	return ui.currentLayoutMode != LayoutCompact
+}
+
+// destinationCommands renders the navigation model as command-palette entries.
+//
+// Home is included: it is not on the numbered list, so the palette is the only
+// place it can be discovered by name.
+func (ui *UI) destinationCommands() []CommandItem {
+	all := append([]destination{homeDestination()}, destinations()...)
+
+	out := make([]CommandItem, 0, len(all))
+	for _, d := range all {
+		d := d
+		shortcut := "Esc"
+		if d.key != 0 {
+			shortcut = string(d.key)
+		}
+		out = append(out, CommandItem{
+			Name:        "go " + strings.ToLower(d.name),
+			Shortcut:    shortcut,
+			Description: d.desc,
+			Action:      func() { ui.setDestination(d.id); d.open(ui) },
+		})
+	}
+	return out
+}
+
+// navKeyReference renders the navigation model for the help screen, so the key
+// reference documents exactly what the keys do.
+func (ui *UI) navKeyReference() string {
+	var b strings.Builder
+	for _, d := range destinations() {
+		fmt.Fprintf(&b, "  %c        %s — %s\n", d.key, d.name, d.desc)
+	}
+	fmt.Fprintf(&b, "  Esc      Home — %s\n", homeDestination().desc)
+	return b.String()
 }

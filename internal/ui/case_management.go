@@ -472,12 +472,15 @@ func (cm *CaseManagement) setupKeybindings() {
 				// Global hotkey: Shift+L opens LLM Settings anywhere in Case Management
 				cm.showLLMSettingsModal()
 				return nil
-			case '1', '2', '3', '4', '5', '6', '7':
-				// One key per tab, indexed off caseTabNames so adding a tab
-				// cannot leave a key pointing at the wrong page.
-				if idx := int(event.Rune() - '1'); idx >= 0 && idx < len(caseTabNames) {
-					cm.switchTab(idx)
-				}
+			case '[':
+				// Tabs move with brackets, not digits. Digits 1-5 are reserved
+				// globally for destinations, so a case tab bound to '3' meant
+				// pressing 3 inside a case did something different from
+				// pressing 3 anywhere else — and the rail said otherwise.
+				cm.switchTab(wrapTab(cm.activeTab - 1))
+				return nil
+			case ']':
+				cm.switchTab(wrapTab(cm.activeTab + 1))
 				return nil
 			case 'p', 'P':
 				// Allow pin on Timeline tab
@@ -1776,6 +1779,15 @@ func (cm *CaseManagement) renderTabBar() {
 	}
 
 	cm.tabBar.SetText(topLine.String() + "\n" + underline.String())
+}
+
+// wrapTab keeps a tab index inside the tab list, wrapping at both ends.
+func wrapTab(idx int) int {
+	n := len(caseTabNames)
+	if n == 0 {
+		return 0
+	}
+	return ((idx % n) + n) % n
 }
 
 func (cm *CaseManagement) switchTab(idx int) {

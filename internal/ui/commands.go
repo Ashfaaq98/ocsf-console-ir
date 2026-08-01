@@ -17,16 +17,15 @@ type CommandItem struct {
 
 // showCommandPalette opens a fuzzy modal command palette.
 func (ui *UI) showCommandPalette() {
-	commands := []CommandItem{
-		{Name: "go triage", Shortcut: "1", Description: "Switch to Findings Triage Queue", Action: func() { ui.jumpToFindings() }},
-		{Name: "go events", Shortcut: "2", Description: "Switch to All Corroborating Events", Action: func() { ui.switchToAllEvents() }},
-		{Name: "go cases", Shortcut: "3", Description: "Switch to Case Management Briefing Room", Action: func() { ui.switchToCases() }},
-		{Name: "go indicators", Shortcut: "4", Description: "View Aggregated Observable Indicators", Action: func() { ui.switchToIndicators() }},
-		{Name: "go reports", Shortcut: "5", Description: "View Reports & Exports", Action: func() { ui.switchToReports() }},
-		{Name: "new case", Shortcut: "c", Description: "Create a new investigation case", Action: func() { ui.showCreateCaseModal() }},
-		{Name: "change theme", Shortcut: "t", Description: "Cycle color theme (dark/midnight/gruvbox/light)", Action: func() { ui.cycleTheme() }},
-		{Name: "show help", Shortcut: "?", Description: "Display keyboard shortcuts help", Action: func() { ui.showHelpModal() }},
-	}
+	// Destinations come from the table in nav.go rather than being listed
+	// again here. They were listed again here, and the copies drifted: the
+	// palette offered "go triage" for a key the rail labelled ALL EVENTS.
+	commands := ui.destinationCommands()
+	commands = append(commands,
+		CommandItem{Name: "new case", Shortcut: "c", Description: "Create a new investigation case", Action: func() { ui.showCreateCaseModal() }},
+		CommandItem{Name: "change theme", Shortcut: "t", Description: "Cycle the colour theme", Action: func() { ui.cycleTheme() }},
+		CommandItem{Name: "show help", Shortcut: "?", Description: "Display keyboard shortcuts help", Action: func() { ui.showHelpModal() }},
+	)
 
 	input := tview.NewInputField().
 		SetLabel(" : ").
