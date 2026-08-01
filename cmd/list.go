@@ -12,7 +12,10 @@ import (
 
 // listCmd represents the list command
 var listCmd = &cobra.Command{
-	Use:   "list [findings|cases|events]",
+	Use: "list [findings|cases|events]",
+	// Exactly what runList reads. A second positional used to be accepted and
+	// then ignored, so `console-ir list cases events` silently listed cases.
+	Args:  cobra.MaximumNArgs(1),
 	Short: "List findings, cases and events",
 	Long: `List findings, cases and events from the database in plain text.
 

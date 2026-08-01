@@ -21,7 +21,10 @@ var (
 
 // resetCmd represents the reset command
 var resetCmd = &cobra.Command{
-	Use:   "reset",
+	Use: "reset",
+	// Takes no positionals; without this a stray word is accepted and ignored,
+	// so a mistyped flag runs the command instead of reporting the mistake.
+	Args:  cobra.NoArgs,
 	Short: "Reset Redis data and/or database",
 	Long: `Reset command clears Redis data and/or SQLite database.
 
