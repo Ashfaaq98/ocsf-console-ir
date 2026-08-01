@@ -116,7 +116,14 @@ func badge(kind BadgeKind, label string, theme Theme) string {
 		color = theme.TagTextPrimary
 	}
 
-	return fmt.Sprintf("[%s][%s][-:-:-]", color, label)
+	// No decorative brackets around the label.
+	//
+	// This read `[%s][%s][-:-:-]`, so a status of OPEN produced "[colour][OPEN]"
+	// — and tview reads "[OPEN]" as a colour tag and swallows it. Every status,
+	// verdict, source and count badge in the application rendered as an empty
+	// string. formatSeverityBadge never had the problem because it puts a glyph
+	// before the label instead of brackets around it.
+	return fmt.Sprintf("[%s]%s[-:-:-]", color, strings.ToUpper(label))
 }
 
 // metric renders a compact dashboard metric card string.

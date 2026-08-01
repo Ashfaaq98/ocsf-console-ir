@@ -155,13 +155,20 @@ const (
 // labels, its bounds and its number keys all derive from this. The bounds used
 // to be a hardcoded 5 in four different places, which is what made adding a tab
 // a landmine.
+//
+// "Briefing" rather than "Overview": the tab is what you would say to a
+// colleague, and naming it for that sets the bar for its content. "Events"
+// stays "Events" — OCSF already uses "evidence" for finding.evidences, which
+// are artifacts, so a tab of that name would mean two things one keystroke
+// apart. "Indicators" rather than "Artifacts/IOCs", because a slash is two
+// names and the first half now collides with those artifacts.
 var caseTabNames = []string{
-	"Overview", "Findings", "Events", "Timeline", "Artifacts/IOCs", "Notes", "Activity Log",
+	"Briefing", "Findings", "Events", "Timeline", "Indicators", "Notes", "Activity",
 }
 
 // Tab indices, named so switches read as intent rather than arithmetic.
 const (
-	tabOverview = iota
+	tabBriefing = iota
 	tabFindings
 	tabEvents
 	tabTimeline
@@ -175,7 +182,7 @@ var caseTabPages = []struct {
 	page  string
 	focus int
 }{
-	tabOverview: {"overview", FocusOverview},
+	tabBriefing: {"briefing", FocusOverview},
 	tabFindings: {"findings", FocusFindings},
 	tabEvents:   {"events", FocusEvents},
 	tabTimeline: {"timeline", FocusTimeline},
@@ -298,9 +305,13 @@ func (cm *CaseManagement) setupLayout() {
 
 	// Two-row metadata (increase height), then main content, then status bar
 	cm.layout = tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(cm.metadataBar, 4, 0, false).
+		AddItem(cm.metadataBar, caseHeaderRows, 0, false).
 		AddItem(main, 0, 1, true).
 		AddItem(cm.statusBar, 1, 0, false)
+
+	// Again, now that the layout exists: the header sizes itself, and the first
+	// call ran before there was anything to resize.
+	cm.updateMetadataBar()
 
 	cm.applyTheme()
 	cm.updateFocusStyles()
@@ -724,25 +735,37 @@ func (cm *CaseManagement) updateMetadataBar() {
 		verdict = "—"
 	}
 
-	// Findings are what the case is about; events are the evidence supporting
-	// it. Showing one combined total hides that distinction.
-	line1 := fmt.Sprintf(
-		"[%s]Case ID:[-] [%s]%s[-]  [%s]Title:[-] [%s]%s[-]  [%s]Severity:[-] [%s]%s[-]  [%s]Owner:[-] [%s]%s[-]  [%s]Findings:[-] [%s]%d[-]  [%s]Evidence:[-] [%s]%d[-]  [%s]Verdict:[-] [%s]%s[-]  [%s]Created:[-] [%s]%s[-]",
-		lbl, val, shortID,
-		lbl, val, cm.caseData.Title,
-		lbl, val, cm.caseData.Severity,
-		lbl, val, owner,
-		lbl, val, cm.caseData.FindingCount,
-		lbl, val, cm.caseData.EventCount,
-		lbl, val, verdict,
-		lbl, val, cm.caseData.CreatedAt.Format("2006-01-02 15:04"),
-	)
-	// Hotkeys row: single color (accent) for all hints; exact phrasing requested
-	line2 := fmt.Sprintf("[%s]Status:[-] [%s]%s[-]   [%s]s: Change Status  E: Export   Tab: Toggle Panes  1-6: switch tabs   L: LLM Settings[-]",
-		lbl, val, strings.ToUpper(cm.caseData.Status),
-		acc,
-	)
-	cm.metadataBar.SetText(line1 + "\n" + line2)
+	// Two rows of fact, and a third only when there is something to do about
+	// it. The third row used to be a list of hotkeys, two of which named keys
+	// that never worked — digits are globally reserved and never reach a case.
+	line1 := fmt.Sprintf(" [%s]CASE[-]  ·  [%s:-:b]%s[-:-:-]        %s  %s",
+		lbl, acc, tview.Escape(cm.caseData.Title),
+		formatSeverityBadge(cm.caseData.Severity, cm.theme),
+		formatCaseStatus(cm.caseData.Status, cm.theme))
+
+	line2 := fmt.Sprintf(" [%s]owner[-] [%s]%s[-] · [%s]%s old[-] · [%s]%d findings[-] · [%s]%d evidence[-] · [%s]verdict %s[-]",
+		lbl, val, tview.Escape(owner),
+		val, renderRelativeTime(cm.caseData.CreatedAt),
+		val, cm.caseData.FindingCount,
+		val, cm.caseData.EventCount,
+		val, tview.Escape(verdict))
+
+	line3 := cm.nextActionPrompt()
+
+	text := line1 + "\n" + line2
+	rows := caseHeaderRows
+	if line3 != "" {
+		text += "\n" + line3
+		rows++
+	}
+	cm.metadataBar.SetText(text)
+
+	// The header grows by a row when the prompt is present. Fixed at four, the
+	// prompt was written and then clipped by the border — present in the widget
+	// and invisible on screen.
+	if cm.layout != nil {
+		cm.layout.ResizeItem(cm.metadataBar, rows, 0)
+	}
 }
 
 func (cm *CaseManagement) updateEventsTable() {
@@ -1753,7 +1776,7 @@ func (cm *CaseManagement) buildTabs() {
 	cm.activityView.SetBorder(true).SetTitle(" Activity Log ").SetTitleAlign(tview.AlignLeft)
 
 	// Add pages in required order: overview, events, timeline, iocs, notes, activity
-	cm.tabsPages.AddPage("overview", cm.overviewView, true, true)
+	cm.tabsPages.AddPage("briefing", cm.overviewView, true, true)
 	cm.tabsPages.AddPage("findings", cm.findingsTable, true, false)
 	cm.tabsPages.AddPage("events", cm.eventsTable, true, false)
 	cm.tabsPages.AddPage("timeline", cm.timelineView, true, false)
@@ -1763,7 +1786,7 @@ func (cm *CaseManagement) buildTabs() {
 
 	// Ensure a valid active tab, default to Overview
 	if cm.activeTab < 0 || cm.activeTab >= len(caseTabNames) {
-		cm.activeTab = tabOverview
+		cm.activeTab = tabBriefing
 	}
 	cm.tabsPages.SwitchToPage(caseTabPages[cm.activeTab].page)
 
@@ -4239,4 +4262,42 @@ func (cm *CaseManagement) toggleCaseCopilot() {
 		cm.app.SetFocus(cm.copilotInput)
 	}
 	cm.updateStatus("Copilot open — [ closes it")
+}
+
+// caseHeaderRows is the header's height with its border and two rows of fact.
+// It grows by one when the next-action prompt has something to say.
+const caseHeaderRows = 4
+
+// staleCaseAfter is how long a case may go without activity before the header
+// says so.
+const staleCaseAfter = 24 * time.Hour
+
+// nextActionPrompt returns the one thing to do about a case that is drifting,
+// or empty when there is nothing to say.
+//
+// One prompt, not a list: a header that always carries advice is a header
+// nobody reads. It appears when a case has no owner, no note, or has gone
+// quiet — the three states in which a case is quietly rotting rather than
+// being worked.
+func (cm *CaseManagement) nextActionPrompt() string {
+	acc, muted := cm.theme.TagAccent, cm.theme.TagMuted
+
+	if strings.TrimSpace(cm.caseData.AssignedTo) == "" {
+		return fmt.Sprintf(" [%s]▸ NEXT:[-] [%s]no owner — press o to take it[-]", acc, muted)
+	}
+
+	var lastNote time.Time
+	for _, n := range cm.notes {
+		if n.CreatedAt.After(lastNote) {
+			lastNote = n.CreatedAt
+		}
+	}
+	if lastNote.IsZero() {
+		return fmt.Sprintf(" [%s]▸ NEXT:[-] [%s]no note yet — press n to record where this stands[-]", acc, muted)
+	}
+	if time.Since(lastNote) > staleCaseAfter {
+		return fmt.Sprintf(" [%s]▸ NEXT:[-] [%s]nothing recorded in %s — press n to say where this stands[-]",
+			acc, muted, renderRelativeTime(lastNote))
+	}
+	return ""
 }
