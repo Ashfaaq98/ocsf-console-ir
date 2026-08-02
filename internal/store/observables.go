@@ -497,3 +497,72 @@ func (s *Store) CountEventsByObservable(ctx context.Context, typeID int, value s
 	}
 	return total, nil
 }
+
+// CaseIndicator is one observable aggregated across everything a case holds.
+type CaseIndicator struct {
+	TypeID int
+	Type   string
+	Value  string
+	// Source is "asserted" when any sighting came from the producer, and
+	// "derived" only when every sighting was inferred here. An analyst defends
+	// those two differently, so the distinction survives aggregation.
+	Source    string
+	Sightings int
+	FirstSeen time.Time
+	LastSeen  time.Time
+}
+
+// GetCaseIndicators aggregates a case's observables by identity.
+//
+// One query over the (type_id, value) index rather than a text scan of the
+// records: the same address seen forty times is one indicator with forty
+// sightings, and finding that out should not mean reading forty rows.
+//
+// MIN(source) picks "asserted" over "derived" alphabetically, which is the
+// answer we want: if any sighting came from the producer, the indicator is
+// asserted.
+func (s *Store) GetCaseIndicators(ctx context.Context, caseID string) ([]CaseIndicator, error) {
+	const q = `
+		SELECT o.type_id,
+		       MIN(o.type),
+		       o.value,
+		       MIN(o.source),
+		       COUNT(*),
+		       MIN(COALESCE(e.timestamp, o.created_at)),
+		       MAX(COALESCE(e.timestamp, o.created_at))
+		FROM observables o
+		JOIN case_members m
+		  ON (m.member_type = 'event'   AND m.member_id = o.event_id)
+		  OR (m.member_type = 'finding' AND m.member_id = o.finding_id)
+		LEFT JOIN events e ON e.id = o.event_id
+		WHERE m.case_id = ?
+		GROUP BY o.type_id, o.value
+		ORDER BY COUNT(*) DESC, o.value`
+
+	rows, err := s.db.QueryContext(ctx, q, caseID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to aggregate case indicators: %w", err)
+	}
+	defer rows.Close()
+
+	out := []CaseIndicator{}
+	for rows.Next() {
+		var (
+			ci              CaseIndicator
+			typ, src        sql.NullString
+			firstTS, lastTS sql.NullInt64
+		)
+		if err := rows.Scan(&ci.TypeID, &typ, &ci.Value, &src, &ci.Sightings, &firstTS, &lastTS); err != nil {
+			return nil, fmt.Errorf("failed to scan case indicator: %w", err)
+		}
+		ci.Type, ci.Source = typ.String, src.String
+		if firstTS.Valid {
+			ci.FirstSeen = time.Unix(firstTS.Int64, 0)
+		}
+		if lastTS.Valid {
+			ci.LastSeen = time.Unix(lastTS.Int64, 0)
+		}
+		out = append(out, ci)
+	}
+	return out, rows.Err()
+}

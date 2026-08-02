@@ -382,7 +382,10 @@ func (ui *UI) showFindingDetails() {
 
 	// Evidence artifacts: what the detection actually saw.
 	if ev := f.Evidences(); len(ev) > 0 {
-		fmt.Fprintf(&b, "\n[%s]Evidence (%d)[-]\n", ui.theme.TagAccent, len(ev))
+		// OCSF's own display name for finding_info.evidences. "Evidence" alone
+		// collides with the case tab one keystroke away, which holds events —
+		// these are artifacts.
+		fmt.Fprintf(&b, "\n[%s]Evidence Artifacts (%d)[-]\n", ui.theme.TagAccent, len(ev))
 		for _, e := range ev {
 			label := e.Name
 			if label == "" {

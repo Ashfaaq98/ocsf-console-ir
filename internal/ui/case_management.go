@@ -56,11 +56,18 @@ type CaseManagement struct {
 	notes      []store.Note
 
 	// UI Layout components
-	layout       *tview.Flex
-	metadataBar  *tview.TextView
-	eventsTable  *tview.Table
-	timelineView *tview.TextView
-	copilotPanel *tview.Flex
+	layout      *tview.Flex
+	metadataBar *tview.TextView
+	eventsTable *tview.Table
+	// timelineView is a table rather than a text pane: record text carries
+	// brackets that a multi-line TextView cannot escape without drifting, and a
+	// cluster needs a cursor on it before Enter can expand it.
+	timelineView *tview.Table
+	// expandedTimeline is the open cluster's label, and timelineRows maps a row
+	// back to the cluster whose header sits on it.
+	expandedTimeline string
+	timelineRows     map[int]string
+	copilotPanel     *tview.Flex
 	// caseBody holds the tabs and, when open, the copilot drawer beside them.
 	caseBody          *tview.Flex
 	copilotOpen       bool
@@ -70,7 +77,17 @@ type CaseManagement struct {
 	copilotInput      *tview.InputField
 	notesPanel        *tview.Flex
 	notesPages        *tview.Pages
-	notesViewer       *tview.TextView
+	// notesViewer is the editor; notesTable is the log. A decision log is a
+	// list of decisions, not a scroll of prose.
+	notesViewer   *tview.TextView
+	notesTable    *tview.Table
+	activityTable *tview.Table
+	// caseIndicators is what the Indicators tab last drew, so a keypress can
+	// resolve a row back to the indicator it stands for.
+	caseIndicators []store.CaseIndicator
+	// pendingWidthShift is the drawer's columns during the one frame between
+	// the layout changing and tview recomputing the widget rects.
+	pendingWidthShift int
 	notesEditor       *tview.TextArea
 	activityLog       *tview.TextView
 	statusBar         *tview.TextView
@@ -80,7 +97,6 @@ type CaseManagement struct {
 	// Additional tab views
 	overviewView *tview.TextView
 	iocsTable    *tview.Table
-	activityView *tview.TextView
 
 	// Manual IOC selection state and mapping (for add/delete UX)
 	selectedManualIOCIDs map[string]bool // note.ID used as manual IOC id
@@ -247,15 +263,12 @@ func (cm *CaseManagement) setupLayout() {
 	cm.setupCaseFindingsTable()
 
 	// Timeline view (center)
-	cm.timelineView = tview.NewTextView().
-		SetDynamicColors(true).
-		SetScrollable(true).
-		SetWrap(true)
-	cm.timelineView.SetBorder(true).SetTitle(" Timeline & Evidence ").SetTitleAlign(tview.AlignLeft)
+	cm.timelineView = tview.NewTable().SetSelectable(true, false)
+	cm.timelineView.SetBorder(true).SetTitle(" TIMELINE ").SetTitleAlign(tview.AlignLeft)
 	cm.timelineView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyEnter:
-			cm.toggleTimelineCard(cm.selectedEventIndex)
+			cm.toggleTimelineCluster()
 			return nil
 		case tcell.KeyTab:
 			// Tab moves between the case's tabs, which is what §9 lists first
@@ -419,12 +432,9 @@ func (cm *CaseManagement) setupCopilotPanel() {
 // setupNotesPanel creates a two-mode Notes panel (View/TextView vs Edit/TextArea) within a Pages container.
 func (cm *CaseManagement) setupNotesPanel() {
 	// Viewer (read-only, scrollable)
-	cm.notesViewer = tview.NewTextView().
-		SetDynamicColors(true).
-		SetScrollable(true).
-		SetWrap(true)
-	cm.notesViewer.SetBorder(true).SetTitle(" Notes ").SetTitleAlign(tview.AlignLeft)
-	cm.notesViewer.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+	cm.notesTable = tview.NewTable().SetSelectable(true, false)
+	cm.notesTable.SetBorder(true).SetTitle(" NOTES ").SetTitleAlign(tview.AlignLeft)
+	cm.notesTable.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyTab:
 			// Tab moves between the case's tabs, which is what §9 lists first
@@ -440,6 +450,9 @@ func (cm *CaseManagement) setupNotesPanel() {
 			case 'n', 'N':
 				// Start a new note (switch to editor)
 				cm.switchToNotesEdit()
+				return nil
+			case 't', 'T':
+				cm.showNoteTemplates()
 				return nil
 			}
 		}
@@ -457,7 +470,7 @@ func (cm *CaseManagement) setupNotesPanel() {
 
 	// Pages container
 	cm.notesPages = tview.NewPages()
-	cm.notesPages.AddPage("view", cm.notesViewer, true, true)
+	cm.notesPages.AddPage("view", cm.notesTable, true, true)
 	cm.notesPages.AddPage("edit", cm.notesEditor, true, false)
 }
 
@@ -700,6 +713,11 @@ func (cm *CaseManagement) loadCaseData() {
 			cm.updateNotesText()
 			cm.renderBriefing()
 			cm.renderActivityLog()
+			cm.renderIOCs()
+			// The header's prompt reads the notes, which have only just
+			// arrived; without this it reports "no note yet" on a case with
+			// notes.
+			cm.updateMetadataBar()
 			// IOCs render will be computed lazily/placeholder
 			cm.renderIOCs()
 
@@ -845,82 +863,6 @@ func (cm *CaseManagement) updateEventsTable() {
 	}
 }
 
-func (cm *CaseManagement) updateTimelineView() {
-	if len(cm.events) == 0 {
-		cm.timelineView.SetText("No events to display")
-		return
-	}
-
-	// Render in chronological order (oldest -> newest) to enhance investigative flow.
-	evs := make([]store.Event, len(cm.events))
-	copy(evs, cm.events)
-	sort.Slice(evs, func(i, j int) bool {
-		return evs[i].Timestamp.Before(evs[j].Timestamp)
-	})
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("[%s]Timeline & Evidence[-]\n\n", cm.theme.TagWarning))
-
-	for i, event := range evs {
-		isPinned := cm.pinnedEvents[event.ID]
-		pinIndicator := ""
-		if isPinned {
-			pinIndicator = fmt.Sprintf(" [%s]📌[-]", cm.theme.TagAccent)
-		}
-
-		// Header line: time, event type (severity color), pin
-		sb.WriteString(fmt.Sprintf(
-			"[%s]%s[-] [%s]%s[-]%s\n",
-			cm.theme.TagAccent,
-			event.Timestamp.Format("2006-01-02 15:04:05"),
-			cm.severityTag(event.Severity),
-			strings.ToUpper(event.EventType),
-			pinIndicator,
-		))
-
-		// Message and host line
-		sb.WriteString(fmt.Sprintf("[%s]%s[-] on [%s]%s[-]\n",
-			cm.theme.TagTextPrimary, event.Message,
-			cm.theme.TagSuccess, event.Host,
-		))
-
-		// Show additional details for pinned or recently added tail
-		if isPinned || cm.timelineExpanded[i] || i >= len(evs)-5 {
-			if event.SrcIP != "" {
-				sb.WriteString(fmt.Sprintf("  Source: [%s]%s:%d[-]\n", cm.theme.TagAccent, event.SrcIP, event.SrcPort))
-			}
-			if event.DstIP != "" {
-				sb.WriteString(fmt.Sprintf("  Destination: [%s]%s:%d[-]\n", cm.theme.TagAccent, event.DstIP, event.DstPort))
-			}
-			if event.ProcessName != "" {
-				sb.WriteString(fmt.Sprintf("  Process: [%s]%s[-]\n", cm.theme.TagWarning, event.ProcessName))
-			}
-			if event.FileName != "" {
-				sb.WriteString(fmt.Sprintf("  File: [%s]%s[-]\n", cm.theme.TagAccent, event.FileName))
-			}
-		}
-
-		sb.WriteString("\n")
-	}
-
-	cm.timelineView.SetText(sb.String())
-}
-
-// Toggle expand/collapse for a timeline card by index.
-func (cm *CaseManagement) toggleTimelineCard(idx int) {
-	if len(cm.events) == 0 {
-		return
-	}
-	if idx < 0 || idx >= len(cm.events) {
-		idx = 0
-	}
-	if cm.timelineExpanded == nil {
-		cm.timelineExpanded = make(map[int]bool)
-	}
-	cm.timelineExpanded[idx] = !cm.timelineExpanded[idx]
-	cm.updateTimelineView()
-}
-
 // Events filter modal and filtering logic (time, type, severity).
 func (cm *CaseManagement) showEventsFilterModal() {
 	form := tview.NewForm()
@@ -1023,32 +965,6 @@ func (cm *CaseManagement) clearEventFilters() {
 	cm.updateTimelineView()
 	cm.updateStatus("Cleared event filters")
 }
-
-func (cm *CaseManagement) updateNotesText() {
-	if cm.notesViewer == nil {
-		return
-	}
-	if len(cm.notes) == 0 {
-		cm.notesViewer.SetText("")
-		return
-	}
-
-	var content strings.Builder
-	for _, note := range cm.notes {
-		// Exclude LLM summary notes from the Notes panel (summary is shown only in Overview)
-		if strings.EqualFold(note.LinkedType, "summary") {
-			continue
-		}
-		content.WriteString(fmt.Sprintf("--- %s by %s ---\n",
-			note.CreatedAt.Format("2006-01-02 15:04"), note.Author))
-		content.WriteString(note.Content)
-		content.WriteString("\n\n")
-	}
-
-	cm.notesViewer.SetText(content.String())
-}
-
-func (cm *CaseManagement) updateActivityLog() {}
 
 // showEventDetailsModal displays plugin-wise enrichments for the given event in a themable, scrollable modal.
 func (cm *CaseManagement) showEventDetailsModal(ev store.Event) {
@@ -1163,6 +1079,20 @@ func (cm *CaseManagement) showEventDetailsModal(ev store.Event) {
 }
 
 // Overview rendering (metadata, quick stats, pinned highlights)
+// briefingWidth is the room the briefing has to lay out in.
+//
+// The widget's own rect is one frame stale immediately after the drawer opens
+// or closes — tview recomputes it during Draw — so the pending change is
+// applied here. Without it the two-column layout is chosen for a width the
+// briefing no longer has, and every right-hand column is clipped mid-word.
+func (cm *CaseManagement) briefingWidth() int {
+	_, _, width, _ := cm.overviewView.GetInnerRect()
+	if width <= 0 {
+		return briefingTwoColumnWidth
+	}
+	return width + cm.pendingWidthShift
+}
+
 // renderBriefing paints the Briefing tab.
 //
 // The same renderer the Cases screen uses, so the two cannot disagree about a
@@ -1186,171 +1116,10 @@ func (cm *CaseManagement) renderBriefing() {
 	}
 	d.Brief = brief
 
-	_, _, width, _ := cm.overviewView.GetInnerRect()
-	if width <= 0 {
-		width = briefingTwoColumnWidth
-	}
-	cm.overviewView.SetText(renderBriefing(d, cm.theme, width))
+	cm.overviewView.SetText(renderBriefing(d, cm.theme, cm.briefingWidth()))
 }
 
 // IOC table rendering with extraction and grouping
-func (cm *CaseManagement) renderIOCs() {
-	if cm.iocsTable == nil {
-		return
-	}
-	// Clear existing rows
-	for row := cm.iocsTable.GetRowCount() - 1; row >= 0; row-- {
-		cm.iocsTable.RemoveRow(row)
-	}
-	// Reset mapping for manual IOC selections
-	cm.iocRowToManualID = map[int]string{}
-
-	// Header: Sel, Type, Value, Count, First Seen, Last Seen, Source
-	headers := []string{"Sel", "Type", "Value", "Count", "First Seen", "Last Seen", "Source"}
-	for c, h := range headers {
-		cell := tview.NewTableCell(h).
-			SetTextColor(cm.theme.TableHeader).
-			SetBackgroundColor(cm.theme.TableHeaderBg).
-			SetAttributes(tcell.AttrBold).
-			SetSelectable(false)
-		cm.iocsTable.SetCell(0, c, cell)
-	}
-
-	// Build auto-extracted IOCs
-	cm.extractIOCs()
-	type orderedItem struct {
-		typ  string
-		item IOCItem
-	}
-	var autos []orderedItem
-	for _, typ := range iocBuckets {
-		for _, it := range cm.iocIndex[typ] {
-			autos = append(autos, orderedItem{typ: typ, item: it})
-		}
-	}
-	// Sort auto by type then count desc then value asc
-	sort.Slice(autos, func(i, j int) bool {
-		if autos[i].typ == autos[j].typ {
-			if autos[i].item.Count == autos[j].item.Count {
-				return autos[i].item.Value < autos[j].item.Value
-			}
-			return autos[i].item.Count > autos[j].item.Count
-		}
-		return autos[i].typ < autos[j].typ
-	})
-
-	// Build manual IOCs from notes where LinkedType=="ioc"
-	type manualIOC struct {
-		noteID string
-		typ    string
-		value  string
-	}
-	var manuals []manualIOC
-	for _, n := range cm.notes {
-		if strings.EqualFold(n.LinkedType, "ioc") && n.LinkedID != "" {
-			mType := "unknown"
-			// Content convention: "ioc_type:<type>" (best-effort)
-			if strings.HasPrefix(strings.ToLower(n.Content), "ioc_type:") {
-				mType = strings.TrimSpace(strings.ToLower(strings.TrimPrefix(strings.ToLower(n.Content), "ioc_type:")))
-			}
-			manuals = append(manuals, manualIOC{
-				noteID: n.ID,
-				typ:    mType,
-				value:  n.LinkedID,
-			})
-		}
-	}
-	// Sort manual by type then value asc
-	sort.Slice(manuals, func(i, j int) bool {
-		if manuals[i].typ == manuals[j].typ {
-			return manuals[i].value < manuals[j].value
-		}
-		return manuals[i].typ < manuals[j].typ
-	})
-
-	row := 1
-	// Render auto-extracted (non-selectable)
-	for _, a := range autos {
-		zebra := cm.theme.TableZebra1
-		if row%2 == 1 {
-			zebra = cm.theme.TableZebra2
-		}
-		selCell := tview.NewTableCell(" ").SetBackgroundColor(zebra) // not selectable
-		cm.iocsTable.SetCell(row, 0, selCell)
-
-		cells := []struct {
-			text  string
-			color tcell.Color
-		}{
-			{strings.ToUpper(a.typ), cm.theme.Accent},
-			{a.item.Value, cm.theme.TextPrimary},
-			{fmt.Sprintf("%d", a.item.Count), cm.theme.TextPrimary},
-			{a.item.First.Format("2006-01-02 15:04"), cm.theme.TextPrimary},
-			{a.item.Last.Format("2006-01-02 15:04"), cm.theme.TextPrimary},
-			{iocSourceLabel(a.item), iocSourceColor(cm.theme, a.item)},
-		}
-		for c, cell := range cells {
-			tc := tview.NewTableCell(cell.text).
-				SetTextColor(cell.color).
-				SetBackgroundColor(zebra)
-			cm.iocsTable.SetCell(row, c+1, tc)
-		}
-		row++
-	}
-
-	// Render manual IOCs (selectable via space)
-	for _, m := range manuals {
-		zebra := cm.theme.TableZebra1
-		if row%2 == 1 {
-			zebra = cm.theme.TableZebra2
-		}
-		// selection indicator
-		indicator := " "
-		if cm.selectedManualIOCIDs != nil && cm.selectedManualIOCIDs[m.noteID] {
-			indicator = "✓"
-		}
-		cm.iocRowToManualID[row] = m.noteID
-
-		cm.iocsTable.SetCell(row, 0, tview.NewTableCell(indicator).
-			SetTextColor(cm.theme.Accent).
-			SetBackgroundColor(zebra))
-
-		// No count/first/last available for manual entries (show "-")
-		cells := []struct {
-			text  string
-			color tcell.Color
-		}{
-			{strings.ToUpper(m.typ), cm.theme.Accent},
-			{m.value, cm.theme.TextPrimary},
-			{"-", cm.theme.TextPrimary},
-			{"-", cm.theme.TextPrimary},
-			{"-", cm.theme.TextPrimary},
-			{"manual", cm.theme.TextPrimary},
-		}
-		for c, cell := range cells {
-			tc := tview.NewTableCell(cell.text).
-				SetTextColor(cell.color).
-				SetBackgroundColor(zebra)
-			cm.iocsTable.SetCell(row, c+1, tc)
-		}
-		row++
-	}
-
-	if row == 1 {
-		// no data
-		bg := cm.theme.TableZebra1
-		msg := tview.NewTableCell("(none)").
-			SetTextColor(cm.theme.TextPrimary).
-			SetBackgroundColor(bg).
-			SetSelectable(false)
-		cm.iocsTable.SetCell(1, 0, msg)
-		for c := 1; c < len(headers); c++ {
-			cm.iocsTable.SetCell(1, c, tview.NewTableCell("").
-				SetBackgroundColor(bg).
-				SetSelectable(false))
-		}
-	}
-}
 
 // iocBuckets is the display order of indicator groups in the IOCs tab.
 var iocBuckets = []string{"ip", "domain", "url", "hash", "file", "process", "user", "email"}
@@ -1543,27 +1312,6 @@ func (cm *CaseManagement) scrapeIOCs(ev store.Event, add func(typ, val, evID str
 }
 
 // Activity Log rendering
-func (cm *CaseManagement) renderActivityLog() {
-	if cm.activityView == nil {
-		return
-	}
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("[%s]Activity Log[-]\n\n", cm.theme.TagWarning))
-	if len(cm.auditLog) == 0 {
-		sb.WriteString("  (no activity)\n")
-	} else {
-		// Show recent entries first (newest to oldest)
-		for _, a := range cm.auditLog {
-			// Enhanced formatting with action descriptions
-			actionDesc := cm.formatActionDescription(a.Action, a.Details)
-			sb.WriteString(fmt.Sprintf("  [%s]%s[-] [%s]%s[-] [%s]%s[-]\n",
-				cm.theme.TagMuted, a.Timestamp.Format("15:04:05"),
-				cm.theme.TagAccent, a.Actor,
-				cm.theme.TagTextPrimary, actionDesc))
-		}
-	}
-	cm.activityView.SetText(sb.String())
-}
 
 // formatActionDescription provides human-readable descriptions for audit actions
 func (cm *CaseManagement) formatActionDescription(action string, details map[string]interface{}) string {
@@ -1646,7 +1394,7 @@ func (cm *CaseManagement) buildTabs() {
 		SetBorders(false).
 		SetSelectable(true, false).
 		SetFixed(1, 0)
-	cm.iocsTable.SetBorder(true).SetTitle(" Artifacts / IOCs ").SetTitleAlign(tview.AlignLeft)
+	cm.iocsTable.SetBorder(true).SetTitle(" INDICATORS ").SetTitleAlign(tview.AlignLeft)
 	// IOC tab input capture: add ( + ), delete ( d ), toggle select (space), Tab to switch panes.
 	cm.iocsTable.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
@@ -1663,6 +1411,9 @@ func (cm *CaseManagement) buildTabs() {
 			switch event.Rune() {
 			case '+':
 				cm.showAddIOCModal()
+				return nil
+			case 'p', 'P':
+				cm.pivotSelectedIndicator()
 				return nil
 			case 'd':
 				cm.deleteSelectedManualIOCs()
@@ -1690,11 +1441,12 @@ func (cm *CaseManagement) buildTabs() {
 		}
 		return event
 	})
-	// Keep selection for keyboard navigation.
-	cm.iocsTable.SetSelectedFunc(func(row, col int) {})
+	// Enter pivots, as it does on Events: "where else has this appeared?" is
+	// answered the same way wherever it is asked.
+	cm.iocsTable.SetSelectedFunc(func(row, col int) { cm.pivotSelectedIndicator() })
 
-	cm.activityView = tview.NewTextView().SetDynamicColors(true).SetScrollable(true)
-	cm.activityView.SetBorder(true).SetTitle(" Activity Log ").SetTitleAlign(tview.AlignLeft)
+	cm.activityTable = tview.NewTable().SetSelectable(true, false).SetFixed(1, 0)
+	cm.activityTable.SetBorder(true).SetTitle(" ACTIVITY ").SetTitleAlign(tview.AlignLeft)
 
 	// Add pages in required order: overview, events, timeline, iocs, notes, activity
 	cm.tabsPages.AddPage("briefing", cm.overviewView, true, true)
@@ -1703,7 +1455,7 @@ func (cm *CaseManagement) buildTabs() {
 	cm.tabsPages.AddPage("timeline", cm.timelineView, true, false)
 	cm.tabsPages.AddPage("iocs", cm.iocsTable, true, false)
 	cm.tabsPages.AddPage("notes", cm.notesPages, true, false)
-	cm.tabsPages.AddPage("activity", cm.activityView, true, false)
+	cm.tabsPages.AddPage("activity", cm.activityTable, true, false)
 
 	// Ensure a valid active tab, default to Overview
 	if cm.activeTab < 0 || cm.activeTab >= len(caseTabNames) {
@@ -1721,6 +1473,20 @@ func (cm *CaseManagement) buildTabs() {
 	cm.renderTabBar()
 }
 
+// caseTabStripWidth is the columns the full framed strip needs.
+func caseTabStripWidth(names []string, active int) int {
+	w := 0
+	for i, name := range names {
+		// " ╭─ name ─╮ " and " ┌ name ┐ " are 9 and 7 columns of frame.
+		if i == active {
+			w += len([]rune(name)) + 9
+		} else {
+			w += len([]rune(name)) + 7
+		}
+	}
+	return w
+}
+
 func (cm *CaseManagement) renderTabBar() {
 	// Browser-style framed tabs using Unicode line characters.
 	// Active tab appears "brought forward" by leaving an underline gap beneath it.
@@ -1728,6 +1494,17 @@ func (cm *CaseManagement) renderTabBar() {
 	active := cm.activeTab
 	if active < 0 || active >= len(names) {
 		active = 0
+	}
+
+	// The full strip needs about 100 columns. Below that it would truncate
+	// mid-word and drop the last tabs off the end entirely — a bar that hides
+	// where you can go is worse than one that admits it does not fit. So the
+	// narrow form states position and how to move instead.
+	if _, _, barWidth, _ := cm.tabBar.GetInnerRect(); barWidth > 0 && barWidth < caseTabStripWidth(names, active) {
+		cm.tabBar.SetText(fmt.Sprintf(
+			" [::b]%s[-]  [%s]%d/%d · Tab next · Shift+Tab back[-]",
+			names[active], cm.theme.TagMuted, active+1, len(names)))
+		return
 	}
 
 	// Build raw top pieces (no color tags) to compute visible widths.
@@ -1894,8 +1671,8 @@ func (cm *CaseManagement) switchToNotesView() {
 	if cm.notesPages != nil {
 		cm.notesPages.SwitchToPage("view")
 	}
-	if cm.notesViewer != nil {
-		cm.app.SetFocus(cm.notesViewer)
+	if cm.notesTable != nil {
+		cm.app.SetFocus(cm.notesTable)
 	}
 	cm.setStatusDirect(cm.notesViewStatusText())
 	cm.updateFocusStyles()
@@ -2615,15 +2392,15 @@ func (cm *CaseManagement) setFocusPane(pane int) {
 			// Edit mode status (themed)
 			cm.setStatusDirect(cm.notesEditStatusText())
 		} else {
-			if cm.notesViewer != nil {
-				cm.app.SetFocus(cm.notesViewer)
+			if cm.notesTable != nil {
+				cm.app.SetFocus(cm.notesTable)
 			}
 			// View mode status (themed)
 			cm.setStatusDirect(cm.notesViewStatusText())
 		}
 	case FocusActivity:
-		if cm.activityView != nil {
-			cm.app.SetFocus(cm.activityView)
+		if cm.activityTable != nil {
+			cm.app.SetFocus(cm.activityTable)
 		}
 		cm.updateStatus("Focus: Activity - r=refresh")
 	case FocusCopilot:
@@ -2679,7 +2456,8 @@ func (cm *CaseManagement) applyTheme() {
 	}
 
 	cm.timelineView.SetBackgroundColor(cm.theme.Surface)
-	cm.timelineView.SetTextColor(cm.theme.TextPrimary)
+	cm.timelineView.SetSelectedStyle(tcell.StyleDefault.
+		Background(cm.theme.SelectionBg).Foreground(cm.theme.SelectionFg))
 
 	cm.copilotPanel.SetBackgroundColor(cm.theme.Surface)
 
@@ -2698,9 +2476,10 @@ func (cm *CaseManagement) applyTheme() {
 		cm.copilotEstimate.SetTextColor(cm.theme.TextPrimary)
 	}
 
-	if cm.notesViewer != nil {
-		cm.notesViewer.SetBackgroundColor(cm.theme.Surface)
-		cm.notesViewer.SetTextColor(cm.theme.TextPrimary)
+	if cm.notesTable != nil {
+		cm.notesTable.SetBackgroundColor(cm.theme.Surface)
+		cm.notesTable.SetSelectedStyle(tcell.StyleDefault.
+			Background(cm.theme.SelectionBg).Foreground(cm.theme.SelectionFg))
 	}
 	if cm.notesEditor != nil {
 		cm.notesEditor.SetBackgroundColor(cm.theme.Surface)
@@ -2722,8 +2501,8 @@ func (cm *CaseManagement) applyTheme() {
 	}
 	cm.timelineView.SetBorderColor(cm.theme.Border)
 	cm.copilotPanel.SetBorderColor(cm.theme.Border)
-	if cm.notesViewer != nil {
-		cm.notesViewer.SetBorderColor(cm.theme.Border)
+	if cm.notesTable != nil {
+		cm.notesTable.SetBorderColor(cm.theme.Border)
 	}
 	if cm.notesEditor != nil {
 		cm.notesEditor.SetBorderColor(cm.theme.Border)
@@ -2734,8 +2513,10 @@ func (cm *CaseManagement) applyTheme() {
 	if cm.iocsTable != nil {
 		cm.iocsTable.SetBorderColor(cm.theme.Border)
 	}
-	if cm.activityView != nil {
-		cm.activityView.SetBorderColor(cm.theme.Border)
+	if cm.activityTable != nil {
+		cm.activityTable.SetBorderColor(cm.theme.Border)
+		cm.activityTable.SetSelectedStyle(tcell.StyleDefault.
+			Background(cm.theme.SelectionBg).Foreground(cm.theme.SelectionFg))
 	}
 
 	// Re-render the findings table so its cell colours follow the theme; the
@@ -2752,15 +2533,6 @@ func (cm *CaseManagement) applyTheme() {
 }
 
 // Modal and action handlers
-
-func (cm *CaseManagement) createCaseFromSelection() {
-	if len(cm.selectedEventIDs) == 0 {
-		cm.updateStatus("No events selected for new case")
-		return
-	}
-
-	cm.showCreateCaseModal()
-}
 
 func (cm *CaseManagement) addEventsToCase() {
 	if len(cm.selectedEventIDs) == 0 {
@@ -3046,9 +2818,9 @@ func (cm *CaseManagement) updateFocusStyles() {
 	cm.timelineView.SetTitleColor(cm.theme.TextPrimary)
 	cm.copilotPanel.SetBorderColor(cm.theme.Border)
 	cm.copilotPanel.SetTitleColor(cm.theme.TextPrimary)
-	if cm.notesViewer != nil {
-		cm.notesViewer.SetBorderColor(cm.theme.Border)
-		cm.notesViewer.SetTitleColor(cm.theme.TextPrimary)
+	if cm.notesTable != nil {
+		cm.notesTable.SetBorderColor(cm.theme.Border)
+		cm.notesTable.SetTitleColor(cm.theme.TextPrimary)
 	}
 	if cm.notesEditor != nil {
 		cm.notesEditor.SetBorderColor(cm.theme.Border)
@@ -3062,9 +2834,9 @@ func (cm *CaseManagement) updateFocusStyles() {
 		cm.iocsTable.SetBorderColor(cm.theme.Border)
 		cm.iocsTable.SetTitleColor(cm.theme.TextPrimary)
 	}
-	if cm.activityView != nil {
-		cm.activityView.SetBorderColor(cm.theme.Border)
-		cm.activityView.SetTitleColor(cm.theme.TextPrimary)
+	if cm.activityTable != nil {
+		cm.activityTable.SetBorderColor(cm.theme.Border)
+		cm.activityTable.SetTitleColor(cm.theme.TextPrimary)
 	}
 	// TextArea does not support SetTitleColor; leave title color implicit via border focus.
 
@@ -3085,9 +2857,9 @@ func (cm *CaseManagement) updateFocusStyles() {
 				cm.notesEditor.SetBorderColor(cm.theme.FocusBorder)
 			}
 		} else {
-			if cm.notesViewer != nil {
-				cm.notesViewer.SetBorderColor(cm.theme.FocusBorder)
-				cm.notesViewer.SetTitleColor(cm.theme.FocusBorder)
+			if cm.notesTable != nil {
+				cm.notesTable.SetBorderColor(cm.theme.FocusBorder)
+				cm.notesTable.SetTitleColor(cm.theme.FocusBorder)
 			}
 		}
 	case FocusOverview:
@@ -3101,9 +2873,9 @@ func (cm *CaseManagement) updateFocusStyles() {
 			cm.iocsTable.SetTitleColor(cm.theme.FocusBorder)
 		}
 	case FocusActivity:
-		if cm.activityView != nil {
-			cm.activityView.SetBorderColor(cm.theme.FocusBorder)
-			cm.activityView.SetTitleColor(cm.theme.FocusBorder)
+		if cm.activityTable != nil {
+			cm.activityTable.SetBorderColor(cm.theme.FocusBorder)
+			cm.activityTable.SetTitleColor(cm.theme.FocusBorder)
 		}
 	}
 }
@@ -3895,8 +3667,8 @@ func (cm *CaseManagement) popModalRoot() {
 			case FocusNotes:
 				if cm.isEditingNotes && cm.notesEditor != nil {
 					cm.app.SetFocus(cm.notesEditor)
-				} else if cm.notesViewer != nil {
-					cm.app.SetFocus(cm.notesViewer)
+				} else if cm.notesTable != nil {
+					cm.app.SetFocus(cm.notesTable)
 				}
 			case FocusCopilot:
 				cm.app.SetFocus(cm.copilotInput)
@@ -3905,8 +3677,8 @@ func (cm *CaseManagement) popModalRoot() {
 					cm.app.SetFocus(cm.overviewView)
 				}
 			case FocusActivity:
-				if cm.activityView != nil {
-					cm.app.SetFocus(cm.activityView)
+				if cm.activityTable != nil {
+					cm.app.SetFocus(cm.activityTable)
 				}
 			}
 		} else {
@@ -3943,8 +3715,8 @@ func (cm *CaseManagement) popModalRoot() {
 	case FocusNotes:
 		if cm.isEditingNotes && cm.notesEditor != nil {
 			cm.app.SetFocus(cm.notesEditor)
-		} else if cm.notesViewer != nil {
-			cm.app.SetFocus(cm.notesViewer)
+		} else if cm.notesTable != nil {
+			cm.app.SetFocus(cm.notesTable)
 		}
 	case FocusCopilot:
 		cm.app.SetFocus(cm.copilotInput)
@@ -3953,8 +3725,8 @@ func (cm *CaseManagement) popModalRoot() {
 			cm.app.SetFocus(cm.overviewView)
 		}
 	case FocusActivity:
-		if cm.activityView != nil {
-			cm.app.SetFocus(cm.activityView)
+		if cm.activityTable != nil {
+			cm.app.SetFocus(cm.activityTable)
 		}
 	}
 }
@@ -4173,12 +3945,19 @@ func (cm *CaseManagement) toggleCaseCopilot() {
 	if cm.copilotOpen {
 		cm.caseBody.RemoveItem(cm.copilotPanel)
 		cm.copilotOpen = false
+		// The drawer's columns come back to the case on the next frame.
+		cm.pendingWidthShift = copilotDrawerWidth
+		cm.renderBriefing()
+		cm.pendingWidthShift = 0
 		cm.setFocusPane(caseTabPages[cm.activeTab].focus)
 		cm.updateStatus("Copilot closed")
 		return
 	}
 	cm.caseBody.AddItem(cm.copilotPanel, copilotDrawerWidth, 0, false)
 	cm.copilotOpen = true
+	cm.pendingWidthShift = -copilotDrawerWidth
+	cm.renderBriefing()
+	cm.pendingWidthShift = 0
 	if cm.copilotInput != nil {
 		cm.app.SetFocus(cm.copilotInput)
 	}
