@@ -420,3 +420,34 @@ func TestTabStripKnowsWhenItDoesNotFit(t *testing.T) {
 		t.Errorf("the full strip measures %d columns and would not fit at 150 either", full)
 	}
 }
+
+// The per-tab key handlers compare against these indices. They were once bare
+// numbers written for a six-tab order, and when Briefing was added they all
+// shifted by one — `n` fired on Indicators and did nothing on Notes. Pin the
+// names to the list so the next insertion fails here rather than on screen.
+func TestTabIndicesMatchTheirNames(t *testing.T) {
+	for _, tc := range []struct {
+		index int
+		name  string
+	}{
+		{tabBriefing, "Briefing"},
+		{tabFindings, "Findings"},
+		{tabEvents, "Events"},
+		{tabTimeline, "Timeline"},
+		{tabIOCs, "Indicators"},
+		{tabNotes, "Notes"},
+		{tabActivity, "Activity"},
+	} {
+		if tc.index >= len(caseTabNames) || caseTabNames[tc.index] != tc.name {
+			t.Errorf("index %d is %q, but the constant names %q",
+				tc.index, caseTabNames[tc.index], tc.name)
+		}
+	}
+	if len(caseTabNames) != tabActivity+1 {
+		t.Errorf("%d tabs but the constants cover %d", len(caseTabNames), tabActivity+1)
+	}
+	// Every tab has a page and a focus pane, or switching to it draws nothing.
+	if len(caseTabPages) != len(caseTabNames) {
+		t.Errorf("%d tabs but %d page mappings", len(caseTabNames), len(caseTabPages))
+	}
+}

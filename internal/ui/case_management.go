@@ -84,11 +84,15 @@ type CaseManagement struct {
 	copilotFull bool
 	// copilotStatus is what became of the most recent question, rendered in the
 	// transcript so it outlives a status-bar line.
-	copilotStatus   copilotStatus
-	copilotEstimate *tview.TextView
-	copilotInput    *tview.InputField
-	notesPanel      *tview.Flex
-	notesPages      *tview.Pages
+	copilotStatus copilotStatus
+	// notesDraftBaseline is what the editor held when editing began — empty for
+	// a blank note, the body for a template. Esc compares against it so that
+	// leaving a template untouched is not treated as losing work.
+	notesDraftBaseline string
+	copilotEstimate    *tview.TextView
+	copilotInput       *tview.InputField
+	notesPanel         *tview.Flex
+	notesPages         *tview.Pages
 	// notesViewer is the editor; notesTable is the log. A decision log is a
 	// list of decisions, not a scroll of prose.
 	notesViewer   *tview.TextView
@@ -195,6 +199,11 @@ var caseTabNames = []string{
 }
 
 // Tab indices, named so switches read as intent rather than arithmetic.
+//
+// These existed already; the per-tab key handlers compared against bare numbers
+// regardless, and those numbers were written for the old six-tab order. That is
+// how `n` came to fire on Indicators and do nothing on the tab named Notes. Use
+// the names — they move with the list.
 const (
 	tabBriefing = iota
 	tabFindings
@@ -545,9 +554,16 @@ func (cm *CaseManagement) setupKeybindings() {
 			// If a modal is active, close it; otherwise exit CM screen.
 			if cm.modalActive {
 				cm.popModalRoot()
-			} else {
-				cm.close()
+				return nil
 			}
+			// An unsaved note is asked about here rather than in the editor's
+			// own handler: this global capture runs first, so Esc while writing
+			// was closing the entire case screen and taking the draft with it.
+			if cm.isEditingNotes {
+				cm.discardNoteDraft()
+				return nil
+			}
+			cm.close()
 			return nil
 		case tcell.KeyTab:
 			// Tab moves between the case's tabs, which is what §9 lists first
@@ -598,15 +614,24 @@ func (cm *CaseManagement) setupKeybindings() {
 					cm.toggleCaseCopilot()
 				}
 				return nil
+			case 'd', 'D':
+				// A finding is what the case is about, so detaching one is a
+				// statement about the case rather than a tidy-up. Confirmed.
+				if cm.activeTab == tabFindings {
+					cm.detachSelectedFinding()
+					return nil
+				}
 			case 'p', 'P':
-				// Allow pin on Timeline tab
-				if cm.activeTab == 2 {
+				if cm.activeTab == tabEvents {
 					cm.pinCurrentEvent()
 					return nil
 				}
 			case 'n', 'N':
-				// Allow new note on Notes tab
-				if cm.activeTab == 4 {
+				// These indices were written against the old six-tab order and
+				// never moved: this read `== 4`, which is now Indicators, so `n`
+				// opened a new note from the indicator list and did nothing on
+				// the tab named Notes.
+				if cm.activeTab == tabNotes {
 					cm.addNewNote()
 					return nil
 				}
@@ -701,11 +726,41 @@ func (cm *CaseManagement) handleNotesInput(event *tcell.EventKey) *tcell.EventKe
 		cm.setFocusPane(FocusOverview)
 		return nil
 	case tcell.KeyEsc:
-		// Cancel edit and return to view mode
-		cm.switchToNotesView()
+		cm.discardNoteDraft()
 		return nil
 	}
 	return event
+}
+
+// discardNoteDraft leaves the editor, asking first if there is work to lose.
+//
+// Esc used to discard silently, which is the wrong default for the one screen
+// whose entire purpose is recording a decision — a mistyped Esc threw away a
+// containment note with no way back. It only asks when there is a change to
+// lose, so backing out of an untouched editor stays a single keystroke.
+func (cm *CaseManagement) discardNoteDraft() {
+	if cm.notesEditor == nil {
+		cm.switchToNotesView()
+		return
+	}
+	current := strings.TrimSpace(cm.notesEditor.GetText())
+	if current == "" || current == strings.TrimSpace(cm.notesDraftBaseline) {
+		cm.switchToNotesView()
+		return
+	}
+
+	modal := tview.NewModal().
+		SetText("Discard this note?\n\nIt has not been saved.").
+		AddButtons([]string{"Keep editing", "Discard"}).
+		SetDoneFunc(func(_ int, label string) {
+			cm.popModalRoot()
+			if label == "Discard" {
+				cm.switchToNotesView()
+				return
+			}
+			cm.app.SetFocus(cm.notesEditor)
+		})
+	cm.pushModalRoot(modal)
 }
 
 // Data loading and management
@@ -1747,6 +1802,7 @@ func (cm *CaseManagement) switchToNotesEdit() {
 	if cm.notesEditor != nil {
 		// Start with an empty draft
 		cm.notesEditor.SetText("", true)
+		cm.notesDraftBaseline = ""
 	}
 	if cm.notesPages != nil {
 		cm.notesPages.SwitchToPage("edit")

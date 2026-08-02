@@ -257,6 +257,8 @@ func (cm *CaseManagement) showNoteTemplates() {
 			cm.switchToNotesEdit()
 			if cm.notesEditor != nil {
 				cm.notesEditor.SetText(body, true)
+				// The template is the starting point, not work in progress.
+				cm.notesDraftBaseline = body
 			}
 		})
 	}
