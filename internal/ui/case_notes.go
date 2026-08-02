@@ -72,16 +72,20 @@ func renderNotes(table *tview.Table, notes []store.Note, t Theme) {
 	}
 }
 
-// noteLink names what a note is about, when it is about something.
+// noteLink names what a note is about, or where it came from.
+//
+// The type is shown even with nothing linked: an accepted copilot answer
+// carries a type and no id, and without this it rendered exactly like prose the
+// analyst wrote themselves — which is the one thing the accept step exists to
+// keep distinguishable.
 func noteLink(n store.Note) string {
-	if strings.TrimSpace(n.LinkedID) == "" {
-		return ""
+	if kind := strings.TrimSpace(n.LinkedType); kind != "" {
+		return kind
 	}
-	kind := strings.TrimSpace(n.LinkedType)
-	if kind == "" {
-		kind = "linked"
+	if strings.TrimSpace(n.LinkedID) != "" {
+		return "linked"
 	}
-	return kind
+	return ""
 }
 
 // firstLine is the note's preview. The log lists decisions; opening one shows

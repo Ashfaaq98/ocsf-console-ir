@@ -462,8 +462,6 @@ type UI struct {
 	isShortScreen     bool
 
 	// Copilot drawer state
-	copilotOpen  bool
-	copilotPanel tview.Primitive
 
 	// Theme state
 	theme          Theme
@@ -1474,12 +1472,6 @@ func (ui *UI) setupKeybindings() {
 				return nil
 			case '/':
 				ui.showFilterBar()
-				return nil
-			case '[':
-				ui.toggleCopilotDrawer()
-				return nil
-			case ']':
-				ui.toggleCopilotDrawer()
 				return nil
 			case 'p':
 				if len(ui.events) > 0 {
@@ -4842,8 +4834,6 @@ func (ui *UI) setMainView(p tview.Primitive) {
 	}
 	// The outgoing screen's borders are not painted over by the incoming one.
 	ui.needsClear = true
-	ui.copilotOpen = false
-	ui.copilotPanel = nil
 	ui.mainPanel.Clear()
 	ui.mainPanel.AddItem(p, 0, 1, true)
 	ui.app.SetFocus(p)
@@ -4853,8 +4843,6 @@ func (ui *UI) restoreEventsView() {
 	if ui.mainPanel == nil {
 		return
 	}
-	ui.copilotOpen = false
-	ui.copilotPanel = nil
 	ui.mainPanel.Clear()
 	ui.mainPanel.SetDirection(tview.FlexRow)
 

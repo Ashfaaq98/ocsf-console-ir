@@ -111,20 +111,25 @@ func briefingStatement(b *strings.Builder, d briefingData, t Theme, width int) {
 }
 
 // scopeLines summarises what the case covers.
+// windowLabel renders the span a set of events covers. Shared, so the briefing
+// and the copilot's suggestions describe the same window the same way.
+func windowLabel(first, last time.Time) string {
+	if first.IsZero() {
+		return "—"
+	}
+	return first.Format("15:04") + " – " + last.Format("15:04")
+}
+
 func scopeLines(d briefingData, t Theme) []string {
 	hosts, users, first, last := scopeOf(d.Events)
 
 	row := func(label, value string) string {
 		return fmt.Sprintf("  [%s]%-9s[-] [%s]%s[-]", t.TagMuted, label, t.TagTextPrimary, tview.Escape(value))
 	}
-	window := "—"
-	if !first.IsZero() {
-		window = first.Format("15:04") + " – " + last.Format("15:04")
-	}
 	return []string{
 		row("hosts", orNone(strings.Join(hosts, ", "))),
 		row("users", orNone(strings.Join(users, ", "))),
-		row("window", window),
+		row("window", windowLabel(first, last)),
 		row("counts", fmt.Sprintf("%d findings · %d evidence", d.Case.FindingCount, len(d.Events))),
 	}
 }

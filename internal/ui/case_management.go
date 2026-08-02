@@ -72,11 +72,23 @@ type CaseManagement struct {
 	caseBody          *tview.Flex
 	copilotOpen       bool
 	copilotDropdown   *tview.DropDown
-	copilotTranscript *tview.TextView
-	copilotEstimate   *tview.TextView
-	copilotInput      *tview.InputField
-	notesPanel        *tview.Flex
-	notesPages        *tview.Pages
+	copilotTranscript *tview.Table
+	// copilotPages swaps the suggestion list for the transcript once the
+	// conversation starts.
+	copilotPages       *tview.Pages
+	copilotSuggestions *tview.Table
+	copilotProvider    *tview.TextView
+	suggestions        []copilotSuggestion
+	// copilotFull is set when the copilot took the screen rather than sharing
+	// it, so closing knows which of the two to undo.
+	copilotFull bool
+	// copilotStatus is what became of the most recent question, rendered in the
+	// transcript so it outlives a status-bar line.
+	copilotStatus   copilotStatus
+	copilotEstimate *tview.TextView
+	copilotInput    *tview.InputField
+	notesPanel      *tview.Flex
+	notesPages      *tview.Pages
 	// notesViewer is the editor; notesTable is the log. A decision log is a
 	// list of decisions, not a scroll of prose.
 	notesViewer   *tview.TextView
@@ -378,24 +390,74 @@ func (cm *CaseManagement) setupCopilotPanel() {
 		cm.updateStatus(fmt.Sprintf("Persona: %s", text))
 	})
 
-	// Chat transcript
-	cm.copilotTranscript = tview.NewTextView().
-		SetDynamicColors(true).
-		SetScrollable(true).
-		SetWrap(true)
-	cm.copilotTranscript.SetBorder(true).SetTitle(" Chat ").SetTitleAlign(tview.AlignLeft)
-	// Allow returning focus to input with a non-alphanumeric key
+	// The provider is named rather than assumed.
+	cm.copilotProvider = tview.NewTextView().SetDynamicColors(true)
+	cm.copilotProvider.SetText(fmt.Sprintf("[%s]%s[-]",
+		cm.theme.TagMuted, copilotProviderLine(activeLLMProvider(), true)))
+
+	// Chat transcript. A table, not a text pane: a model's answer carries
+	// brackets, and escaping those in one multi-line TextView drifts the tag
+	// state across every following line.
+	cm.copilotTranscript = tview.NewTable().SetSelectable(true, false)
+	cm.copilotTranscript.SetBackgroundColor(cm.theme.Bg)
 	cm.copilotTranscript.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
+		case tcell.KeyEsc:
+			cm.toggleCaseCopilot()
+			return nil
 		case tcell.KeyRune:
-			if event.Rune() == ']' {
+			switch event.Rune() {
+			case ']':
 				cm.app.SetFocus(cm.copilotInput)
 				cm.updateStatus("Copilot focus: Input")
+				return nil
+			case '[':
+				cm.toggleCaseCopilot()
+				return nil
+			case 'a', 'A':
+				cm.acceptCopilotAnswer()
+				return nil
+			case 'r', 'R':
+				cm.regenerateCopilotAnswer()
 				return nil
 			}
 		}
 		return event
 	})
+
+	// The opening suggestions, replaced by the transcript once asked.
+	cm.copilotSuggestions = tview.NewTable().SetSelectable(true, false)
+	cm.copilotSuggestions.SetBackgroundColor(cm.theme.Bg)
+	cm.copilotSuggestions.SetSelectedFunc(func(row, _ int) { cm.askSuggestion(row) })
+	cm.copilotSuggestions.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEsc {
+			cm.toggleCaseCopilot()
+			return nil
+		}
+		if event.Key() != tcell.KeyRune {
+			return event
+		}
+		// The brackets belong to the drawer wherever they are pressed, so they
+		// are never typed through. Without this, `[` on the suggestion list put
+		// a bracket in the input instead of closing the copilot.
+		switch event.Rune() {
+		case '[':
+			cm.toggleCaseCopilot()
+			return nil
+		case ']', ' ':
+			return event
+		}
+		// Anything else goes to the input, so the list never blocks a direct
+		// question. The keystroke is placed by hand: tview delivers an event to
+		// whoever held focus when it was dispatched, so moving focus drops it.
+		cm.copilotInput.SetText(cm.copilotInput.GetText() + string(event.Rune()))
+		cm.app.SetFocus(cm.copilotInput)
+		return nil
+	})
+
+	cm.copilotPages = tview.NewPages()
+	cm.copilotPages.AddPage("suggestions", cm.copilotSuggestions, true, true)
+	cm.copilotPages.AddPage("transcript", cm.copilotTranscript, true, false)
 
 	// Inline token estimate (one-line)
 	cm.copilotEstimate = tview.NewTextView().
@@ -422,7 +484,8 @@ func (cm *CaseManagement) setupCopilotPanel() {
 
 	cm.copilotPanel = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(controlsPanel, 1, 0, false).
-		AddItem(cm.copilotTranscript, 0, 1, false).
+		AddItem(cm.copilotProvider, 1, 0, false).
+		AddItem(cm.copilotPages, 0, 1, false).
 		AddItem(cm.copilotEstimate, 1, 0, false).
 		AddItem(cm.copilotInput, 1, 0, false)
 
@@ -1808,7 +1871,11 @@ func (cm *CaseManagement) processCopilotMessage(message string) {
 	// Clear input
 	cm.copilotInput.SetText("")
 
-	// Show loading state
+	cm.copilotStatus = copilotStatus{Pending: true}
+	cm.updateCopilotTranscript()
+	if cm.copilotTranscript != nil {
+		cm.app.SetFocus(cm.copilotTranscript)
+	}
 	cm.updateStatus("Copilot thinking...")
 
 	// Process in background
@@ -1837,6 +1904,8 @@ func (cm *CaseManagement) processCopilotMessage(message string) {
 
 		cm.app.QueueUpdateDraw(func() {
 			if err != nil {
+				cm.copilotStatus = copilotStatus{Failure: err.Error()}
+				cm.updateCopilotTranscript()
 				cm.updateStatus(fmt.Sprintf("Copilot error: %v", err))
 				return
 			}
@@ -1846,11 +1915,14 @@ func (cm *CaseManagement) processCopilotMessage(message string) {
 				if resp != nil {
 					errMsg = resp.Error
 				}
+				cm.copilotStatus = copilotStatus{Failure: errMsg}
+				cm.updateCopilotTranscript()
 				cm.updateStatus(fmt.Sprintf("Copilot error: %s", errMsg))
 				return
 			}
 
 			// Add response to transcript
+			cm.copilotStatus = copilotStatus{}
 			cm.chatHistory = append(cm.chatHistory, resp.Message)
 			cm.updateCopilotTranscript()
 
@@ -1865,26 +1937,16 @@ func (cm *CaseManagement) processCopilotMessage(message string) {
 }
 
 func (cm *CaseManagement) updateCopilotTranscript() {
-	var transcript strings.Builder
-
-	for _, msg := range cm.chatHistory {
-		timestamp := msg.Timestamp.Format("15:04")
-
-		switch msg.Role {
-		case "user":
-			transcript.WriteString(fmt.Sprintf("[blue]%s You:[-]\n%s\n\n", timestamp, msg.Content))
-		case "assistant":
-			persona := msg.Persona
-			if persona == "" {
-				persona = "Copilot"
-			}
-			transcript.WriteString(fmt.Sprintf("[green]%s %s:[-]\n%s\n\n", timestamp, persona, msg.Content))
-		}
+	if cm.copilotTranscript == nil {
+		return
 	}
-
-	cm.copilotTranscript.SetText(transcript.String())
-	// Auto-scroll to bottom
-	cm.copilotTranscript.ScrollToEnd()
+	if len(cm.chatHistory) == 0 {
+		cm.showCopilotSuggestions()
+		return
+	}
+	renderTranscript(cm.copilotTranscript,
+		buildTranscript(cm.chatHistory, cm.copilotTextWidth(), cm.copilotStatus), cm.theme)
+	cm.copilotPages.SwitchToPage("transcript")
 }
 
 // updateTokenEstimate updates the inline token/cost estimate below the chat transcript.
@@ -2469,7 +2531,9 @@ func (cm *CaseManagement) applyTheme() {
 	}
 
 	cm.copilotTranscript.SetBackgroundColor(cm.theme.Surface)
-	cm.copilotTranscript.SetTextColor(cm.theme.TextPrimary)
+	if cm.copilotSuggestions != nil {
+		cm.copilotSuggestions.SetBackgroundColor(cm.theme.Surface)
+	}
 
 	if cm.copilotEstimate != nil {
 		cm.copilotEstimate.SetBackgroundColor(cm.theme.Surface)
@@ -3932,35 +3996,62 @@ func iocSourceColor(theme Theme, it IOCItem) tcell.Color {
 // it replaces: it is a conversation, not a second screen.
 const copilotDrawerWidth = 44
 
-// toggleCaseCopilot opens or closes the copilot drawer.
+// caseMinWidth is the narrowest the case may be squeezed to.
 //
-// The case owns this rather than the global drawer in copilot_drawer.go: that
-// one is a read-only text pane, while the case's copilot is a transcript, a
-// persona selector and an input. Opening the wrong one inside a case would
-// present an assistant that cannot be typed to.
+// 80 columns is the standard minimum terminal, and the case is the screen the
+// analyst is actually working on — the copilot is not entitled to push it below
+// what the case itself would get on the smallest supported terminal.
+const caseMinWidth = 80
+
+// copilotFullScreen reports whether the drawer must take the screen instead of
+// sharing it. At 100 columns a 44-column drawer would leave the case 56.
+func copilotFullScreen(totalWidth int) bool {
+	return totalWidth-copilotDrawerWidth < caseMinWidth
+}
+
+// toggleCaseCopilot opens or closes the copilot.
+//
+// Wide enough, it is a drawer beside the case. Too narrow to share, it takes
+// the screen — a 36-column case behind a drawer is neither one thing nor the
+// other.
 func (cm *CaseManagement) toggleCaseCopilot() {
 	if cm.caseBody == nil || cm.copilotPanel == nil {
 		return
 	}
 	if cm.copilotOpen {
-		cm.caseBody.RemoveItem(cm.copilotPanel)
+		if cm.copilotFull {
+			cm.popModalRoot()
+			cm.copilotFull = false
+		} else {
+			cm.caseBody.RemoveItem(cm.copilotPanel)
+			// The drawer's columns come back to the case on the next frame.
+			cm.pendingWidthShift = copilotDrawerWidth
+			cm.renderBriefing()
+			cm.pendingWidthShift = 0
+		}
 		cm.copilotOpen = false
-		// The drawer's columns come back to the case on the next frame.
-		cm.pendingWidthShift = copilotDrawerWidth
-		cm.renderBriefing()
-		cm.pendingWidthShift = 0
 		cm.setFocusPane(caseTabPages[cm.activeTab].focus)
 		cm.updateStatus("Copilot closed")
 		return
 	}
-	cm.caseBody.AddItem(cm.copilotPanel, copilotDrawerWidth, 0, false)
+
 	cm.copilotOpen = true
+	cm.showCopilotSuggestions()
+
+	_, _, width, _ := cm.layout.GetInnerRect()
+	if copilotFullScreen(width) {
+		cm.copilotFull = true
+		cm.pushModalRoot(cm.copilotPanel)
+		cm.focusCopilotEntry()
+		cm.updateStatus("Copilot — Esc or [ returns to the case")
+		return
+	}
+
+	cm.caseBody.AddItem(cm.copilotPanel, copilotDrawerWidth, 0, false)
 	cm.pendingWidthShift = -copilotDrawerWidth
 	cm.renderBriefing()
 	cm.pendingWidthShift = 0
-	if cm.copilotInput != nil {
-		cm.app.SetFocus(cm.copilotInput)
-	}
+	cm.focusCopilotEntry()
 	cm.updateStatus("Copilot open — [ closes it")
 }
 
