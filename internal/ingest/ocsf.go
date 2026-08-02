@@ -2,8 +2,10 @@ package ingest
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
@@ -17,11 +19,68 @@ func NewParser() *Parser {
 	return &Parser{}
 }
 
+// ErrNotOCSF reports a record that parsed as JSON but is not an OCSF event.
+//
+// Console-IR consumes OCSF and does not convert to it, so this is a statement
+// about the input rather than a failure to try harder.
+var ErrNotOCSF = errors.New("not an OCSF event")
+
+// NotOCSFError names what was missing, so the summary can say it once.
+type NotOCSFError struct {
+	// Missing is the field whose absence decided it.
+	Missing string
+	// Sample is a short excerpt of the record, for a message a user can act on.
+	Sample string
+}
+
+func (e *NotOCSFError) Error() string {
+	return fmt.Sprintf("not an OCSF event: no %s", e.Missing)
+}
+
+func (e *NotOCSFError) Unwrap() error { return ErrNotOCSF }
+
+// sampleLen bounds the excerpt carried in an error. Enough to recognise the
+// record, short enough to print.
+const sampleLen = 120
+
+// hasClassUID reports whether the record carries a usable class_uid.
+//
+// Present-but-unreadable counts as absent: a class_uid of "" or null names no
+// class, and accepting it would put back the empty row this check exists to
+// prevent.
+func hasClassUID(rawEvent map[string]interface{}) bool {
+	v, ok := rawEvent["class_uid"]
+	if !ok || v == nil {
+		return false
+	}
+	p := &Parser{}
+	uid, err := p.toInt(v)
+	return err == nil && uid != 0
+}
+
+// sample is a one-line excerpt of a record.
+func sample(raw []byte) string {
+	s := strings.Join(strings.Fields(string(raw)), " ")
+	if len(s) > sampleLen {
+		s = s[:sampleLen] + "…"
+	}
+	return s
+}
+
 // ParseEvent parses raw JSON into an OCSF event
 func (p *Parser) ParseEvent(rawJSON []byte) (*ocsf.Event, error) {
 	var rawEvent map[string]interface{}
 	if err := json.Unmarshal(rawJSON, &rawEvent); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal JSON: %w", err)
+	}
+
+	// class_uid is what makes a record an OCSF event: it names the class every
+	// other field is interpreted against. Without it there is nothing to read
+	// the record *as*, and every field below silently declines to match —
+	// producing a row with no host, no message and no severity that ingest
+	// nonetheless counted as a success.
+	if !hasClassUID(rawEvent) {
+		return nil, &NotOCSFError{Missing: "class_uid", Sample: sample(rawJSON)}
 	}
 
 	event := &ocsf.Event{

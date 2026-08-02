@@ -127,6 +127,16 @@ func importFile(ctx context.Context, dbPath, file string, logger *logging.Logger
 		return fmt.Errorf("could not import that file: %w", err)
 	}
 	if stats.SuccessfulEvents == 0 {
+		// This is a first run: somebody pointed the tool at their own data and
+		// it read nothing. "Rejected" alone sends them looking for a bug in
+		// Console-IR, when the answer is almost always that the file is not
+		// OCSF — so when that is what happened, say so.
+		if stats.NotOCSFEvents > 0 {
+			return fmt.Errorf(
+				"that file is not OCSF — %d of %d records have no class_uid.\n"+
+					"Console-IR reads OCSF and does not convert to it; map your source to OCSF first",
+				stats.NotOCSFEvents, stats.TotalEvents)
+		}
 		return fmt.Errorf("no events could be read from that file (%d records rejected)", stats.FailedEvents)
 	}
 

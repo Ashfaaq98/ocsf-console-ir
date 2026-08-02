@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -152,8 +153,21 @@ func runIngest(cmd *cobra.Command, args []string) error {
 	// to "what did that do" — the same numbers are in the log file either way.
 	report(os.Stdout, "Ingested %d of %d events in %s.",
 		stats.SuccessfulEvents, stats.TotalEvents, stats.ProcessingTime.Round(time.Millisecond))
-	if stats.FailedEvents > 0 {
-		report(os.Stdout, "  %d failed", stats.FailedEvents)
+	// Records that are not OCSF are reported as their own thing, and the cause
+	// is named once rather than per record. Console-IR consumes OCSF and does
+	// not convert to it, so "not recognised" is the whole answer — repeating it
+	// five hundred times says no more than saying it once.
+	if stats.NotOCSFEvents > 0 {
+		report(os.Stdout, "  %d not recognised as OCSF", stats.NotOCSFEvents)
+		report(os.Stdout, "     no class_uid, so there is no OCSF class to read these as.")
+		if stats.NotOCSFSample != "" {
+			report(os.Stdout, "     first was: %s", stats.NotOCSFSample)
+		}
+		report(os.Stdout, "     Console-IR reads OCSF and does not convert to it — map your")
+		report(os.Stdout, "     source to OCSF first, or pass --skip-invalid to ingest the rest.")
+	}
+	if other := stats.FailedEvents - stats.NotOCSFEvents; other > 0 {
+		report(os.Stdout, "  %d failed", other)
 	}
 	if stats.SkippedEvents > 0 {
 		report(os.Stdout, "  %d skipped (already ingested)", stats.SkippedEvents)
@@ -167,6 +181,12 @@ func runIngest(cmd *cobra.Command, args []string) error {
 	}
 
 	if stats.FailedEvents > 0 && !skipInvalid {
+		// The exit status has to reflect it, or a script sees success on a run
+		// that stored nothing usable.
+		if stats.NotOCSFEvents == stats.FailedEvents {
+			return fmt.Errorf("%d of %d records were not recognised as OCSF",
+				stats.NotOCSFEvents, stats.TotalEvents)
+		}
 		return fmt.Errorf("ingestion completed with %d failed events", stats.FailedEvents)
 	}
 
@@ -240,6 +260,15 @@ type IngestStats struct {
 	FailedEvents     int
 	SkippedEvents    int
 	ProcessingTime   time.Duration
+
+	// NotOCSFEvents counts records that were valid JSON but not OCSF events.
+	// Separate from FailedEvents because the cause and the remedy differ: a
+	// failed record is a bug or a malformed line, while these are somebody
+	// else's log format, and the answer is to convert it first.
+	NotOCSFEvents int
+	// NotOCSFSample is the first such record, quoted once so the user can tell
+	// which of their files it was without reading the log.
+	NotOCSFSample string
 }
 
 // processEvents processes events from the input reader
@@ -311,6 +340,13 @@ func processBatch(ctx context.Context, batch [][]byte, parser *ingest.Parser,
 
 		if err := processEvent(ctx, eventData, parser, store, eventBus, enricher, logger, lineNumber); err != nil {
 			stats.FailedEvents++
+			var notOCSF *ingest.NotOCSFError
+			if errors.As(err, &notOCSF) {
+				stats.NotOCSFEvents++
+				if stats.NotOCSFSample == "" {
+					stats.NotOCSFSample = notOCSF.Sample
+				}
+			}
 			if skipInvalid {
 				logger.Printf("Skipping invalid event at line %d: %v", lineNumber, err)
 				stats.SkippedEvents++
@@ -377,6 +413,10 @@ func updateStats(main, batch *IngestStats) {
 	main.SuccessfulEvents += batch.SuccessfulEvents
 	main.FailedEvents += batch.FailedEvents
 	main.SkippedEvents += batch.SkippedEvents
+	main.NotOCSFEvents += batch.NotOCSFEvents
+	if main.NotOCSFSample == "" {
+		main.NotOCSFSample = batch.NotOCSFSample
+	}
 }
 
 // report writes a line of user-facing command output.
