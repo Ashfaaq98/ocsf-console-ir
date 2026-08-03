@@ -82,7 +82,7 @@ nothing. Back up the database first if you may roll back.
   naming the next action when a case has no owner, no note or no recent activity. The briefing holds
   an incident statement, scope, working hypotheses and next actions; the timeline merges events,
   findings and audit into one narrative; indicators carry their provenance. `Space` pins decisive
-  evidence, which then surfaces on the briefing and in exports.
+  evidence, which then surfaces on the briefing and survives a restart.
 - **A copilot drawer inside cases.** `]` opens it beside the case and `[` closes it, so it costs no
   space until asked for. Its suggested questions are built from the open case, and generated text is
   marked as generated — it enters the record only when you accept it into the notes.
