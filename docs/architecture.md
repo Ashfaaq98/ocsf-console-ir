@@ -74,8 +74,24 @@ than queued when the UI is behind, so an enrichment worker is never blocked by t
 ## Storage
 
 One SQLite database. Full-text search over events uses FTS5. The shipped binary is built with
-`CGO_ENABLED=0` against the pure-Go `modernc.org/sqlite` driver; a CGO build using `mattn/go-sqlite3`
-is available behind the `sqlite_cgo` tag, and the test suite runs against both.
+`CGO_ENABLED=0` against the pure-Go `modernc.org/sqlite` driver; a CGO build uses `mattn/go-sqlite3`.
+
+The two are selected by **`CGO_ENABLED`**, not by a build tag — the constraints are `//go:build cgo`
+and `//go:build !cgo`. Testing both therefore means running the suite twice:
+
+```sh
+go test ./...                 # mattn/go-sqlite3
+CGO_ENABLED=0 go test ./...   # modernc.org/sqlite, the shipped driver
+```
+
+Passing `-tags sqlite_cgo` does nothing: it runs whichever driver `CGO_ENABLED` already selected, so
+a run that looks like it covered both has covered one of them twice. `-race` requires cgo and so
+cannot run against the pure-Go driver.
+
+Each driver takes its own DSN spelling for the same pragmas (`internal/store/sqlite_cgo.go` and
+`sqlite_nocgo.go`), and **one driver's spelling is silently ignored by the other** — this is how
+foreign keys once went unenforced on the shipped build, and how a missing busy timeout later dropped
+records under concurrent writes. Change one file, change the other.
 
 ## Optional pieces
 
