@@ -8,10 +8,13 @@ import (
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/paths"
 )
 
-// defaultThemeName is what a fresh install starts on. A plain dark theme is
-// what a terminal user expects; the previous default was a neon palette, which
-// is a strong opinion to impose before anyone has chosen anything.
-const defaultThemeName = "dark"
+// defaultThemeName is what a fresh install starts on, and the fallback whenever
+// a saved name is missing or unknown.
+//
+// gruvbox: warm, low-contrast and easy to read for a long shift, which is what
+// this tool is used for. `dark` remains one keypress away on `t`, and whatever
+// is chosen persists — the default only decides the first screen anyone sees.
+const defaultThemeName = "gruvbox"
 
 // themeBuilders is the registry of shipped themes, and themeNames() sorts it
 // into the cycle `t` walks.

@@ -126,19 +126,15 @@ console-ir ingest events.jsonl   # a file, a directory, or - for stdin
 console-ir                       # open the TUI
 ```
 
-<!-- VISUAL 2: static screenshot of the findings queue with the detail pane
-     open on a critical finding. Belongs here, so a reader who skipped the GIF
-     still sees the tool before the architecture section. -->
+<div align="center">
+  <img src="assets/findings.png" alt="The findings queue: a risk-ranked list on the left, the selected finding's evidence, indicators and ATT&amp;CK mapping on the right" width="900" />
+</div>
 
 Press `?` anywhere for the keys that apply to the screen you are on.
 [docs/getting-started.md](docs/getting-started.md) walks through a first investigation.
 
 ## Architecture
 
-<!-- VISUAL 3: architecture diagram. Records flow ingest -> OCSF parser -> router
-     -> SQLite -> TUI, with the router branching three ways on class_uid and
-     is_alert (finding / finding+event / event). An ASCII version of this flow is
-     in docs/architecture.md if it is useful as a reference. -->
 
 Records flow **ingest → OCSF parser → router → SQLite → TUI**. The router reads `class_uid` and
 `is_alert` to decide what arrived, and indicators are indexed on the way through, which is what makes

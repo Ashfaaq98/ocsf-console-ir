@@ -186,10 +186,13 @@ func finding(day, hour, min int, s findingSpec) {
 		"confidence":    s.Confidence,
 		"confidence_id": s.ConfID,
 		"is_alert":      true,
-		"message":       s.Title,
-		"start_time":    when,
-		"end_time":      when,
-		"finding_info":  info,
+		// The message is the producer's own explanation, and the inspector
+		// shows it as "why it matters". Repeating the title there leaves that
+		// panel empty on every finding.
+		"message":      s.Desc,
+		"start_time":   when,
+		"end_time":     when,
+		"finding_info": info,
 		"metadata": map[string]any{
 			"version": "1.8.0",
 			"product": map[string]any{"name": "EDR", "vendor_name": "Acme"},

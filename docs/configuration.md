@@ -89,8 +89,8 @@ Press `t` to cycle. Six are registered, in this order:
 | Theme | |
 |---|---|
 | `colorblind` | ⚗ Colourblind-safe palette — **not yet verified on every screen** |
-| `dark` | Default |
-| `gruvbox` | The published gruvbox dark palette |
+| `dark` | A plain dark palette |
+| `gruvbox` | **Default.** The published gruvbox dark palette |
 | `high-contrast` | ⚗ High-contrast palette — **not yet verified on every screen** |
 | `light` | For bright rooms and projectors |
 | `midnight` | A darker variant of `dark` |
