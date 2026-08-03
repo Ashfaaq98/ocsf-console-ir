@@ -13,16 +13,22 @@ import (
 // is a strong opinion to impose before anyone has chosen anything.
 const defaultThemeName = "dark"
 
-// themeBuilders is the registry of shipped themes.
+// themeBuilders is the registry of shipped themes, and themeNames() sorts it
+// into the cycle `t` walks.
 //
-// Three: dark and light cover the ordinary cases, and gruvbox is the one
-// palette people ask for by name.
+// dark and light cover the ordinary cases, gruvbox is the palette people ask for
+// by name, and midnight is a darker dark.
 //
-// The high-contrast and colourblind-safe palettes were dropped for now. They
-// are worth bringing back — severity is colour-coded here, so red/green
-// confusion is a correctness problem rather than a preference — but neither had
-// been checked against every screen, and shipping an accessibility theme that
-// has not been verified is worse than not claiming one. Tracked in the roadmap.
+// high-contrast and colourblind are registered but **not verified screen by
+// screen**. Severity is colour-coded throughout, so a palette that confuses two
+// severity colours is a correctness problem rather than a preference — they are
+// documented as experimental rather than claimed as accessibility support, and
+// finishing that check is tracked in the roadmap.
+//
+// Anything added here appears in the cycle immediately: keep the help text in
+// showHelp() and docs/configuration.md in step. TestShippedThemes pins the list,
+// and TestSeverityColoursAreDistinctInEveryTheme holds every palette to the one
+// rule that is a correctness problem rather than taste.
 var themeBuilders = map[string]func() Theme{
 	"dark":          themeDark,
 	"light":         themeLight,

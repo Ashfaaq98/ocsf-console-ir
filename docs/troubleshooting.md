@@ -12,6 +12,10 @@ Note the queue hides already-triaged findings by default; press `o` to show ever
 `console-ir ingest examples/sample-events.jsonl` from a source checkout to load the shipped sample
 into your own database.
 
+**Told your file is "not recognised as OCSF"?** The records carry no `class_uid`, so there is no OCSF
+class to read them as. Console-IR consumes OCSF and does not convert to it — map at the source, or
+pass `--skip-invalid` to ingest whatever *is* OCSF and exit 0. See [ingestion.md](ingestion.md).
+
 **Dropped a file in and nothing happened?** The watched folder is `./incoming`, relative to where you
 launched. The TUI's empty state names the folder it is actually watching. Point it elsewhere with
 `--ingest-dir`.

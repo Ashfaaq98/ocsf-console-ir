@@ -17,7 +17,7 @@ cat events.json | console-ir ingest - # stdin
 | `--watch` | Keep tailing a directory instead of exiting after one pass |
 | `--no-enrich` | Skip GeoIP/WHOIS lookups. Use for bulk loads |
 | `--case "Title"` | Attach everything ingested to a case |
-| `--skip-invalid` | Continue past records that fail to parse |
+| `--skip-invalid` | Continue past records that fail to parse or are not OCSF, and exit 0 |
 
 Records are enriched as they arrive. One-shot ingestion enriches **synchronously and waits**, so the
 command does not exit with lookups still in flight.
@@ -70,6 +70,31 @@ The router reads `class_uid` and `is_alert` to decide what arrived:
 
 Indicators are extracted into an indexed `observables` table on the way through, which is what makes
 the pivot fast. See [architecture.md](architecture.md).
+
+## Records that are not OCSF
+
+A record with no usable `class_uid` is **not** an OCSF event: there is no class to interpret its
+fields against, so every field would read as absent and the row would land with no host, no message
+and no severity. Those records are refused and counted:
+
+```
+$ console-ir ingest sysmon.jsonl
+Ingested 0 of 2 events in 0s.
+  2 not recognised as OCSF
+     no class_uid, so there is no OCSF class to read these as.
+     first was: {"EventID":1,"Image":"C:\\Windows\\System32\\cmd.exe", ...}
+     Console-IR reads OCSF and does not convert to it — map your
+     source to OCSF first, or pass --skip-invalid to ingest the rest.
+```
+
+The exit status reflects it, so a pipeline step fails rather than reporting success on data that was
+never stored. `--skip-invalid` ingests whatever *is* OCSF and exits 0.
+
+Console-IR consumes OCSF and does not convert to it. Map at the source — most SIEMs and EDRs can emit
+OCSF directly, and the OCSF project publishes mappings for common formats.
+
+A malformed line is reported separately from one that is simply not OCSF: being told to convert a
+file that is actually truncated sends you the wrong way.
 
 ## Implementation
 

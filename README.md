@@ -77,8 +77,9 @@ Also inside: stdin and folder ingestion, case timelines, a decision log, and ind
   (local Ollama) needs a model that answers within 60 seconds, which CPU-only hardware may not manage
 - **Headless / HTTP ingestion.** `ingest --watch` is headless today; the HTTP receiver refuses to
   start without a TUI rather than accept events it would not store
-- **External threat-intel plugins.** The plugin manager and the optional Redis transport exist; the
-  stdio protocol and the MISP, OpenCTI and IntelOwl integrations are not built yet
+- **External threat-intel plugins.** MISP, OpenCTI and IntelOwl integrations live in `plugins/` and
+  run as separate processes over Redis Streams. Embedding them in the binary, the way GeoIP and WHOIS
+  already are, is roadmap — until then they need a Redis to talk over
 - **The high-contrast and colourblind-safe themes.** Registered, but not yet verified screen by screen
 
 ### What "OCSF-native" means here

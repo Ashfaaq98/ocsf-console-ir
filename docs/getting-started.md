@@ -9,9 +9,10 @@ console-ir demo
 This loads a sample incident into a **throwaway database** and opens the TUI. It never touches your
 real data, so it is safe to run first and safe to run again.
 
-The sample is one coherent incident: a phishing attachment leads to encoded PowerShell, credential
-access, and C2 beaconing on a single host. That gives the findings queue, the case model and the
-indicator pivot something real to show.
+The sample is a working week in a small estate: a phishing-led intrusion still being worked, an
+account compromise nobody has picked up, a cryptominer closed as a true positive, and a scanner's
+findings closed as false positives — inside several hundred ordinary events. The story is moved onto
+today's calendar as it loads, so ages and filters read the way they would in a live console.
 
 ## Load your own data
 
@@ -66,11 +67,14 @@ Press **`?`** in the app for the full list. The ones that matter most:
 | `D` | Findings queue (detections awaiting triage) |
 | `A` | All events |
 | `Enter` | Open the selected item |
-| `Tab` | Move focus between the sidebar and the list |
+| `1`–`5` | Triage, Events, Cases, Indicators, Reports — from anywhere |
+| `Esc` | Back to Analyst Home |
+| `Tab` | Cycle panels |
+| `:` | Command palette |
 | `r` | Reload |
 | `f` / `F` | Filter events / clear filters |
 | `t` | Cycle theme |
-| `?` | Help |
+| `?` (or `h`) | Help |
 | `q` | Quit |
 
 In the findings queue:
@@ -82,8 +86,9 @@ In the findings queue:
 | `e` | Escalate into a new or existing case |
 | `o` | Toggle between open findings and all findings |
 
-Inside a case, `1`–`7` select the tabs: Overview, Findings, Events, Timeline, Artifacts/IOCs, Notes,
-Activity Log.
+Inside a case, **`Tab`** and **`Shift+Tab`** move between the seven tabs — Briefing, Findings, Events,
+Timeline, Indicators, Notes, Activity. Digits are reserved for the destinations above and do not
+change tabs. `]` opens the copilot beside the case and `[` closes it.
 
 Navigation follows vim conventions: `j`/`k` move, `h`/`l` change pane, `g`/`G` jump to top/bottom,
 `J`/`K` page.
@@ -93,8 +98,9 @@ Navigation follows vim conventions: `j`/`k` move, `h`/`l` change pane, `g`/`G` j
 1. `D` to open the findings queue. The highest-risk unresolved detection is at the top.
 2. `Enter` to inspect it: what fired, which events support it, which indicators it carries.
 3. `v` to record a verdict, or `e` to escalate it into a case.
-4. `Tab` to the Cases sidebar and `Enter` to open it. Inside, `2` shows the findings the case is
-   about and `3` shows the events attached as evidence.
+4. `3` for Cases, `Enter` to open one. It opens on **Briefing** — the statement, scope, working
+   hypotheses and next actions. `Tab` to Findings for what the case is about, again for the events
+   attached as evidence.
 5. `A` to search the raw telemetry around it.
 
 ## Next

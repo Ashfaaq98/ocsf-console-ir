@@ -2346,7 +2346,7 @@ func (ui *UI) showHelp() {
 	addGap()
 
 	addSection("THEMING")
-	addKV("t", "Cycle themes (dark → gruvbox → light)")
+	addKV("t", "Cycle themes (colorblind, dark, gruvbox, high-contrast, light, midnight)")
 	addGap()
 
 	addSection("QUICK ACTIONS")

@@ -72,20 +72,34 @@ Case summaries and the copilot are optional. Set the provider, model and API key
 Settings (`Shift+L`), or copy [`config/llm_settings.sample.json`](../config/llm_settings.sample.json)
 into your config directory as `llm_settings.json`.
 
-With no configuration, Console-IR defaults to a local Ollama model. Nothing is sent anywhere unless
-you configure a remote provider.
+With no configuration, Console-IR defaults to a local Ollama model, so nothing is sent anywhere
+unless you configure a remote provider.
+
+> ⚗ The copilot is experimental, and the shipped default may not answer on your hardware: the HTTP
+> timeout is 60 seconds and is not configurable yet, which CPU-only inference can exceed on the
+> default model. A failed request is reported in the transcript with a retry rather than left
+> hanging. Point it at a faster model or a remote provider if you want to rely on it.
 
 Supported: Ollama, OpenRouter, Groq, and other OpenAI-compatible endpoints.
 
 ## Themes
 
-Press `t` to cycle. Three ship:
+Press `t` to cycle. Six are registered, in this order:
 
 | Theme | |
 |---|---|
+| `colorblind` | ⚗ Colourblind-safe palette — **not yet verified on every screen** |
 | `dark` | Default |
 | `gruvbox` | The published gruvbox dark palette |
+| `high-contrast` | ⚗ High-contrast palette — **not yet verified on every screen** |
 | `light` | For bright rooms and projectors |
+| `midnight` | A darker variant of `dark` |
+
+Severity is colour-coded throughout, so a palette that confuses two severity colours is a
+correctness problem rather than a preference — every theme is tested for that. What the two marked ⚗
+have *not* had is a screen-by-screen check of the rest: panel contrast, borders, muted text. They are
+usable, not yet claimed as accessibility support. If something reads wrongly in one, please
+[open an issue](https://github.com/Ashfaaq98/ocsf-console-ir/issues/new).
 
 Your choice is saved to `ui_settings.json` in the config directory and restored on the next launch.
 
