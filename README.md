@@ -17,9 +17,9 @@
 
 </div>
 
-<!-- VISUAL 1: demo GIF (~15s, 100x30 terminal): open on the findings queue,
-     Enter a finding, v to set a verdict, e to escalate into a case, 2 for the
-     case's Findings tab. Belongs here, immediately below the badges. -->
+<div align="center">
+  <img src="assets/demo.gif" alt="Console-IR in use: working the findings queue, opening a detection, and escalating it into a case" width="900" />
+</div>
 
 ## Overview
 
