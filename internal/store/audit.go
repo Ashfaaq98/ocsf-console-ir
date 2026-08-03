@@ -264,7 +264,9 @@ func (s *Store) AddNote(ctx context.Context, note Note) (string, error) {
 
 	if note.ID == "" {
 		note.ID = "note_" + uuid.New().String()
-		note.CreatedAt = time.Now()
+		// CreatedAt is left as the caller set it: a note carried in from
+		// elsewhere, or written to a specific point in an investigation, keeps
+		// the time it was actually made. The zero case is handled below.
 	}
 	if note.CreatedAt.IsZero() {
 		note.CreatedAt = time.Now()

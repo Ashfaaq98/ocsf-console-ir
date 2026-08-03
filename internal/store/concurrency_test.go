@@ -150,3 +150,70 @@ func TestDSNCarriesTheLockingSettings(t *testing.T) {
 		t.Errorf("the DSN %q no longer enables WAL", sqliteDSNParams)
 	}
 }
+
+// A caller that supplies a creation time means it: an imported incident, a note
+// written to a point in an investigation, a seeded demo. Both paths used to
+// stamp time.Now() over it while a branch two lines below already handled the
+// zero case, so the field looked settable and silently was not.
+func TestSuppliedCreationTimesAreKept(t *testing.T) {
+	st := fileStore(t)
+	ctx := context.Background()
+	when := time.Date(2026, 7, 30, 14, 30, 0, 0, time.UTC)
+
+	caseID, err := st.CreateOrUpdateCase(ctx, Case{
+		Title: "backdated", Severity: "low", Status: "open", CreatedAt: when,
+	})
+	if err != nil {
+		t.Fatalf("CreateOrUpdateCase: %v", err)
+	}
+	cases, err := st.ListCases(ctx)
+	if err != nil {
+		t.Fatalf("ListCases: %v", err)
+	}
+	var found bool
+	for _, c := range cases {
+		if c.ID != caseID {
+			continue
+		}
+		found = true
+		if !c.CreatedAt.Equal(when) {
+			t.Errorf("case opened at %s, want %s", c.CreatedAt.UTC(), when)
+		}
+	}
+	if !found {
+		t.Fatal("the case was not stored")
+	}
+
+	if _, err := st.AddNote(ctx, Note{
+		CaseID: caseID, Content: "written earlier", Author: "paolo", CreatedAt: when,
+	}); err != nil {
+		t.Fatalf("AddNote: %v", err)
+	}
+	notes, err := st.GetNotes(ctx, caseID)
+	if err != nil {
+		t.Fatalf("GetNotes: %v", err)
+	}
+	if len(notes) != 1 {
+		t.Fatalf("stored %d notes, want 1", len(notes))
+	}
+	if !notes[0].CreatedAt.Equal(when) {
+		t.Errorf("note written at %s, want %s", notes[0].CreatedAt.UTC(), when)
+	}
+}
+
+// And a caller that supplies nothing still gets now, rather than the zero time.
+func TestUnsetCreationTimesDefaultToNow(t *testing.T) {
+	st := fileStore(t)
+	ctx := context.Background()
+
+	caseID, err := st.CreateOrUpdateCase(ctx, Case{Title: "fresh", Severity: "low", Status: "open"})
+	if err != nil {
+		t.Fatalf("CreateOrUpdateCase: %v", err)
+	}
+	cases, _ := st.ListCases(ctx)
+	for _, c := range cases {
+		if c.ID == caseID && c.CreatedAt.IsZero() {
+			t.Error("a case with no creation time was stored at the zero time")
+		}
+	}
+}

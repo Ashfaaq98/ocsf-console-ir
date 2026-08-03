@@ -98,12 +98,10 @@ func NewFolderIngestor(parser *Parser, st *store.Store, b bus.Bus, opts FolderOp
 
 // Run executes the ingestion per options (one-shot or watch).
 func (fi *FolderIngestor) Run(ctx context.Context) error {
-	// Only ensure/create case when a title is provided. If empty, skip case assignment.
-	if fi.opts.CaseTitle != "" {
-		if err := fi.ensureCase(ctx); err != nil {
-			return err
-		}
-	}
+	// The case is created on the first record that lands in it, not here.
+	// Creating it up front puts an empty "Ingested Events" case in the Cases
+	// list of anyone who merely configures a watch folder — and it is the first
+	// thing they see, ahead of the cases they actually opened.
 
 	// In watch mode, resume from persisted offsets so a restart does not
 	// re-ingest files that were already read.
@@ -117,8 +115,10 @@ func (fi *FolderIngestor) Run(ctx context.Context) error {
 	}
 
 	if !fi.opts.Watch {
-		// Final case count sync
-		_ = fi.store.UpdateCaseEventCount(ctx, fi.caseID)
+		// Final case count sync, if anything created the case.
+		if fi.caseID != "" {
+			_ = fi.store.UpdateCaseEventCount(ctx, fi.caseID)
+		}
 		fi.opts.Logger.Printf("Completed one-shot ingest: ingested=%d errors=%d", atomic.LoadInt64(&fi.ingested), atomic.LoadInt64(&fi.errors))
 		return nil
 	}
@@ -399,6 +399,13 @@ func (fi *FolderIngestor) processEventJSON(ctx context.Context, raw []byte) erro
 	rec, err := fi.parser.Parse(raw)
 	if err != nil {
 		return err
+	}
+
+	// There is something to put in it now, so it is worth existing.
+	if fi.opts.CaseTitle != "" && fi.caseID == "" {
+		if err := fi.ensureCase(ctx); err != nil {
+			return err
+		}
 	}
 
 	saved, err := fi.store.SaveRecord(ctx, rec)

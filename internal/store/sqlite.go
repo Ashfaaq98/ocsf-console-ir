@@ -632,7 +632,10 @@ func (s *Store) SaveEvent(ctx context.Context, ocsfEvent *ocsf.Event) (string, e
 func (s *Store) CreateOrUpdateCase(ctx context.Context, case_ Case) (string, error) {
 	if case_.ID == "" {
 		case_.ID = "case_" + uuid.New().String()
-		case_.CreatedAt = time.Now()
+		// CreatedAt is left as the caller set it. Overwriting it here discarded
+		// the opening time of any case that did not begin now — an imported
+		// incident, or a seeded one — and the zero case is already handled
+		// below.
 	}
 
 	// Preserve existing metadata when updating with zero-value fields
