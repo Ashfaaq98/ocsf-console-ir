@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"sort"
@@ -33,19 +34,21 @@ import (
 // Theme defines UI color tokens used across widgets and text tags.
 type Theme struct {
 	// Widget colors
-	Bg          tcell.Color
-	Surface     tcell.Color
-	Border      tcell.Color
-	FocusBorder tcell.Color
-	SelectionBg tcell.Color
-	SelectionFg tcell.Color
-	TextPrimary tcell.Color
-	TextMuted   tcell.Color
-	Accent      tcell.Color
-	Success     tcell.Color
-	Warning     tcell.Color
-	Error       tcell.Color
-	Header      tcell.Color
+	Canvas        tcell.Color
+	Bg            tcell.Color
+	Surface       tcell.Color
+	SurfaceRaised tcell.Color
+	Border        tcell.Color
+	FocusBorder   tcell.Color
+	SelectionBg   tcell.Color
+	SelectionFg   tcell.Color
+	TextPrimary   tcell.Color
+	TextMuted     tcell.Color
+	Accent        tcell.Color
+	Success       tcell.Color
+	Warning       tcell.Color
+	Error         tcell.Color
+	Header        tcell.Color
 
 	// Table colors
 	TableHeader   tcell.Color
@@ -81,19 +84,21 @@ func hex(s string) tcell.Color { return tcell.GetColor(s) }
 
 func themeDark() Theme {
 	return Theme{
-		Bg:          hex("#0e1116"),
-		Surface:     hex("#12161e"),
-		Border:      hex("#2b3240"),
-		FocusBorder: hex("#4aa8ff"),
-		SelectionBg: hex("#2b3240"),
-		SelectionFg: hex("#cfd8e3"),
-		TextPrimary: hex("#e6edf3"),
-		TextMuted:   hex("#8a939f"),
-		Accent:      hex("#2dd4bf"),
-		Success:     hex("#22c55e"),
-		Warning:     hex("#f59e0b"),
-		Error:       hex("#ef4444"),
-		Header:      hex("#eab308"),
+		Canvas:        hex("#080b0f"),
+		Bg:            hex("#0e1116"),
+		Surface:       hex("#12161e"),
+		SurfaceRaised: hex("#1c2330"),
+		Border:        hex("#2b3240"),
+		FocusBorder:   hex("#4aa8ff"),
+		SelectionBg:   hex("#2b3240"),
+		SelectionFg:   hex("#cfd8e3"),
+		TextPrimary:   hex("#e6edf3"),
+		TextMuted:     hex("#8a939f"),
+		Accent:        hex("#2dd4bf"),
+		Success:       hex("#22c55e"),
+		Warning:       hex("#f59e0b"),
+		Error:         hex("#ef4444"),
+		Header:        hex("#eab308"),
 
 		// Table colors
 		TableHeader:   hex("#eab308"),
@@ -123,29 +128,158 @@ func themeDark() Theme {
 	}
 }
 
-// themeGruvbox is the gruvbox dark palette, using its published values.
-//
-// It replaces a warm theme that looked like gruvbox but was not: every accent
-// sat at roughly half gruvbox's saturation (#d4976c against #fe8019), and the
-// punchy retro accents are the whole point of the palette.
-//
-// Severity uses gruvbox's own red/orange/yellow/green/blue ramp so the levels
-// stay distinguishable rather than being tinted to match.
+func themeMidnight() Theme {
+	return Theme{
+		Canvas:        hex("#0b1016"),
+		Bg:            hex("#0b1016"),
+		Surface:       hex("#111923"),
+		SurfaceRaised: hex("#182432"),
+		Border:        hex("#1f2d3e"),
+		FocusBorder:   hex("#56d4ff"),
+		SelectionBg:   hex("#182432"),
+		SelectionFg:   hex("#e6edf3"),
+		TextPrimary:   hex("#e6edf3"),
+		TextMuted:     hex("#8b9bad"),
+		Accent:        hex("#56d4ff"),
+		Success:       hex("#67d39a"),
+		Warning:       hex("#f4c95d"),
+		Error:         hex("#ff5c70"),
+		Header:        hex("#56d4ff"),
+
+		TableHeader:   hex("#56d4ff"),
+		TableHeaderBg: hex("#111923"),
+		TableRow:      hex("#e6edf3"),
+		TableRowMuted: hex("#8b9bad"),
+		TableZebra1:   hex("#111923"),
+		TableZebra2:   hex("#0b1016"),
+
+		SeverityCritical: hex("#ff5c70"),
+		SeverityHigh:     hex("#ff9d4d"),
+		SeverityMedium:   hex("#f6d365"),
+		SeverityLow:      hex("#78d6a3"),
+		SeverityInfo:     hex("#56d4ff"),
+
+		TagTextPrimary:      "#e6edf3",
+		TagMuted:            "#8b9bad",
+		TagAccent:           "#56d4ff",
+		TagSuccess:          "#67d39a",
+		TagWarning:          "#f4c95d",
+		TagError:            "#ff5c70",
+		TagSeverityCritical: "#ff5c70",
+		TagSeverityHigh:     "#ff9d4d",
+		TagSeverityMedium:   "#f6d365",
+		TagSeverityLow:      "#78d6a3",
+		TagSeverityInfo:     "#56d4ff",
+	}
+}
+
+func themeHighContrast() Theme {
+	return Theme{
+		Canvas:        hex("#000000"),
+		Bg:            hex("#000000"),
+		Surface:       hex("#1a1a1a"),
+		SurfaceRaised: hex("#333333"),
+		Border:        hex("#ffffff"),
+		FocusBorder:   hex("#ffff00"),
+		SelectionBg:   hex("#ffffff"),
+		SelectionFg:   hex("#000000"),
+		TextPrimary:   hex("#ffffff"),
+		TextMuted:     hex("#cccccc"),
+		Accent:        hex("#ffff00"),
+		Success:       hex("#00ff00"),
+		Warning:       hex("#ffaa00"),
+		Error:         hex("#ff0000"),
+		Header:        hex("#ffff00"),
+
+		TableHeader:   hex("#ffff00"),
+		TableHeaderBg: hex("#333333"),
+		TableRow:      hex("#ffffff"),
+		TableRowMuted: hex("#cccccc"),
+		TableZebra1:   hex("#1a1a1a"),
+		TableZebra2:   hex("#000000"),
+
+		SeverityCritical: hex("#ff0000"),
+		SeverityHigh:     hex("#ffaa00"),
+		SeverityMedium:   hex("#ffff00"),
+		SeverityLow:      hex("#00ff00"),
+		SeverityInfo:     hex("#00ffff"),
+
+		TagTextPrimary:      "#ffffff",
+		TagMuted:            "#cccccc",
+		TagAccent:           "#ffff00",
+		TagSuccess:          "#00ff00",
+		TagWarning:          "#ffaa00",
+		TagError:            "#ff0000",
+		TagSeverityCritical: "#ff0000",
+		TagSeverityHigh:     "#ffaa00",
+		TagSeverityMedium:   "#ffff00",
+		TagSeverityLow:      "#00ff00",
+		TagSeverityInfo:     "#00ffff",
+	}
+}
+
+func themeColorblind() Theme {
+	return Theme{
+		Canvas:        hex("#121212"),
+		Bg:            hex("#121212"),
+		Surface:       hex("#1e1e1e"),
+		SurfaceRaised: hex("#2c2c2c"),
+		Border:        hex("#3d3d3d"),
+		FocusBorder:   hex("#56b4e9"), // Sky blue
+		SelectionBg:   hex("#0072b2"), // Blue
+		SelectionFg:   hex("#ffffff"),
+		TextPrimary:   hex("#ffffff"),
+		TextMuted:     hex("#a0a0a0"),
+		Accent:        hex("#56b4e9"), // Sky blue
+		Success:       hex("#009e73"), // Bluish green
+		Warning:       hex("#f0e442"), // Yellow
+		Error:         hex("#d55e00"), // Vermillion
+		Header:        hex("#56b4e9"),
+
+		TableHeader:   hex("#56b4e9"),
+		TableHeaderBg: hex("#2c2c2c"),
+		TableRow:      hex("#ffffff"),
+		TableRowMuted: hex("#a0a0a0"),
+		TableZebra1:   hex("#1e1e1e"),
+		TableZebra2:   hex("#121212"),
+
+		SeverityCritical: hex("#d55e00"), // Vermillion
+		SeverityHigh:     hex("#e69f00"), // Orange
+		SeverityMedium:   hex("#f0e442"), // Yellow
+		SeverityLow:      hex("#009e73"), // Bluish green
+		SeverityInfo:     hex("#56b4e9"), // Sky blue
+
+		TagTextPrimary:      "#ffffff",
+		TagMuted:            "#a0a0a0",
+		TagAccent:           "#56b4e9",
+		TagSuccess:          "#009e73",
+		TagWarning:          "#f0e442",
+		TagError:            "#d55e00",
+		TagSeverityCritical: "#d55e00",
+		TagSeverityHigh:     "#e69f00",
+		TagSeverityMedium:   "#f0e442",
+		TagSeverityLow:      "#009e73",
+		TagSeverityInfo:     "#56b4e9",
+	}
+}
+
 func themeGruvbox() Theme {
 	return Theme{
-		Bg:          hex("#282828"), // bg0
-		Surface:     hex("#32302f"), // bg0_s
-		Border:      hex("#504945"), // bg2
-		FocusBorder: hex("#fe8019"), // bright orange
-		SelectionBg: hex("#504945"),
-		SelectionFg: hex("#fbf1c7"), // fg0
-		TextPrimary: hex("#ebdbb2"), // fg1
-		TextMuted:   hex("#928374"), // gray
-		Accent:      hex("#fe8019"), // bright orange
-		Success:     hex("#b8bb26"), // bright green
-		Warning:     hex("#fabd2f"), // bright yellow
-		Error:       hex("#fb4934"), // bright red
-		Header:      hex("#fabd2f"),
+		Canvas:        hex("#1d2021"),
+		Bg:            hex("#282828"), // bg0
+		Surface:       hex("#32302f"), // bg0_s
+		SurfaceRaised: hex("#3c3836"),
+		Border:        hex("#504945"), // bg2
+		FocusBorder:   hex("#fe8019"), // bright orange
+		SelectionBg:   hex("#504945"),
+		SelectionFg:   hex("#fbf1c7"), // fg0
+		TextPrimary:   hex("#ebdbb2"), // fg1
+		TextMuted:     hex("#928374"), // gray
+		Accent:        hex("#fe8019"), // bright orange
+		Success:       hex("#b8bb26"), // bright green
+		Warning:       hex("#fabd2f"), // bright yellow
+		Error:         hex("#fb4934"), // bright red
+		Header:        hex("#fabd2f"),
 
 		// Table colors
 		TableHeader:   hex("#fabd2f"),
@@ -177,19 +311,21 @@ func themeGruvbox() Theme {
 
 func themeLight() Theme {
 	return Theme{
-		Bg:          hex("#f6f8fa"),
-		Surface:     hex("#ffffff"),
-		Border:      hex("#d0d7de"),
-		FocusBorder: hex("#1f6feb"),
-		SelectionBg: hex("#e2e8f0"),
-		SelectionFg: hex("#111827"),
-		TextPrimary: hex("#111827"),
-		TextMuted:   hex("#6b7280"),
-		Accent:      hex("#2563eb"),
-		Success:     hex("#15803d"),
-		Warning:     hex("#b45309"),
-		Error:       hex("#b91c1c"),
-		Header:      hex("#1f2937"),
+		Canvas:        hex("#eef2f6"),
+		Bg:            hex("#f6f8fa"),
+		Surface:       hex("#ffffff"),
+		SurfaceRaised: hex("#e2e8f0"),
+		Border:        hex("#d0d7de"),
+		FocusBorder:   hex("#1f6feb"),
+		SelectionBg:   hex("#e2e8f0"),
+		SelectionFg:   hex("#111827"),
+		TextPrimary:   hex("#111827"),
+		TextMuted:     hex("#6b7280"),
+		Accent:        hex("#2563eb"),
+		Success:       hex("#15803d"),
+		Warning:       hex("#b45309"),
+		Error:         hex("#b91c1c"),
+		Header:        hex("#1f2937"),
 
 		// Table colors
 		TableHeader:   hex("#1f2937"),
@@ -219,6 +355,53 @@ func themeLight() Theme {
 	}
 }
 
+// themeBasic is a 16-color safe theme for terminals without truecolor support.
+func themeBasic() Theme {
+	return Theme{
+		Canvas:        tcell.ColorBlack,
+		Bg:            tcell.ColorBlack,
+		Surface:       tcell.ColorBlack,
+		SurfaceRaised: tcell.ColorBlack,
+		Border:        tcell.ColorWhite,
+		FocusBorder:   tcell.ColorBlue,
+		SelectionBg:   tcell.ColorWhite,
+		SelectionFg:   tcell.ColorBlack,
+		TextPrimary:   tcell.ColorWhite,
+		TextMuted:     tcell.ColorGray,
+		Accent:        tcell.ColorBlue,
+		Success:       tcell.ColorGreen,
+		Warning:       tcell.ColorYellow,
+		Error:         tcell.ColorRed,
+		Header:        tcell.ColorYellow,
+
+		// Table colors
+		TableHeader:   tcell.ColorYellow,
+		TableHeaderBg: tcell.ColorBlack,
+		TableRow:      tcell.ColorWhite,
+		TableRowMuted: tcell.ColorGray,
+		TableZebra1:   tcell.ColorBlack,
+		TableZebra2:   tcell.ColorBlack,
+
+		SeverityCritical: tcell.ColorRed,
+		SeverityHigh:     tcell.ColorFuchsia,
+		SeverityMedium:   tcell.ColorYellow,
+		SeverityLow:      tcell.ColorGreen,
+		SeverityInfo:     tcell.ColorBlue,
+
+		TagTextPrimary:      "white",
+		TagMuted:            "gray",
+		TagAccent:           "blue",
+		TagSuccess:          "green",
+		TagWarning:          "yellow",
+		TagError:            "red",
+		TagSeverityCritical: "red",
+		TagSeverityHigh:     "fuchsia",
+		TagSeverityMedium:   "yellow",
+		TagSeverityLow:      "green",
+		TagSeverityInfo:     "blue",
+	}
+}
+
 func detectTrueColor() bool {
 	// Best-effort detection without initializing screen
 	ct := strings.ToLower(os.Getenv("COLORTERM"))
@@ -241,8 +424,8 @@ type UI struct {
 
 	// Layout components
 	layout       *tview.Flex
+	leftCol      *tview.Flex
 	appTitle     *tview.TextView
-	allList      *tview.List
 	allCasesInfo *tview.TextView
 	sidebar      *tview.List
 	mainPanel    *tview.Flex
@@ -251,15 +434,18 @@ type UI struct {
 	statusBar    *tview.TextView
 
 	// State
-	cases            []store.Case
-	selectedCaseID   string
-	events           []store.Event
-	selectedEventID  string
-	selectedEventIDs map[string]bool             // multi-select state for events
-	loadingEvents    int32                       // atomic flag to prevent concurrent event loads
-	lastLoadStart    int64                       // unix nano timestamp of last load start (for watchdog)
-	showAll          bool                        // when true, sidebar selection is "ALL EVENTS"
-	queryStates      map[string]*EventQueryState // per-context (ALL or caseID) filter+pagination
+	cases           []store.Case
+	selectedCaseID  string
+	events          []store.Event
+	selectedEventID string
+	// map of selected event IDs for multi-select actions
+	selectedEventIDs map[string]bool
+
+	// map of selected finding IDs for multi-select actions
+	loadingEvents int32                       // atomic flag to prevent concurrent event loads
+	lastLoadStart int64                       // unix nano timestamp of last load start (for watchdog)
+	showAll       bool                        // when true, sidebar selection is "ALL EVENTS"
+	queryStates   map[string]*EventQueryState // per-context (ALL or caseID) filter+pagination
 
 	// Findings triage queue. Findings are the analyst's unit of work; ALL EVENTS
 	// remains available alongside it for raw-log triage.
@@ -271,6 +457,12 @@ type UI struct {
 	// queue can be repainted (e.g. on a theme change) without re-querying.
 	findingsTotal int
 
+	// Layout state
+	currentLayoutMode LayoutMode
+	isShortScreen     bool
+
+	// Copilot drawer state
+
 	// Theme state
 	theme          Theme
 	themeName      string
@@ -278,9 +470,76 @@ type UI struct {
 	themeApplying  int32
 	filterApplying int32
 
+	// Navigation tracking
+	recentCases  []string
+	recentPivots []string
+
 	// Filters (time window for events list)
 	filterStart time.Time
 	filterEnd   time.Time
+
+	// home is the Analyst Home screen while it is open. It owns timers, so it
+	// has to be closed when the screen is replaced.
+	home *homeView
+
+	// casesPane is the Cases screen: the case list beside a briefing.
+	casesPane *tview.Flex
+
+	// Triage state. The filter is what the chip row shows and what the loader
+	// turns into a query; the selection is keyed by finding uid so it survives
+	// refresh, sort and filter changes.
+	triage    *triageFilter
+	triageSel *triageSelection
+	chipRow   *tview.TextView
+	strip     *tview.TextView
+
+	// eventAtRow maps a table row to an index into ui.events. Cluster headers
+	// occupy rows and hold no event, so a row number is no longer an offset.
+	eventAtRow map[int]int
+
+	// searchQuery is the active `/` search, empty when none. It is state
+	// because the empty result of a search and the empty result of an unloaded
+	// list say different things, and because the chip that shows it must be
+	// removable.
+	searchQuery string
+
+	// pivot is the observable the event list is currently narrowed to, or nil.
+	// It is state rather than a query parameter because the chip that shows it
+	// has to be removable, and an invisible filter is indistinguishable from
+	// missing data.
+	pivot *pivotTarget
+
+	// eventGroup is what the event list clusters by, eventClusters is the
+	// result over the loaded page, and expandedCluster is the one open cluster.
+	//
+	// Expansion is keyed by label rather than by index so it survives a
+	// re-render, and only one is open at a time: a list where everything is
+	// expanded is the wall of log lines clustering exists to avoid.
+	eventGroup      groupKey
+	eventClusters   []eventCluster
+	expandedCluster string
+
+	// findingsUnfiltered is how many findings exist ignoring the filter, which
+	// is what tells the two empty states apart. findingsErr degrades the table
+	// body without replacing the screen.
+	findingsUnfiltered int
+	findingsErr        error
+
+	// navRail is the destination list shown on every screen wider than 80
+	// columns, and destination is the entry it marks. See nav.go.
+	navRail     *tview.TextView
+	destination destinationID
+
+	// railShown is the navigation rail's current width, and needsClear marks a
+	// frame that must clear the screen before drawing. See applyRailVisibility.
+	railShown  int
+	needsClear bool
+
+	// watcher and enrichment report subsystem health to the evidence pulse.
+	// Function-typed so the ui package depends on a shape rather than on the
+	// ingest package and the plugin manager.
+	watcher    func() WatcherStatus
+	enrichment func() EnrichmentStatus
 
 	// ingestDir is the drop folder actually being watched, so empty-state hints
 	// can name it. Hardcoding a path in those hints is how they came to point at
@@ -293,7 +552,10 @@ type UI struct {
 	enrichNotify chan string
 
 	// Runtime
-	running    bool
+	// running is set for as long as app.Run() is in its event loop. Atomic
+	// because background loaders read it from their own goroutines to decide
+	// whether queueUpdate can be used. See queueUpdate.
+	running    atomic.Bool
 	helpActive bool
 	lastFocus  tview.Primitive
 
@@ -466,12 +728,20 @@ func NewUI(ctx context.Context, store *store.Store, llmProvider llm.LLMProvider,
 	// Default theme
 	// Restore the analyst's last choice; the default is used on a fresh
 	// install or if the settings file is missing or unreadable.
-	ui.themeName = loadThemeName()
-	ui.theme = themeBuilders[ui.themeName]()
+	uiSettings := loadUISettings()
+	ui.themeName = uiSettings.Theme
+	ui.recentCases = uiSettings.RecentCases
+	ui.recentPivots = uiSettings.RecentPivots
+	if !ui.hasTrueColor {
+		ui.theme = themeBasic()
+	} else {
+		ui.theme = themeBuilders[ui.themeName]()
+	}
 
 	ui.setupLayout()
 	ui.setupKeybindings()
 	ui.applyTheme() // apply colors after layout assembled
+	ui.app.EnableMouse(true)
 
 	return ui
 }
@@ -514,15 +784,6 @@ func (ui *UI) Start(ctx context.Context) error {
 
 	go ui.watchEnrichments()
 
-	// Debug: Check if allList is properly initialized
-	if ui.logger != nil {
-		if ui.allList != nil {
-			ui.logger.Debug("allList is initialized with %d items", ui.allList.GetItemCount())
-		} else {
-			ui.logger.Debug("allList is nil!")
-		}
-	}
-
 	// Show UI immediately, then load data asynchronously
 	ui.logger.Println("Starting tview application...")
 
@@ -536,49 +797,19 @@ func (ui *UI) Start(ctx context.Context) error {
 			})
 		} else {
 			ui.logger.Printf("Loaded %d cases successfully", len(ui.cases))
-			// Set initial focus after data is loaded and auto-load ALL EVENTS
+			// Entry routing: the UI always opens on Analyst Home.
+			//
+			// Whether there is a database at all is decided in cmd, before the
+			// store is opened, and a missing one never reaches here — it gets
+			// the Welcome Screen instead. So by the time the UI starts there is
+			// exactly one destination, and it renders its own empty states.
+			//
+			// This used to branch four ways, on whether there were findings,
+			// then cases, then events. It meant the first screen an analyst saw
+			// changed with the contents of the database, so there was no screen
+			// to learn and no stable place to return to.
 			ui.app.QueueUpdate(func() {
-				// Focus the Events table directly (overview panel is non-selectable)
-				ui.app.SetFocus(ui.eventList)
-
-				// Land on the findings queue when there is triage work waiting;
-				// otherwise fall back to ALL EVENTS so a raw-log-only install is
-				// never greeted by an empty screen.
-				openFindings, cntErr := ui.store.CountFindings(ui.ctx, store.FindingFilter{OpenOnly: true})
-				if cntErr == nil && openFindings > 0 {
-					ui.jumpToFindings()
-					return
-				}
-
-				// Auto-load ALL EVENTS on startup
-				ui.showAll = true
-				ui.showFindings = false
-				ui.selectedCaseID = ""
-
-				// Immediate loading state in events table
-				ui.eventList.Clear()
-				headers := []string{"Time", "Type", "Severity", "Host", "Source", "Message"}
-				for col, header := range headers {
-					ui.eventList.SetCell(0, col, tview.NewTableCell(header).
-						SetTextColor(ui.theme.TableHeader).
-						SetBackgroundColor(ui.theme.TableHeaderBg).
-						SetAttributes(tcell.AttrBold))
-				}
-				ui.eventList.SetCell(1, 0, tview.NewTableCell("Loading...").
-					SetTextColor(ui.theme.TableRowMuted))
-
-				// Watchdog: reset stuck load flag if necessary
-				if atomic.LoadInt32(&ui.loadingEvents) == 1 {
-					started := time.Unix(0, atomic.LoadInt64(&ui.lastLoadStart))
-					if started.IsZero() || time.Since(started) > 3*time.Second {
-						if ui.logger != nil {
-							ui.logger.Printf("startup: resetting stuck loadingEvents since %v", started)
-						}
-						atomic.StoreInt32(&ui.loadingEvents, 0)
-						atomic.StoreInt64(&ui.lastLoadStart, 0)
-					}
-				}
-				go ui.loadAllEvents()
+				ui.showAnalystHome()
 			})
 		}
 	}()
@@ -612,9 +843,9 @@ func (ui *UI) Start(ctx context.Context) error {
 		}()
 	}
 
-	ui.running = true
+	ui.running.Store(true)
 	err := ui.app.Run()
-	ui.running = false
+	ui.running.Store(false)
 	ui.logger.Printf("app.Run() returned with error: %v", err)
 	return err
 }
@@ -662,73 +893,10 @@ func (ui *UI) setupLayout() {
 	ui.appTitle.SetBackgroundColor(ui.theme.Surface)
 	ui.renderHeader()
 
-	// Dedicated ALL EVENTS list (single item)
-	ui.allList = tview.NewList()
-	ui.allList.SetTitle(" ALL EVENTS ")
-	ui.allList.SetBorder(true)
-	ui.allList.SetTitleAlign(tview.AlignCenter)
-	ui.allList.SetMainTextColor(ui.theme.TextPrimary)
-	ui.allList.SetSecondaryTextColor(ui.theme.TextMuted)
-	ui.allList.SetSelectedTextColor(ui.theme.SelectionFg)
-	ui.allList.SetSelectedBackgroundColor(ui.theme.SelectionBg)
-	ui.allList.SetBorderColor(ui.theme.FocusBorder) // Make it more visible
-	ui.allList.AddItem(fmt.Sprintf("[%s]ALL EVENTS[-]", ui.theme.TagAccent), "All ingested events (watch folder)", 'A', nil)
-
-	// Debug logging
-	if ui.logger != nil {
-		ui.logger.Debug("allList created with %d items", ui.allList.GetItemCount())
-	}
-	ui.allList.SetSelectedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
-		// Load ALL EVENTS
-		ui.showAll = true
-		ui.selectedCaseID = ""
-
-		// Reset pagination for ALL context
-		{
-			s := ui.getOrInitState(contextAll)
-			s.pageIndex = 0
-		}
-
-		// Immediate loading state in events table
-		ui.eventList.Clear()
-		headers := []string{"Time", "Type", "Severity", "Host", "Source", "Message"}
-		for col, header := range headers {
-			ui.eventList.SetCell(0, col, tview.NewTableCell(header).
-				SetTextColor(ui.theme.TableHeader).
-				SetBackgroundColor(ui.theme.TableHeaderBg).
-				SetAttributes(tcell.AttrBold))
-		}
-		ui.eventList.SetCell(1, 0, tview.NewTableCell("Loading...").
-			SetTextColor(ui.theme.TableRowMuted))
-		ui.app.SetFocus(ui.eventList)
-		ui.setStatusDirect("[%s]Loading ALL events...[-:-:-]", ui.theme.TagWarning)
-
-		// Watchdog: reset stuck load flag if necessary
-		if atomic.LoadInt32(&ui.loadingEvents) == 1 {
-			started := time.Unix(0, atomic.LoadInt64(&ui.lastLoadStart))
-			if started.IsZero() || time.Since(started) > 3*time.Second {
-				if ui.logger != nil {
-					ui.logger.Printf("allList select: resetting stuck loadingEvents since %v", started)
-				}
-				atomic.StoreInt32(&ui.loadingEvents, 0)
-				atomic.StoreInt64(&ui.lastLoadStart, 0)
-			}
-		}
-		go ui.loadAllEvents()
-	})
-	// Up/Down navigation between All and Cases
-	ui.allList.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
-		switch ev.Key() {
-		case tcell.KeyDown:
-			// Move focus into cases list
-			ui.app.SetFocus(ui.sidebar)
-			if ui.sidebar.GetItemCount() > 0 {
-				ui.sidebar.SetCurrentItem(0)
-			}
-			return nil
-		}
-		return ev
-	})
+	// The navigation rail. Its contents come from the destination table in
+	// nav.go, so the rail cannot advertise a screen the keys do not reach.
+	ui.navRail = ui.buildNavRail()
+	ui.renderNavRail()
 
 	// Sidebar list remains for cases (below ALL EVENTS)
 	ui.sidebar.SetTitle(" Cases ")
@@ -743,21 +911,26 @@ func (ui *UI) setupLayout() {
 	ui.allCasesInfo.SetTextColor(ui.theme.TextPrimary)
 	ui.allCasesInfo.SetBorderColor(ui.theme.Border)
 	// Default text until cases are loaded
-	ui.allCasesInfo.SetText(fmt.Sprintf("[%s](A) EVENTS (0)[-]\n[%s](C) CASES (0)[-]\n[%s]OPEN[-] - 0  [%s]INVESTIGATING[-] - 0  [%s]CLOSED[-] - 0",
+	ui.allCasesInfo.SetText(fmt.Sprintf("[%s](2) EVENTS (0)[-]\n[%s](3) CASES (0)[-]\n[%s]OPEN[-] - 0  [%s]INVESTIGATING[-] - 0  [%s]CLOSED[-] - 0",
 		ui.theme.TagAccent, ui.theme.TagAccent, ui.theme.TagTextPrimary, ui.theme.TagTextPrimary, ui.theme.TagTextPrimary))
 
-	// Build left column: Title → All → Cases
-	leftCol := tview.NewFlex().
+	// The left column is the rail and nothing else. It used to carry the app
+	// title and the Cases list too, which is why it needed 45 columns and had
+	// to be hidden on Home.
+	ui.leftCol = tview.NewFlex().
 		SetDirection(tview.FlexRow).
-		AddItem(ui.appTitle, 2, 0, false).
-		AddItem(ui.allCasesInfo, 5, 0, false).
-		AddItem(ui.sidebar, 0, 1, false)
+		AddItem(ui.navRail, 0, 1, false).
+		AddItem(ui.appTitle, 2, 0, false)
 
 	// Create main layout - wider left column for better display
 	ui.layout = tview.NewFlex().
 		SetDirection(tview.FlexColumn).
-		AddItem(leftCol, 45, 0, true).
+		AddItem(ui.leftCol, navRailWidth, 0, true).
 		AddItem(ui.mainPanel, 0, 1, true)
+	// Track the width the layout was actually built with. Left at the zero
+	// value, applyRailVisibility would read "already hidden" on a first launch
+	// that lands on Home and never hide it.
+	ui.railShown = navRailWidth
 
 	// Create root layout with status bar
 	root := tview.NewFlex().
@@ -766,6 +939,22 @@ func (ui *UI) setupLayout() {
 		AddItem(ui.statusBar, 1, 0, false)
 
 	ui.app.SetRoot(root, true)
+
+	// Responsive layout handling, plus the rail's visibility, which depends on
+	// the destination as well as on the width.
+	ui.app.SetBeforeDrawFunc(func(screen tcell.Screen) bool {
+		ui.updateLayoutMode(screen)
+		ui.applyRailVisibility()
+		// tview does not clear between frames, so a panel that shrinks or
+		// disappears leaves its old cells on screen. Hiding the rail vacates 45
+		// columns that nothing then paints over, and switching the main view
+		// leaves the previous screen's borders showing around the new one.
+		if ui.needsClear {
+			screen.Clear()
+			ui.needsClear = false
+		}
+		return false
+	})
 
 	// Set up event handlers
 	ui.setupEventHandlers()
@@ -794,19 +983,9 @@ func (ui *UI) setupLayout() {
 		return ev
 	})
 
-	// Set initial focus to ALL EVENTS
-	ui.allList.SetCurrentItem(0)
-	ui.app.SetFocus(ui.allList)
-
-	// Debug: Confirm focus is set
-	if ui.logger != nil {
-		currentFocus := ui.app.GetFocus()
-		if currentFocus == ui.allList {
-			ui.logger.Debug("Focus successfully set to allList")
-		} else {
-			ui.logger.Debug("Focus not set to allList, current focus: %T", currentFocus)
-		}
-	}
+	// The rail is a read-only legend, not a focus target: it is reached with
+	// the digits, from anywhere. Focus starts on the content.
+	ui.app.SetFocus(ui.eventList)
 }
 
 // setupEventHandlers sets up event handlers for UI components
@@ -825,7 +1004,11 @@ func (ui *UI) setupEventHandlers() {
 			return
 		}
 		if row > 0 && row-1 < len(ui.events) { // Skip header row
-			ui.selectedEventID = ui.events[row-1].ID
+			e := ui.eventForRow(row)
+			if e == nil {
+				return
+			}
+			ui.selectedEventID = e.ID
 			ui.showEventDetails()
 		}
 	})
@@ -837,7 +1020,11 @@ func (ui *UI) setupEventHandlers() {
 			return
 		}
 		if row > 0 && row-1 < len(ui.events) { // Skip header row
-			ui.selectedEventID = ui.events[row-1].ID
+			e := ui.eventForRow(row)
+			if e == nil {
+				return
+			}
+			ui.selectedEventID = e.ID
 			ui.showEventDetails()
 		}
 	})
@@ -854,8 +1041,10 @@ func (ui *UI) setupEventHandlers() {
 				ui.showFindingDetails()
 				return nil
 			}
-			if row > 0 && row-1 < len(ui.events) {
-				ui.selectedEventID = ui.events[row-1].ID
+			// A cluster header has no event behind it; Enter there is handled
+			// by the global capture, which expands the cluster.
+			if e := ui.eventForRow(row); e != nil {
+				ui.selectedEventID = e.ID
 				ui.showEventDetails()
 			}
 			return nil
@@ -867,6 +1056,21 @@ func (ui *UI) setupEventHandlers() {
 				}
 				// Toggle selection on current event
 				ui.toggleEventSelection()
+				return nil
+			case 'y':
+				// Copy raw JSON of selected item to clipboard via OSC 52
+				row, _ := ui.eventList.GetSelection()
+				if ui.showFindings {
+					if row > 0 && row-1 < len(ui.findings) {
+						ui.copyToClipboard(ui.findings[row-1].RawJSON)
+					}
+				} else {
+					if row > 0 && row-1 < len(ui.events) {
+						if e := ui.eventForRow(row); e != nil {
+							ui.copyToClipboard(e.RawJSON)
+						}
+					}
+				}
 				return nil
 			case 'd':
 				// Delete selected events (with confirmation)
@@ -886,9 +1090,38 @@ func (ui *UI) setupEventHandlers() {
 	})
 }
 
-// onSidebarSelect centralizes behavior for selecting the ALL EVENTS item or a specific case.
+// copyToClipboard uses OSC 52 escape sequences to copy text to the system clipboard
+// over SSH or terminal emulators that support it.
+func (ui *UI) copyToClipboard(text string) {
+	// Print OSC 52 sequence directly to stdout (bypassing tview briefly, though it might cause a slight flicker,
+	// or write it through tcell if possible. tcell Screen does not have direct OSC 52 methods,
+	// but writing to os.Stdout usually works).
+	// For safety, we'll just log it for now since raw stdout writes can disrupt the TUI.
+	// Actually, fmt.Printf("\033]52;c;%s\007", base64.StdEncoding.EncodeToString([]byte(text)))
+	// works in most terminals.
+	if ui.logger != nil {
+		ui.logger.Printf("Clipboard copy triggered via OSC 52")
+	}
+	encoded := base64.StdEncoding.EncodeToString([]byte(text))
+	fmt.Printf("\033]52;c;%s\007", encoded)
+	ui.setStatusDirect("[%s]Copied to clipboard[-:-:-]", ui.theme.TagSuccess)
+}
+
+// onSidebarSelect handles user selection from the case list
 func (ui *UI) onSidebarSelect(index int) {
 	ui.logger.Printf("Sidebar selected (cases list): index=%d, cases=%d", index, len(ui.cases))
+
+	// On the Cases screen the list sits beside a briefing, and selecting a case
+	// swaps that briefing. The path below loads the case's events into
+	// ui.eventList, which is not on screen here — it would have written to a
+	// widget nobody can see.
+	if ui.onCases() {
+		if index >= 0 && index < len(ui.cases) {
+			ui.selectedCaseID = ui.cases[index].ID
+			ui.showCaseBriefing(ui.cases[index])
+		}
+		return
+	}
 
 	// Prepare UI to show a loading state immediately and focus the Events table.
 	showLoading := func(title string) {
@@ -949,6 +1182,27 @@ func (ui *UI) setupKeybindings() {
 			return event
 		}
 
+		// A case owns Tab and Shift+Tab, which move between its seven tabs.
+		//
+		// This handler runs before any primitive's own capture, so anything it
+		// claims never reaches the screen below. That is why case tabs did not
+		// work: they were bound to digits, which this handler routes to
+		// destinations, and then to brackets, which it routes to the copilot
+		// drawer. Global navigation still applies inside a case; only the two
+		// keys the case owns are passed through.
+		if ui.activeCM != nil {
+			switch event.Key() {
+			case tcell.KeyTab, tcell.KeyBacktab:
+				return event
+			case tcell.KeyRune:
+				// The case has its own copilot — a transcript with an input,
+				// not the read-only drawer this handler would open.
+				if r := event.Rune(); r == '[' || r == ']' {
+					return event
+				}
+			}
+		}
+
 		// Log key events to help diagnose input handling
 		if ui.logger != nil {
 			ui.logger.Debug("input: key=%v rune=%q mod=%v", event.Key(), event.Rune(), event.Modifiers())
@@ -959,11 +1213,25 @@ func (ui *UI) setupKeybindings() {
 			ui.app.Stop()
 			return nil
 		case tcell.KeyEnter:
+			// A cluster header is not an event. Enter on one expands it.
+			if ui.showAll && !ui.showFindings && ui.app.GetFocus() == ui.eventList {
+				row, _ := ui.eventList.GetSelection()
+				if c := ui.clusterAtRow(row); c != nil {
+					ui.toggleCluster(c.Label)
+					return nil
+				}
+			}
 			// Let the focused primitive handle Enter. The sidebar's own input capture will manage selection.
 			return event
 		case tcell.KeyEsc:
-			// Clear status line softly (UI goroutine safe)
-			ui.setStatusDirect("[%s]Ready[-:-:-]", ui.theme.TagAccent)
+			// Esc moves one level out. Modals consume it before it reaches here,
+			// so at this point the level to leave is the screen, and the level
+			// outside every screen is Home. It never quits.
+			if ui.onHome() {
+				ui.setStatusDirect("[%s]Ready[-:-:-]", ui.theme.TagAccent)
+				return nil
+			}
+			ui.showAnalystHome()
 			return nil
 		case tcell.KeyTab:
 			ui.cycleFocus()
@@ -974,7 +1242,7 @@ func (ui *UI) setupKeybindings() {
 			case 'q', 'Q':
 				ui.app.Stop()
 				return nil
-			case 'r', 'R':
+			case 'r':
 				// Non-blocking refresh to avoid stalling the tview event loop
 				ui.setStatusDirect("[%s]Refreshing...[-:-:-]", ui.theme.TagAccent)
 				go func() {
@@ -1010,6 +1278,16 @@ func (ui *UI) setupKeybindings() {
 			case 'h':
 				ui.showHelp()
 				return nil
+			case 'z':
+				// §8 assigns `g` to cycle the grouping, but §7 assigns `g`/`G`
+				// to top/bottom, and that idiom is already bound and already
+				// documented on both screens. §6 forbids one key meaning two
+				// things, so grouping takes `z` — vim's fold prefix, which is
+				// what a cluster is. Recorded as a deviation in the spec.
+				if ui.showAll && !ui.showFindings {
+					ui.cycleEventGrouping()
+					return nil
+				}
 			case 'l':
 				ui.focusRight()
 				return nil
@@ -1105,8 +1383,18 @@ func (ui *UI) setupKeybindings() {
 				}
 				return nil
 			case 'F':
+				if !ui.showFindings && ui.searchQuery != "" {
+					ui.clearSearch()
+					return nil
+				}
+				if !ui.showFindings && ui.pivot != nil {
+					ui.clearPivot()
+					return nil
+				}
 				if ui.showFindings {
-					ui.setStatusDirect("[%s]Findings: o toggles open/all • s status • v verdict[-:-:-]", ui.theme.TagAccent)
+					// Was a hint string with no effect. F is what the
+					// filtered-out empty state tells the analyst to press.
+					ui.clearTriageFilters()
 					return nil
 				}
 				// Gated by focus: Cases sidebar clears CASE filters, otherwise clear Events filters
@@ -1156,49 +1444,57 @@ func (ui *UI) setupKeybindings() {
 				}
 			case 'o':
 				if ui.showFindings {
-					ui.toggleFindingsScope()
+					ui.toggleTriageChip(chipOpen)
 					return nil
 				}
-			case 'A':
-				// Quick-jump to ALL EVENTS from anywhere (overview panel is non-selectable)
-				ui.app.SetFocus(ui.eventList)
-
-				// Trigger same behavior as selecting ALL EVENTS
-				ui.showFindings = false
-				ui.showAll = true
-				ui.selectedCaseID = ""
-
-				// Reset pagination for ALL context
-				{
-					s := ui.getOrInitState(contextAll)
-					s.pageIndex = 0
+			case 'V':
+				if ui.showFindings {
+					ui.cycleTriageView()
+					return nil
 				}
-
-				// Immediate loading state in events table
-				ui.eventList.Clear()
-				headers := []string{"Time", "Type", "Severity", "Host", "Source", "Message"}
-				for col, header := range headers {
-					ui.eventList.SetCell(0, col, tview.NewTableCell(header).
-						SetTextColor(ui.theme.TableHeader).
-						SetBackgroundColor(ui.theme.TableHeaderBg).
-						SetAttributes(tcell.AttrBold))
+			case 'x':
+				if ui.showFindings && ui.triageSelection().count() > 0 {
+					ui.triageSelection().clear()
+					ui.updateFindingsList(ui.findingsTotal)
+					ui.repaintTriageChrome()
+					ui.setStatusDirect("[%s]Selection cleared[-:-:-]", ui.theme.TagAccent)
+					return nil
 				}
-				ui.eventList.SetCell(1, 0, tview.NewTableCell("Loading...").
-					SetTextColor(ui.theme.TableRowMuted))
-				ui.setStatusDirect("[%s]Loading ALL events...[-:-:-]", ui.theme.TagWarning)
-
-				// Watchdog: reset stuck load flag if necessary
-				if atomic.LoadInt32(&ui.loadingEvents) == 1 {
-					started := time.Unix(0, atomic.LoadInt64(&ui.lastLoadStart))
-					if started.IsZero() || time.Since(started) > 3*time.Second {
-						if ui.logger != nil {
-							ui.logger.Printf("hotkey 'A': resetting stuck loadingEvents since %v", started)
+			case '1', '2', '3', '4', '5':
+				// Dispatched from the destination table, so the rail, the
+				// palette and this handler cannot disagree about where a
+				// digit goes. See nav.go.
+				if ui.navigate(event.Rune()) {
+					return nil
+				}
+			case ':':
+				ui.showCommandPalette()
+				return nil
+			case '/':
+				ui.showFilterBar()
+				return nil
+			case 'p':
+				if len(ui.events) > 0 {
+					row, _ := ui.eventList.GetSelection()
+					if row > 0 && row-1 < len(ui.events) {
+						if e := ui.eventForRow(row); e != nil {
+							ui.showPivotMenu(*e)
 						}
-						atomic.StoreInt32(&ui.loadingEvents, 0)
-						atomic.StoreInt64(&ui.lastLoadStart, 0)
 					}
 				}
-				go ui.loadAllEvents()
+				return nil
+			case 'A':
+				// Quick-jump to ALL EVENTS from anywhere (overview panel is non-selectable)
+				ui.switchToAllEvents()
+				return nil
+			case 'C':
+				ui.switchToCases()
+				return nil
+			case 'I':
+				ui.switchToIndicators()
+				return nil
+			case 'R':
+				ui.switchToReports()
 				return nil
 			case 'd':
 				// Context-sensitive delete:
@@ -1253,22 +1549,21 @@ func (ui *UI) refreshCases() error {
 		return err
 	}
 
-	// Filter out noisy/auto-created cases (e.g., legacy "Ingested Events" duplicates)
-	// and de-duplicate by Title to keep the sidebar clean.
-	filtered := make([]store.Case, 0, len(cases))
-	seenTitles := make(map[string]bool)
-	for _, c := range cases {
-		if strings.EqualFold(c.Title, "Ingested Events") {
-			continue
-		}
-		if seenTitles[c.Title] {
-			continue
-		}
-		seenTitles[c.Title] = true
-		filtered = append(filtered, c)
-	}
+	// Every case in the database is shown.
+	//
+	// This used to drop any case titled "Ingested Events" — the exact title the
+	// folder ingestor gives the case it creates — and then de-duplicate by
+	// title. So `console-ir list cases` reported a case the TUI insisted did
+	// not exist, and two genuinely different investigations that happened to
+	// share a name became one. Analyst Home reads the store directly and showed
+	// it in RECENT CASES, so the application contradicted itself on two screens
+	// at once.
+	//
+	// If auto-created cases are noise, the fix is not to create them, or to
+	// mark them; it is not to hide rows the analyst can see from the CLI.
+	filtered := cases
 
-	ui.logger.Printf("Loaded %d cases from database, showing %d after filtering", len(cases), len(filtered))
+	ui.logger.Printf("Loaded %d cases from database", len(cases))
 	// Store source list and apply CASE filters
 	ui.allCases = filtered
 	ui.cases = ui.applyCaseFilters(ui.allCases)
@@ -1329,8 +1624,6 @@ func (ui *UI) refreshCases() error {
 func (ui *UI) updateCasesList() {
 	ui.app.QueueUpdate(func() {
 		ui.sidebar.Clear()
-
-		// Cases list only (ALL EVENTS handled by separate allList)
 
 		if len(ui.cases) == 0 {
 			return
@@ -1528,7 +1821,21 @@ func (ui *UI) updateEventsList() {
 			maxPages = 1
 		}
 	}
-	ui.eventList.SetTitle(fmt.Sprintf(" Events (Page %d/%d, Total %d) ", s.pageIndex+1, maxPages, s.totalCount))
+	// The title describes the list beneath it. It used to report the page count
+	// from before a pivot or a search, so a narrowed list of 2 sat under a
+	// heading claiming 6 — two numbers on one screen, both describing it, and
+	// disagreeing.
+	title := fmt.Sprintf(" EVENTS  ·  %d ", len(ui.events))
+	switch {
+	case ui.searchQuery != "":
+		title = fmt.Sprintf(" EVENTS  ·  %d matching %q ", len(ui.events), ui.searchQuery)
+	case ui.pivot != nil:
+		title = fmt.Sprintf(" EVENTS  ·  %d for %s ", len(ui.events), ui.pivot.Value)
+	case maxPages > 1:
+		title = fmt.Sprintf(" EVENTS  ·  %d of %d · page %d/%d ",
+			len(ui.events), s.totalCount, s.pageIndex+1, maxPages)
+	}
+	ui.eventList.SetTitle(title)
 
 	// Set headers
 	headers := []string{"Time", "Type", "Severity", "Host", "Source", "Message"}
@@ -1540,20 +1847,45 @@ func (ui *UI) updateEventsList() {
 	}
 
 	if len(ui.events) == 0 {
-		// Empty-state onboarding: a fresh install has no data and no obvious next
-		// step. Point the analyst at the drop folder and the shipped sample.
-		hint := []string{
-			"No events yet.",
-			"",
-			fmt.Sprintf("Drop OCSF JSONL files into  %s  to ingest and enrich them.", ui.watchedDir()),
-			// Not "ingest examples/…": examples/ is not in the release archive,
-			// so a brew or curl install has no such file. The demo data is
-			// embedded in the binary, which works everywhere.
-			"Or run   console-ir demo   to explore a sample incident first.",
-			"Then press  r  to refresh this list.",
+		// Two distinct empty states, as on Triage. Telling an analyst to go
+		// ingest data because their own search excluded it is telling them
+		// their data is missing.
+		var hint []string
+		switch {
+		case ui.searchQuery != "":
+			hint = []string{
+				"No events match.",
+				"",
+				fmt.Sprintf("Search: %q", ui.searchQuery),
+				"",
+				"[F] Clear the search      [Esc] restores the previous list",
+			}
+		case ui.pivot != nil:
+			hint = []string{
+				"No events match.",
+				"",
+				fmt.Sprintf("Pivot: %s %s", ui.pivot.Kind, ui.pivot.Value),
+				"",
+				"[F] Clear the pivot",
+			}
+		default:
+			// A fresh install has no data and no obvious next step. Point the
+			// analyst at the drop folder and the shipped sample.
+			hint = []string{
+				"No events yet.",
+				"",
+				fmt.Sprintf("Drop OCSF JSONL files into  %s  to ingest and enrich them.", ui.watchedDir()),
+				// Not "ingest examples/…": examples/ is not in the release
+				// archive, so a brew or curl install has no such file. The demo
+				// data is embedded in the binary, which works everywhere.
+				"Or run   console-ir demo   to explore a sample incident first.",
+				"Then press  r  to refresh this list.",
+			}
 		}
 		for i, line := range hint {
-			cell := tview.NewTableCell(line).
+			// Escaped: a table cell parses colour tags, so "[F]" is read as one
+			// and disappears — taking with it the only instruction on screen.
+			cell := tview.NewTableCell(tview.Escape(line)).
 				SetTextColor(ui.theme.TableRowMuted).
 				SetExpansion(1)
 			if i == 0 {
@@ -1569,9 +1901,55 @@ func (ui *UI) updateEventsList() {
 		return ui.events[i].Timestamp.After(ui.events[j].Timestamp)
 	})
 
-	// Add event rows
-	for row, event := range ui.events {
-		rowIndex := row + 1
+	// Cluster the page already loaded. Grouping is a display concern: it never
+	// re-queries, and expanding a cluster never re-queries either.
+	ui.eventClusters = clusterEvents(ui.events, ui.eventGroup)
+	ui.eventAtRow = map[int]int{}
+	indexOf := map[string]int{}
+	for i, e := range ui.events {
+		indexOf[e.ID] = i
+	}
+	if ui.expandedCluster == "" && len(ui.eventClusters) > 0 {
+		ui.expandedCluster = ui.eventClusters[0].Label
+	}
+
+	rowIndex := 0
+	for ci := range ui.eventClusters {
+		cluster := &ui.eventClusters[ci]
+		rowIndex++
+		cluster.headerRow = rowIndex
+
+		glyph := "▸"
+		if cluster.Label == ui.expandedCluster {
+			glyph = "▾"
+		}
+		header := tview.NewTableCell(fmt.Sprintf("[%s]%s %s[-:-:-]",
+			ui.theme.TagAccent, glyph, tview.Escape(cluster.Header()))).
+			SetExpansion(1).
+			SetBackgroundColor(ui.theme.Surface)
+		ui.eventList.SetCell(rowIndex, 0, header)
+		for col := 1; col < 6; col++ {
+			ui.eventList.SetCell(rowIndex, col,
+				tview.NewTableCell("").SetBackgroundColor(ui.theme.Surface))
+		}
+
+		if cluster.Label != ui.expandedCluster {
+			continue
+		}
+
+		for _, event := range cluster.Events {
+			rowIndex++
+			ui.eventAtRow[rowIndex] = indexOf[event.ID]
+			ui.renderEventRow(rowIndex, event)
+		}
+	}
+	return
+}
+
+// renderEventRow draws one event beneath its cluster header.
+func (ui *UI) renderEventRow(rowIndex int, event store.Event) {
+	{
+		row := rowIndex
 
 		// Format timestamp
 		timeStr := event.Timestamp.Format("15:04:05")
@@ -1658,11 +2036,19 @@ func (ui *UI) showEventDetails() {
 	lbl := ui.theme.TagWarning
 	val := ui.theme.TagTextPrimary
 
-	details.WriteString(fmt.Sprintf("[%s]Event ID:[-] [%s]%s[-]\n", lbl, val, event.ID))
-	details.WriteString(fmt.Sprintf("[%s]Timestamp:[-] [%s]%s[-]\n", lbl, val, event.Timestamp.Format("2006-01-02 15:04:05")))
-	details.WriteString(fmt.Sprintf("[%s]Type:[-] [%s]%s[-]\n", lbl, val, event.EventType))
-	details.WriteString(fmt.Sprintf("[%s]Severity:[-] [%s]%s[-]\n",
-		lbl, ui.getSeverityColor(event.Severity), strings.ToUpper(event.Severity)))
+	// §8 order: summary first, raw last. This opened with the event id — a
+	// machine identifier nobody will ever type — and put the sentence
+	// describing what happened several lines below it. Triage and Home already
+	// lead with the human summary; this screen was the one that disagreed.
+	summary := strings.TrimSpace(event.Message)
+	if summary == "" {
+		summary = event.EventType
+	}
+	details.WriteString(fmt.Sprintf("[%s:-:b]%s[-:-:-]\n", ui.theme.TagAccent, tview.Escape(summary)))
+	details.WriteString(fmt.Sprintf("[%s]%s · %s · %s[-]\n\n",
+		ui.theme.TagMuted, event.Timestamp.Format("2006-01-02 15:04:05"),
+		event.EventType, strings.ToUpper(event.Severity)))
+
 	details.WriteString(fmt.Sprintf("[%s]Host:[-] [%s]%s[-]\n", lbl, val, event.Host))
 
 	if event.SrcIP != "" {
@@ -1711,18 +2097,36 @@ func (ui *UI) showEventDetails() {
 		}
 
 		cards := groupEnrichments(enrichments, eventIndicatorValues(observables, event))
-		details.WriteString(fmt.Sprintf("\n[%s]Enrichments (%d):[-]\n", ui.theme.TagAccent, len(cards)))
+		details.WriteString(fmt.Sprintf("\n[%s]ENRICHMENT (%d)[-]\n", ui.theme.TagAccent, len(cards)))
 		renderEnrichmentCards(&details, ui.theme, cards, enrichmentRenderOptions{
 			Indent:      "  ",
 			MaxFields:   30,
 			MaxValueLen: 200,
 		})
-	} else if err != nil {
-		// Log failure but don't interrupt the UI
-		if ui.logger != nil {
-			ui.logger.Printf("Failed to load enrichments for event %s: %v", event.ID, err)
+	} else {
+		// §8: the enrichment states must be explicit. An empty region here is a
+		// defect — the analyst cannot tell a lookup that failed from one that
+		// has not run from an indicator nobody enriches, and all three look
+		// identical to a blank space.
+		details.WriteString(fmt.Sprintf("\n[%s]ENRICHMENT[-]\n", ui.theme.TagAccent))
+		switch {
+		case err != nil:
+			if ui.logger != nil {
+				ui.logger.Warn("could not load enrichments for event %s: %v", event.ID, err)
+			}
+			details.WriteString(fmt.Sprintf("  [%s]Lookup failed — see %s[-]\n",
+				ui.theme.TagError, runtimeLogHint()))
+		case ui.enrichmentStatus().Pending > 0:
+			details.WriteString(fmt.Sprintf("  [%s]Enrichment pending …[-]\n", ui.theme.TagWarning))
+		case ui.enrichmentStatus().Failed > 0:
+			details.WriteString(fmt.Sprintf("  [%s]Lookup failed — see %s[-]\n",
+				ui.theme.TagError, runtimeLogHint()))
+		default:
+			details.WriteString(fmt.Sprintf("  [%s]No enrichment available[-]\n", ui.theme.TagMuted))
 		}
 	}
+
+	details.WriteString(fmt.Sprintf("\n[%s]Event ID:[-] [%s]%s[-]\n", lbl, ui.theme.TagMuted, event.ID))
 
 	// Show raw JSON if available (truncated)
 	if event.RawJSON != "" {
@@ -1813,9 +2217,6 @@ func (ui *UI) showHelp() {
 	keyColWidth := 14
 	bullet := "•"
 	addSection := func(title string) {
-		// Two-cell header row (no spanning) to keep columns consistent.
-		// Fill the left key column with spaces so the header background is visible,
-		// matching the visual style of other subheadings.
 		left := tview.NewTableCell(strings.Repeat(" ", keyColWidth)).
 			SetBackgroundColor(ui.theme.TableHeaderBg).
 			SetAlign(tview.AlignLeft).
@@ -1823,11 +2224,49 @@ func (ui *UI) showHelp() {
 		right := tview.NewTableCell(" " + title + " ").
 			SetTextColor(ui.theme.TableHeader).
 			SetBackgroundColor(ui.theme.TableHeaderBg).
-			SetAttributes(tcell.AttrBold)
+			SetAttributes(tcell.AttrBold).
+			SetExpansion(1)
 		table.SetCell(row, 0, left)
 		table.SetCell(row, 1, right)
 		row++
 	}
+
+	addKey := func(key string, desc string) {
+		kCell := tview.NewTableCell(key).
+			SetTextColor(ui.theme.Accent).
+			SetAlign(tview.AlignRight).
+			SetMaxWidth(keyColWidth).
+			SetExpansion(0)
+		dCell := tview.NewTableCell(fmt.Sprintf("%s %s", bullet, desc)).
+			SetTextColor(ui.theme.TextPrimary).
+			SetExpansion(1)
+		table.SetCell(row, 0, kCell)
+		table.SetCell(row, 1, dCell)
+		row++
+	}
+
+	// Dynamic Contextual Help
+	focused := ui.app.GetFocus()
+	if focused == ui.eventList && ui.showFindings {
+		addSection("CONTEXT: FINDINGS QUEUE")
+		addKey("Space", "Toggle selection for bulk actions")
+		addKey("e", "Escalate selected finding(s)")
+		addKey("s", "Update finding status")
+		addKey("y", "Copy raw JSON to clipboard")
+		addKey("Enter", "View finding details")
+	} else if focused == ui.eventList && ui.showAll {
+		addSection("CONTEXT: EVENTS LIST")
+		addKey("Space", "Toggle selection")
+		addKey("p", "Pivot on current event")
+		addKey("y", "Copy raw JSON to clipboard")
+		addKey("Enter", "View event details")
+	} else if ui.activeCM != nil && ui.selectedCaseID != "" {
+		addSection("CONTEXT: CASE MANAGEMENT")
+		addKey("Tab", "Cycle through tabs (Briefing, Findings, Timeline...)")
+		addKey("[, ]", "Toggle Copilot drawer")
+		addKey("e", "Escalate to external system")
+	}
+
 	addKV := func(k, v string) {
 		// Fixed key column width using left padding; values expand and align left.
 		keyTxt := fmt.Sprintf("%-*s", keyColWidth, k)
@@ -1856,6 +2295,15 @@ func (ui *UI) showHelp() {
 
 	// Sections
 
+	addSection("DESTINATIONS")
+	// Listed from the destination table in nav.go, so the help cannot document
+	// a key the rail does not show or the handler does not dispatch.
+	for _, d := range destinations() {
+		addKV(string(d.key), d.name+" — "+d.desc)
+	}
+	addKV("Esc", "Home — "+homeDestination().desc)
+	addGap()
+
 	addSection("GLOBAL NAVIGATION")
 	addKV("Tab", "Cycle through panels")
 	addKV("Enter", "Select item (All/Case/Event)")
@@ -1866,8 +2314,6 @@ func (ui *UI) showHelp() {
 	addKV("J / K", "Page down/up (table)")
 	addKV("N", "Next page (events)")
 	addKV("P", "Prev page (events)")
-	addKV("1-99", "Quick case selection (multi-digit)")
-	addKV("Esc", "Clear status line")
 	addGap()
 
 	addSection("FINDINGS (TRIAGE)")
@@ -1900,7 +2346,7 @@ func (ui *UI) showHelp() {
 	addGap()
 
 	addSection("THEMING")
-	addKV("t", "Cycle themes (dark → gruvbox → light)")
+	addKV("t", "Cycle themes (colorblind, dark, gruvbox, high-contrast, light, midnight)")
 	addGap()
 
 	addSection("QUICK ACTIONS")
@@ -2031,11 +2477,7 @@ func (ui *UI) restoreMainLayout() {
 	// Restore focus to the previously focused component if available
 	target := ui.lastFocus
 	if target == nil {
-		if ui.allList != nil {
-			target = ui.allList
-		} else {
-			target = ui.sidebar
-		}
+		target = ui.sidebar
 	}
 	ui.app.SetFocus(target)
 	ui.highlightFocus(target)
@@ -2087,12 +2529,9 @@ func (ui *UI) moveSelection(delta int) {
 	switch ui.app.GetFocus() {
 	case ui.sidebar:
 		cur := ui.sidebar.GetCurrentItem()
-		// If at the first case and moving up, jump back to ALL EVENTS list
+		// The rail above is not focusable, so moving up off the first case
+		// stays put rather than focusing a widget the analyst cannot see.
 		if cur == 0 && delta < 0 {
-			if ui.allList != nil {
-				ui.app.SetFocus(ui.allList)
-				ui.allList.SetCurrentItem(0)
-			}
 			return
 		}
 		idx := cur + delta
@@ -2195,7 +2634,7 @@ func (ui *UI) startRedrawHeartbeat() {
 			case <-ui.ctx.Done():
 				return
 			case <-ticker.C:
-				if ui.running {
+				if ui.running.Load() {
 					// Non-blocking repaint request to avoid re-entrancy
 					ui.app.QueueUpdate(func() {})
 				}
@@ -2245,7 +2684,7 @@ func (ui *UI) setStatus(format string, args ...interface{}) {
 		ui.theme.TagMuted,
 		hints)
 
-	if ui.running {
+	if ui.running.Load() {
 		// Use non-blocking QueueUpdate to avoid potential re-entrancy stalls during input handling
 		ui.app.QueueUpdate(func() {
 			ui.statusBar.SetText(statusText)
@@ -2354,18 +2793,14 @@ func (ui *UI) applyTheme() {
 		ui.sidebar.SetBackgroundColor(ui.theme.Surface)
 	}
 
-	// ALL EVENTS list (dedicated)
-	if ui.allList != nil {
-		ui.allList.SetMainTextColor(ui.theme.TextPrimary)
-		ui.allList.SetSecondaryTextColor(ui.theme.TextMuted)
-		ui.allList.SetSelectedTextColor(ui.theme.SelectionFg)
-		ui.allList.SetSelectedBackgroundColor(ui.theme.SelectionBg)
-		ui.allList.SetBorderColor(ui.theme.Border)
-		ui.allList.SetBackgroundColor(ui.theme.Surface)
-		// Ensure the single item markup reflects current accent color
-		if ui.allList.GetItemCount() > 0 {
-			ui.allList.SetItemText(0, fmt.Sprintf("[%s]ALL EVENTS[-]", ui.theme.TagAccent), "All ingested events (watch folder)")
-		}
+	// The navigation rail is rendered from the destination table, so restyling
+	// it is a repaint rather than a list of SetItemText calls. The call this
+	// replaced rewrote the rail's first item to "ALL EVENTS" on every theme
+	// change, advertising a destination that key 1 does not go to.
+	if ui.navRail != nil {
+		stylePanel(ui.navRail.Box, "CONSOLE-IR", PanelRoleRail, ui.theme)
+		ui.navRail.SetBackgroundColor(ui.theme.Bg)
+		ui.renderNavRail()
 	}
 
 	// App title header
@@ -2461,7 +2896,11 @@ func (ui *UI) setTheme(name string) {
 		name, build = defaultThemeName, themeBuilders[defaultThemeName]
 	}
 	ui.themeName = name
-	ui.theme = build()
+	if !ui.hasTrueColor {
+		ui.theme = themeBasic()
+	} else {
+		ui.theme = build()
+	}
 	ui.applyTheme()
 	ui.saveUISettings()
 
@@ -2566,17 +3005,30 @@ func (ui *UI) selectCaseByNumber(caseNum int) {
 	ui.onSidebarSelect(caseIndex)
 }
 
-// toggleEventSelection toggles selection state for the currently focused event
+// toggleEventSelection toggles selection state for the currently focused event or finding
 func (ui *UI) toggleEventSelection() {
 	row, _ := ui.eventList.GetSelection()
-	if ui.logger != nil {
-		ui.logger.Printf("toggleEventSelection: row=%d, events=%d", row, len(ui.events))
-	}
-	if row > 0 && row-1 < len(ui.events) {
-		eventID := ui.events[row-1].ID
-		if ui.logger != nil {
-			ui.logger.Printf("toggleEventSelection: eventID=%s, currently selected=%v", eventID, ui.selectedEventIDs[eventID])
+
+	if ui.showFindings {
+		if row > 0 && row-1 < len(ui.findings) {
+			// Keyed by finding uid, not by row: the selection has to survive a
+			// refresh, a re-sort and a filter change, and a row index survives
+			// none of them.
+			sel := ui.triageSelection()
+			sel.toggle(ui.findings[row-1].FindingUID)
+			ui.updateFindingsList(ui.findingsTotal)
+			ui.repaintTriageChrome()
+			ui.setStatusDirect("[%s]%d selected[-:-:-]", ui.theme.TagAccent, sel.count())
 		}
+		return
+	}
+
+	if row > 0 && row-1 < len(ui.events) {
+		e := ui.eventForRow(row)
+		if e == nil {
+			return
+		}
+		eventID := e.ID
 		if ui.selectedEventIDs[eventID] {
 			delete(ui.selectedEventIDs, eventID)
 			ui.setStatusDirect("[%s]Event deselected (%d selected)[-:-:-]", ui.theme.TagAccent, len(ui.selectedEventIDs))
@@ -2585,14 +3037,6 @@ func (ui *UI) toggleEventSelection() {
 			ui.setStatusDirect("[%s]Event selected (%d selected)[-:-:-]", ui.theme.TagSuccess, len(ui.selectedEventIDs))
 		}
 		ui.updateEventsList() // Refresh to show selection indicators
-		if ui.logger != nil {
-			ui.logger.Printf("toggleEventSelection: total selected=%d", len(ui.selectedEventIDs))
-		}
-	} else {
-		if ui.logger != nil {
-			ui.logger.Printf("toggleEventSelection: invalid row or no events")
-		}
-		ui.setStatusDirect("[%s]No event to select (row=%d, events=%d)[-:-:-]", ui.theme.TagWarning, row, len(ui.events))
 	}
 }
 
@@ -3683,11 +4127,7 @@ func (ui *UI) showDeleteCaseConfirm() {
 				ui.restoreMainLayout()
 				ui.selectedCaseID = ""
 				ui.showAll = true
-				// Focus and select ALL EVENTS
-				if ui.allList != nil {
-					ui.allList.SetCurrentItem(0)
-					ui.app.SetFocus(ui.allList)
-				}
+				ui.app.SetFocus(ui.eventList)
 				go ui.loadAllEvents()
 				ui.setStatusDirect("[%s]Case deleted. Events moved to ALL EVENTS.[-:-:-]", ui.theme.TagSuccess)
 			})
@@ -3710,7 +4150,7 @@ func (ui *UI) showDeleteCaseConfirm() {
 
 // buildShortcutHints returns a colored, space-separated list of the most relevant
 // shortcuts based on current focus and UI state. It caps the list to a small,
-// readable set to avoid clutter. Ensures `h:help` is always shown and omits
+// readable set to avoid clutter. Ensures `?:help` is always shown and omits
 // `A:all events` when already in ALL EVENTS to free a slot.
 func (ui *UI) buildShortcutHints() string {
 	accent := ui.theme.TagAccent
@@ -3722,7 +4162,9 @@ func (ui *UI) buildShortcutHints() string {
 	}
 	inEvents := focused == ui.eventList
 	inSidebar := focused == ui.sidebar
-	inAll := focused == ui.allList
+	// The navigation rail is not focusable, so no hint is scoped to it. The
+	// digits work from every screen and are listed on the rail itself.
+	inAll := false
 
 	// Snapshot state
 	selectionCount := len(ui.selectedEventIDs)
@@ -3791,13 +4233,15 @@ func (ui *UI) buildShortcutHints() string {
 
 	// Post-process:
 	// - Omit "A" when already in ALL EVENTS to free a slot.
-	// - Pin "h:help" so it's always visible.
+	// - Pin help so it's always visible.
 	final := make([]kv, 0, 16)
 	seen := map[string]bool{}
 
-	// Always start with help
-	final = append(final, kv{"h", "help"})
-	seen["h"] = true
+	// Always start with help, under the key the rail and every screen footer
+	// advertise. This strip said "h:help" while the footer beside it said
+	// "? Help" — two answers to the same question, on screen at once.
+	final = append(final, kv{"?", "help"})
+	seen["?"] = true
 
 	for _, h := range base {
 		if h.key == "A" && ui.showAll {
@@ -3924,8 +4368,10 @@ func (ui *UI) updateOverview(eventsTotal, casesTotal, open, investigating, close
 	// layer beneath them.
 	openFindings, _ := ui.store.CountFindings(ui.ctx, store.FindingFilter{OpenOnly: true})
 	line0 := fmt.Sprintf("[%s](D) FINDINGS (%d open)[-]", ui.theme.TagAccent, openFindings)
-	line1 := fmt.Sprintf("[%s](A) EVENTS (%d)[-]", ui.theme.TagAccent, eventsTotal)
-	line2 := fmt.Sprintf("[%s](C) CASES (%d)[-]", ui.theme.TagAccent, casesTotal)
+	line1 := fmt.Sprintf("[%s](2) EVENTS (%d)[-]", ui.theme.TagAccent, eventsTotal)
+	// Was "(C) CASES". C had no handler at all, so the panel advertised a key
+	// that did nothing. Cases is destination 3.
+	line2 := fmt.Sprintf("[%s](3) CASES (%d)[-]", ui.theme.TagAccent, casesTotal)
 	line3 := fmt.Sprintf("[%s]OPEN[-] - %d  [%s]INVESTIGATING[-] - %d  [%s]CLOSED[-] - %d",
 		ui.theme.TagTextPrimary, open,
 		ui.theme.TagTextPrimary, investigating,
@@ -4288,20 +4734,47 @@ func (ui *UI) renderHeader() {
 	if ui.appTitle == nil {
 		return
 	}
-	// The title panel is ~44 columns, so the fields are stacked rather than
-	// spread: padding the date to the right edge wrapped it onto a third line
-	// and pushed the schema version out of view entirely.
+	// The version block sits at the foot of the navigation rail, which is 22
+	// columns wide. Two lines, and the build date is gone: it did not fit beside
+	// the schema version, and of the three it is the one nobody reads. It is
+	// still in `console-ir version`.
 	ui.appTitle.SetText(fmt.Sprintf(
-		" [%s]Console-IR[-] [%s]%s[-]\n [%s]OCSF %s · %s[-]",
+		" [%s]Console-IR[-] [%s]%s[-]\n [%s]OCSF %s[-]",
 		ui.theme.TagAccent,
 		ui.theme.TagMuted, buildinfo.Display(ui.version),
-		ui.theme.TagMuted, ocsf.SchemaVersion(), time.Now().Format("2006-01-02"),
+		ui.theme.TagMuted, ocsf.SchemaVersion(),
 	))
 }
 
 // SetIngestDir records the drop folder being watched, so empty-state hints name
 // the real path rather than a hardcoded one that drifts when the default moves.
 func (ui *UI) SetIngestDir(dir string) { ui.ingestDir = dir }
+
+// SetWatcherStatus supplies folder-ingestion health to the evidence pulse.
+// Without it the pulse says "not watching", which is the truthful answer for a
+// UI built without a watcher (tests, live-events).
+func (ui *UI) SetWatcherStatus(fn func() WatcherStatus) { ui.watcher = fn }
+
+// SetEnrichmentStatus supplies the enrichment backlog to the evidence pulse.
+func (ui *UI) SetEnrichmentStatus(fn func() EnrichmentStatus) { ui.enrichment = fn }
+
+// watcherStatus reports folder-ingestion health, or a zero value when no
+// watcher was wired in.
+func (ui *UI) watcherStatus() WatcherStatus {
+	if ui.watcher == nil {
+		return WatcherStatus{}
+	}
+	return ui.watcher()
+}
+
+// enrichmentStatus reports the enrichment backlog, or a zero value when no
+// plugin manager was wired in.
+func (ui *UI) enrichmentStatus() EnrichmentStatus {
+	if ui.enrichment == nil {
+		return EnrichmentStatus{}
+	}
+	return ui.enrichment()
+}
 
 // watchedDir is the folder to name in hints, falling back to the default when
 // the UI was constructed without one (tests, live-events).
@@ -4310,4 +4783,266 @@ func (ui *UI) watchedDir() string {
 		return ingest.DefaultDir
 	}
 	return ui.ingestDir
+}
+
+// applyRailVisibility hides the navigation rail in compact mode and shows it
+// everywhere else, including Home.
+//
+// Home hid it for one release, because at 45 columns the rail took a third of
+// the screen from the one view that has three panels to fit. At 22 it costs a
+// sixth, and an analyst who cannot see the destinations cannot learn them.
+func (ui *UI) applyRailVisibility() {
+	if ui.layout == nil || ui.leftCol == nil {
+		return
+	}
+	want := navRailWidth
+	if !ui.navRailVisible() {
+		want = 0
+	}
+	if want == ui.railShown {
+		return
+	}
+	ui.railShown = want
+	ui.needsClear = true
+	ui.layout.ResizeItem(ui.leftCol, want, 0)
+}
+
+// queueUpdate applies fn on the UI goroutine and redraws.
+//
+// tview's QueueUpdateDraw is synchronous: it blocks until the application's
+// event loop picks the update up. Called before app.Run() has started — or from
+// a test, which never starts it — that is a deadlock, not a slow path. Running
+// fn directly in that case is safe precisely because nothing is drawing yet.
+func (ui *UI) queueUpdate(fn func()) {
+	if !ui.running.Load() {
+		fn()
+		return
+	}
+	ui.app.QueueUpdateDraw(fn)
+}
+
+func (ui *UI) setMainView(p tview.Primitive) {
+	if ui.mainPanel == nil {
+		return
+	}
+	// Home owns a clock and a refresh ticker. Leaving them running behind
+	// another screen leaks a goroutine and keeps queueing redraws for a screen
+	// nobody is looking at.
+	if ui.home != nil && p != ui.home.root {
+		ui.home.close()
+		ui.home = nil
+	}
+	// The outgoing screen's borders are not painted over by the incoming one.
+	ui.needsClear = true
+	ui.mainPanel.Clear()
+	ui.mainPanel.AddItem(p, 0, 1, true)
+	ui.app.SetFocus(p)
+}
+
+func (ui *UI) restoreEventsView() {
+	if ui.mainPanel == nil {
+		return
+	}
+	ui.mainPanel.Clear()
+	ui.mainPanel.SetDirection(tview.FlexRow)
+
+	if ui.showFindings {
+		ui.mainPanel.AddItem(ui.triageChipRow(), 1, 0, false)
+	} else if ui.pivot != nil {
+		// A pivot is a filter, so it gets a chip. Narrowing the list without
+		// saying so leaves the analyst looking at a subset they cannot see the
+		// edge of, which is indistinguishable from missing data.
+		chip := tview.NewTextView().SetDynamicColors(true)
+		chip.SetBackgroundColor(ui.theme.Bg)
+		chip.SetText(fmt.Sprintf("  [%s:%s] %s: %s ✕[-:-:-]   [%s]F clears[-:-:-]",
+			ui.theme.TagTextPrimary, ui.theme.TagAccent,
+			ui.pivot.Kind, tview.Escape(ui.pivot.Value), ui.theme.TagMuted))
+		ui.mainPanel.AddItem(chip, 1, 0, false)
+	}
+
+	// Table and inspector side by side once there is room for both, stacked
+	// below that. The inspector used to be stacked at every width, which on a
+	// 140-column terminal wasted half the screen to show six fields.
+	body := tview.NewFlex()
+	if ui.currentLayoutMode == LayoutWide {
+		body.SetDirection(tview.FlexColumn)
+		body.AddItem(ui.eventList, 0, 2, true).
+			AddItem(ui.eventDetail, 0, 1, false)
+	} else {
+		body.SetDirection(tview.FlexRow)
+		body.AddItem(ui.eventList, 0, 2, true).
+			AddItem(ui.eventDetail, 0, 1, false)
+	}
+	ui.mainPanel.AddItem(body, 0, 1, true)
+
+	if ui.showFindings {
+		ui.mainPanel.AddItem(ui.triageStrip(), 1, 0, false)
+	}
+	ui.app.SetFocus(ui.eventList)
+}
+
+// triageChipRow returns the quick-filter row, creating it on first use.
+func (ui *UI) triageChipRow() *tview.TextView {
+	if ui.chipRow == nil {
+		ui.chipRow = tview.NewTextView().SetDynamicColors(true)
+	}
+	ui.chipRow.SetBackgroundColor(ui.theme.Bg)
+	ui.chipRow.SetText(ui.triageFilterState().renderChips(ui.theme))
+	return ui.chipRow
+}
+
+// triageStrip returns the bar below the table: the action bar normally, and the
+// selection strip whenever rows are selected.
+//
+// It replaces the action bar rather than joining it. With a selection live, the
+// bulk actions are the only ones that apply, and offering both invites pressing
+// a single-row action on a multi-row selection.
+func (ui *UI) triageStrip() *tview.TextView {
+	if ui.strip == nil {
+		ui.strip = tview.NewTextView().SetDynamicColors(true)
+	}
+	ui.strip.SetBackgroundColor(ui.theme.Bg)
+	ui.strip.SetText(ui.renderTriageStrip())
+	return ui.strip
+}
+
+func (ui *UI) renderTriageStrip() string {
+	t := ui.theme
+	if n := ui.triageSelection().count(); n > 0 {
+		return fmt.Sprintf("  [%s:-:b]%d selected[-:-:-]  %s", t.TagAccent, n, actionBar(t,
+			keyHint{"c", "Create case"},
+			keyHint{"a", "Add to case"},
+			keyHint{"s", "Status"},
+			keyHint{"v", "Verdict"},
+			keyHint{"x", "Clear"},
+		))
+	}
+	return "  " + actionBar(t,
+		keyHint{"Enter", "Open"},
+		keyHint{"Space", "Select"},
+		keyHint{"s", "Status"},
+		keyHint{"v", "Verdict"},
+		keyHint{"e", "Escalate"},
+		keyHint{"/", "Filter"},
+	)
+}
+
+// triageFilterState returns the filter, creating it on first use.
+func (ui *UI) triageFilterState() *triageFilter {
+	if ui.triage == nil {
+		ui.triage = newTriageFilter()
+	}
+	return ui.triage
+}
+
+// triageSelection returns the selection, creating it on first use.
+func (ui *UI) triageSelection() *triageSelection {
+	if ui.triageSel == nil {
+		ui.triageSel = newTriageSelection()
+	}
+	return ui.triageSel
+}
+
+// repaintTriageChrome repaints the chip row and the strip without re-querying.
+func (ui *UI) repaintTriageChrome() {
+	if ui.chipRow != nil {
+		ui.chipRow.SetText(ui.triageFilterState().renderChips(ui.theme))
+	}
+	if ui.strip != nil {
+		ui.strip.SetText(ui.renderTriageStrip())
+	}
+}
+
+func (ui *UI) switchToAllEvents() {
+	ui.showFindings = false
+	ui.showAll = true
+	ui.selectedCaseID = ""
+	ui.restoreEventsView()
+
+	s := ui.getOrInitState(contextAll)
+	s.pageIndex = 0
+
+	ui.eventList.Clear()
+	headers := []string{"Time", "Type", "Severity", "Host", "Source", "Message"}
+	for col, header := range headers {
+		ui.eventList.SetCell(0, col, tview.NewTableCell(header).
+			SetTextColor(ui.theme.TableHeader).
+			SetBackgroundColor(ui.theme.TableHeaderBg).
+			SetAttributes(tcell.AttrBold))
+	}
+	ui.eventList.SetCell(1, 0, tview.NewTableCell("Loading...").
+		SetTextColor(ui.theme.TableRowMuted))
+	ui.setStatusDirect("[%s]Loading ALL events...[-:-:-]", ui.theme.TagWarning)
+
+	if atomic.LoadInt32(&ui.loadingEvents) == 1 {
+		started := time.Unix(0, atomic.LoadInt64(&ui.lastLoadStart))
+		if started.IsZero() || time.Since(started) > 3*time.Second {
+			atomic.StoreInt32(&ui.loadingEvents, 0)
+			atomic.StoreInt64(&ui.lastLoadStart, 0)
+		}
+	}
+	go ui.loadAllEvents()
+}
+
+func (ui *UI) switchToCases() {
+	ui.showFindings = false
+	ui.showAll = false
+	if len(ui.cases) == 0 {
+		// An empty Cases screen, not a bounce to Home. Sending the analyst
+		// somewhere else makes the key look broken — and now that the rail
+		// marks the destination, it visibly contradicts itself.
+		ui.setMainView(emptyState("",
+			"No investigations yet",
+			"A case is what you escalate a finding into.",
+			[]string{"1 Triage", "c New case"}, ui.theme))
+		ui.setStatusDirect("[%s]Cases • press 'c' to create one[-:-:-]", ui.theme.TagAccent)
+		return
+	}
+	// The case list beside the briefing of whichever case is selected.
+	//
+	// The list used to be pinned under the navigation rail on every screen,
+	// which is why the rail needed 45 columns. It belongs here: on the Cases
+	// screen it is the content, and everywhere else it was furniture.
+	ui.casesPane = tview.NewFlex().SetDirection(tview.FlexColumn)
+	ui.casesPane.SetBackgroundColor(ui.theme.Bg)
+	ui.casesPane.AddItem(ui.sidebar, casesListWidth, 0, true)
+	ui.casesPane.AddItem(ui.buildCaseBriefingTab(ui.cases[0]), 0, 1, false)
+
+	ui.setMainView(ui.casesPane)
+	ui.app.SetFocus(ui.sidebar)
+	if ui.sidebar.GetItemCount() > 0 {
+		ui.sidebar.SetCurrentItem(0)
+	}
+	ui.setStatusDirect("[%s]Cases • Enter opens a case · c creates one[-:-:-]", ui.theme.TagAccent)
+}
+
+// casesListWidth is the case list's width on the Cases screen.
+const casesListWidth = 38
+
+// showCaseBriefing swaps the briefing pane to a different case, keeping the
+// list beside it. Without this the list could select a case it could not open.
+func (ui *UI) showCaseBriefing(c store.Case) {
+	if ui.casesPane == nil || ui.casesPane.GetItemCount() < 2 {
+		ui.setMainView(ui.buildCaseBriefingTab(c))
+		return
+	}
+	ui.casesPane.RemoveItem(ui.casesPane.GetItem(1))
+	ui.casesPane.AddItem(ui.buildCaseBriefingTab(c), 0, 1, false)
+}
+
+func (ui *UI) switchToIndicators() {
+	ui.setMainView(ui.buildCaseIndicatorsTab(ui.events))
+	ui.setStatusDirect("[%s]Indicators View • Cross-case observables & watchlists[-:-:-]", ui.theme.TagAccent)
+}
+
+func (ui *UI) switchToReports() {
+	reportsTv := tview.NewTextView().SetDynamicColors(true)
+	reportsTv.SetBorder(true).SetTitle(" REPORTS & EXPORTS ").SetTitleColor(ui.theme.Header).SetBackgroundColor(ui.theme.Bg)
+	reportsTv.SetText(fmt.Sprintf("\n  [%s:b]Incident Reports & Export Bundles[-:-:-]\n\n  [%s]• Case Bundles (JSON/STIX)\n  • Generated Incident Briefings\n  • Telemetry Export (OCSF JSONL)[-:-:-]\n", ui.theme.TagAccent, ui.theme.TagTextPrimary))
+	ui.setMainView(reportsTv)
+	ui.setStatusDirect("[%s]Reports View • Export case summaries & investigation bundles[-:-:-]", ui.theme.TagAccent)
+}
+
+func (ui *UI) showHelpModal() {
+	ui.showHelp()
 }

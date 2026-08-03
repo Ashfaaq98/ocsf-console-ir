@@ -240,6 +240,22 @@ func (e *Event) GetCategoryUID() int {
 // IsFinding reports whether this event belongs to the OCSF Findings category.
 func (e *Event) IsFinding() bool { return e.GetCategoryUID() == CategoryFindings }
 
+// The OCSF severity_id enum.
+//
+// Note that Other is 99 rather than 7: it is a sentinel, not the top of the
+// scale. Any comparison of the form `severity_id >= Critical` is wrong for that
+// reason, and must enumerate the levels it means instead.
+const (
+	SeverityUnknown       = 0
+	SeverityInformational = 1
+	SeverityLow           = 2
+	SeverityMedium        = 3
+	SeverityHigh          = 4
+	SeverityCritical      = 5
+	SeverityFatal         = 6
+	SeverityOther         = 99
+)
+
 // GetSeverityLevel returns a normalized severity level, covering the full OCSF
 // severity_id enum (0, 1-6, 99).
 func (e *Event) GetSeverityLevel() string {
@@ -248,21 +264,21 @@ func (e *Event) GetSeverityLevel() string {
 	}
 
 	switch e.SeverityID {
-	case 0:
+	case SeverityUnknown:
 		return "unknown"
-	case 1:
+	case SeverityInformational:
 		return "informational"
-	case 2:
+	case SeverityLow:
 		return "low"
-	case 3:
+	case SeverityMedium:
 		return "medium"
-	case 4:
+	case SeverityHigh:
 		return "high"
-	case 5:
+	case SeverityCritical:
 		return "critical"
-	case 6:
+	case SeverityFatal:
 		return "fatal"
-	case 99:
+	case SeverityOther:
 		return "other"
 	default:
 		return "unknown"

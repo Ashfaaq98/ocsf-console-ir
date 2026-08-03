@@ -70,7 +70,76 @@ func (s *Store) migrateCaseMembers() error {
 			return fmt.Errorf("failed to create case_members schema: %w", err)
 		}
 	}
+	if err := s.migrateCaseMemberColumns(); err != nil {
+		return err
+	}
 	return s.backfillCaseMembers()
+}
+
+// caseMemberColumns are fields added to case_members after it shipped. Additive
+// with defaults, so an existing database upgrades without a backfill.
+var caseMemberColumns = []struct {
+	name string
+	sql  string
+}{
+	// Pinned evidence is the analyst's judgement about which of forty-two
+	// events actually prove the case. It surfaces on the briefing and in
+	// exports, so it is data rather than presentation — which is why it is a
+	// column rather than a rendering flag.
+	{"pinned", "ALTER TABLE case_members ADD COLUMN pinned INTEGER DEFAULT 0"},
+}
+
+// migrateCaseMemberColumns adds the columns above if they are absent. Checking
+// pragma_table_info first makes a re-run a no-op, matching migrateCaseOCSFColumns.
+func (s *Store) migrateCaseMemberColumns() error {
+	for _, col := range caseMemberColumns {
+		var count int
+		check := fmt.Sprintf("SELECT COUNT(*) FROM pragma_table_info('case_members') WHERE name='%s'", col.name)
+		if err := s.db.QueryRow(check).Scan(&count); err != nil {
+			return fmt.Errorf("failed to check case_members column %s: %w", col.name, err)
+		}
+		if count == 0 {
+			if _, err := s.db.Exec(col.sql); err != nil {
+				return fmt.Errorf("failed to add case_members column %s: %w", col.name, err)
+			}
+		}
+	}
+	return nil
+}
+
+// SetMemberPinned marks or unmarks a case member as pinned.
+func (s *Store) SetMemberPinned(ctx context.Context, caseID, memberType, memberID string, pinned bool) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE case_members SET pinned = ? WHERE case_id = ? AND member_type = ? AND member_id = ?`,
+		boolToInt(pinned), caseID, memberType, memberID)
+	if err != nil {
+		return fmt.Errorf("failed to set pinned on %s %s: %w", memberType, memberID, err)
+	}
+	return nil
+}
+
+// GetPinnedMemberIDs returns the pinned member ids of one type for a case.
+//
+// Ids rather than rows: the caller already holds the members, and the briefing
+// needs only to know which of them carry a star.
+func (s *Store) GetPinnedMemberIDs(ctx context.Context, caseID, memberType string) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT member_id FROM case_members WHERE case_id = ? AND member_type = ? AND pinned = 1`,
+		caseID, memberType)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query pinned members: %w", err)
+	}
+	defer rows.Close()
+
+	out := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("failed to scan pinned member: %w", err)
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
 }
 
 // backfillCaseMembers copies existing single-case assignments into the

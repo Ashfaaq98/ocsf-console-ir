@@ -56,18 +56,54 @@ type CaseManagement struct {
 	notes      []store.Note
 
 	// UI Layout components
-	layout            *tview.Flex
-	metadataBar       *tview.TextView
-	eventsTable       *tview.Table
-	timelineView      *tview.TextView
-	copilotPanel      *tview.Flex
+	layout      *tview.Flex
+	metadataBar *tview.TextView
+	eventsTable *tview.Table
+	// timelineView is a table rather than a text pane: record text carries
+	// brackets that a multi-line TextView cannot escape without drifting, and a
+	// cluster needs a cursor on it before Enter can expand it.
+	timelineView *tview.Table
+	// expandedTimeline is the open cluster's label, and timelineRows maps a row
+	// back to the cluster whose header sits on it.
+	expandedTimeline string
+	timelineRows     map[int]string
+	copilotPanel     *tview.Flex
+	// caseBody holds the tabs and, when open, the copilot drawer beside them.
+	caseBody          *tview.Flex
+	copilotOpen       bool
 	copilotDropdown   *tview.DropDown
-	copilotTranscript *tview.TextView
-	copilotEstimate   *tview.TextView
-	copilotInput      *tview.InputField
-	notesPanel        *tview.Flex
-	notesPages        *tview.Pages
-	notesViewer       *tview.TextView
+	copilotTranscript *tview.Table
+	// copilotPages swaps the suggestion list for the transcript once the
+	// conversation starts.
+	copilotPages       *tview.Pages
+	copilotSuggestions *tview.Table
+	copilotProvider    *tview.TextView
+	suggestions        []copilotSuggestion
+	// copilotFull is set when the copilot took the screen rather than sharing
+	// it, so closing knows which of the two to undo.
+	copilotFull bool
+	// copilotStatus is what became of the most recent question, rendered in the
+	// transcript so it outlives a status-bar line.
+	copilotStatus copilotStatus
+	// notesDraftBaseline is what the editor held when editing began — empty for
+	// a blank note, the body for a template. Esc compares against it so that
+	// leaving a template untouched is not treated as losing work.
+	notesDraftBaseline string
+	copilotEstimate    *tview.TextView
+	copilotInput       *tview.InputField
+	notesPanel         *tview.Flex
+	notesPages         *tview.Pages
+	// notesViewer is the editor; notesTable is the log. A decision log is a
+	// list of decisions, not a scroll of prose.
+	notesViewer   *tview.TextView
+	notesTable    *tview.Table
+	activityTable *tview.Table
+	// caseIndicators is what the Indicators tab last drew, so a keypress can
+	// resolve a row back to the indicator it stands for.
+	caseIndicators []store.CaseIndicator
+	// pendingWidthShift is the drawer's columns during the one frame between
+	// the layout changing and tview recomputing the widget rects.
+	pendingWidthShift int
 	notesEditor       *tview.TextArea
 	activityLog       *tview.TextView
 	statusBar         *tview.TextView
@@ -77,7 +113,6 @@ type CaseManagement struct {
 	// Additional tab views
 	overviewView *tview.TextView
 	iocsTable    *tview.Table
-	activityView *tview.TextView
 
 	// Manual IOC selection state and mapping (for add/delete UX)
 	selectedManualIOCIDs map[string]bool // note.ID used as manual IOC id
@@ -152,13 +187,25 @@ const (
 // labels, its bounds and its number keys all derive from this. The bounds used
 // to be a hardcoded 5 in four different places, which is what made adding a tab
 // a landmine.
+//
+// "Briefing" rather than "Overview": the tab is what you would say to a
+// colleague, and naming it for that sets the bar for its content. "Events"
+// stays "Events" — OCSF already uses "evidence" for finding.evidences, which
+// are artifacts, so a tab of that name would mean two things one keystroke
+// apart. "Indicators" rather than "Artifacts/IOCs", because a slash is two
+// names and the first half now collides with those artifacts.
 var caseTabNames = []string{
-	"Overview", "Findings", "Events", "Timeline", "Artifacts/IOCs", "Notes", "Activity Log",
+	"Briefing", "Findings", "Events", "Timeline", "Indicators", "Notes", "Activity",
 }
 
 // Tab indices, named so switches read as intent rather than arithmetic.
+//
+// These existed already; the per-tab key handlers compared against bare numbers
+// regardless, and those numbers were written for the old six-tab order. That is
+// how `n` came to fire on Indicators and do nothing on the tab named Notes. Use
+// the names — they move with the list.
 const (
-	tabOverview = iota
+	tabBriefing = iota
 	tabFindings
 	tabEvents
 	tabTimeline
@@ -172,7 +219,7 @@ var caseTabPages = []struct {
 	page  string
 	focus int
 }{
-	tabOverview: {"overview", FocusOverview},
+	tabBriefing: {"briefing", FocusOverview},
 	tabFindings: {"findings", FocusFindings},
 	tabEvents:   {"events", FocusEvents},
 	tabTimeline: {"timeline", FocusTimeline},
@@ -237,18 +284,21 @@ func (cm *CaseManagement) setupLayout() {
 	cm.setupCaseFindingsTable()
 
 	// Timeline view (center)
-	cm.timelineView = tview.NewTextView().
-		SetDynamicColors(true).
-		SetScrollable(true).
-		SetWrap(true)
-	cm.timelineView.SetBorder(true).SetTitle(" Timeline & Evidence ").SetTitleAlign(tview.AlignLeft)
+	cm.timelineView = tview.NewTable().SetSelectable(true, false)
+	cm.timelineView.SetBorder(true).SetTitle(" TIMELINE ").SetTitleAlign(tview.AlignLeft)
 	cm.timelineView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyEnter:
-			cm.toggleTimelineCard(cm.selectedEventIndex)
+			cm.toggleTimelineCluster()
 			return nil
 		case tcell.KeyTab:
-			cm.toggleLeftRightFocus()
+			// Tab moves between the case's tabs, which is what §9 lists first
+			// and what an analyst reaches for. Pane focus moved to `h`/`l`,
+			// which are already the focus keys everywhere else.
+			cm.switchTab(wrapTab(cm.activeTab + 1))
+			return nil
+		case tcell.KeyBacktab:
+			cm.switchTab(wrapTab(cm.activeTab - 1))
 			return nil
 		case tcell.KeyRune:
 			switch event.Rune() {
@@ -277,16 +327,25 @@ func (cm *CaseManagement) setupLayout() {
 		AddItem(cm.tabBar, 2, 0, true).
 		AddItem(cm.tabsPages, 0, 1, false)
 
-	// Right side: Copilot full-height column
-	main := tview.NewFlex().SetDirection(tview.FlexColumn).
-		AddItem(leftTabs, 0, 2, true).
-		AddItem(cm.copilotPanel, 50, 0, false) // Fixed width for copilot
+	// Copilot is a drawer, not a column.
+	//
+	// It was a permanent 50 columns, which clipped the tab bar to "Activity L"
+	// and left the case around 100 columns on a 150-column terminal — on the
+	// one screen that has seven tabs and two-column layouts to fit. Closed by
+	// default; `]` opens it and `[` closes it.
+	cm.caseBody = tview.NewFlex().SetDirection(tview.FlexColumn)
+	cm.caseBody.AddItem(leftTabs, 0, 1, true)
+	main := cm.caseBody
 
 	// Two-row metadata (increase height), then main content, then status bar
 	cm.layout = tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(cm.metadataBar, 4, 0, false).
+		AddItem(cm.metadataBar, caseHeaderRows, 0, false).
 		AddItem(main, 0, 1, true).
 		AddItem(cm.statusBar, 1, 0, false)
+
+	// Again, now that the layout exists: the header sizes itself, and the first
+	// call ran before there was anything to resize.
+	cm.updateMetadataBar()
 
 	cm.applyTheme()
 	cm.updateFocusStyles()
@@ -340,24 +399,74 @@ func (cm *CaseManagement) setupCopilotPanel() {
 		cm.updateStatus(fmt.Sprintf("Persona: %s", text))
 	})
 
-	// Chat transcript
-	cm.copilotTranscript = tview.NewTextView().
-		SetDynamicColors(true).
-		SetScrollable(true).
-		SetWrap(true)
-	cm.copilotTranscript.SetBorder(true).SetTitle(" Chat ").SetTitleAlign(tview.AlignLeft)
-	// Allow returning focus to input with a non-alphanumeric key
+	// The provider is named rather than assumed.
+	cm.copilotProvider = tview.NewTextView().SetDynamicColors(true)
+	cm.copilotProvider.SetText(fmt.Sprintf("[%s]%s[-]",
+		cm.theme.TagMuted, copilotProviderLine(activeLLMProvider(), true)))
+
+	// Chat transcript. A table, not a text pane: a model's answer carries
+	// brackets, and escaping those in one multi-line TextView drifts the tag
+	// state across every following line.
+	cm.copilotTranscript = tview.NewTable().SetSelectable(true, false)
+	cm.copilotTranscript.SetBackgroundColor(cm.theme.Bg)
 	cm.copilotTranscript.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
+		case tcell.KeyEsc:
+			cm.toggleCaseCopilot()
+			return nil
 		case tcell.KeyRune:
-			if event.Rune() == ']' {
+			switch event.Rune() {
+			case ']':
 				cm.app.SetFocus(cm.copilotInput)
 				cm.updateStatus("Copilot focus: Input")
+				return nil
+			case '[':
+				cm.toggleCaseCopilot()
+				return nil
+			case 'a', 'A':
+				cm.acceptCopilotAnswer()
+				return nil
+			case 'r', 'R':
+				cm.regenerateCopilotAnswer()
 				return nil
 			}
 		}
 		return event
 	})
+
+	// The opening suggestions, replaced by the transcript once asked.
+	cm.copilotSuggestions = tview.NewTable().SetSelectable(true, false)
+	cm.copilotSuggestions.SetBackgroundColor(cm.theme.Bg)
+	cm.copilotSuggestions.SetSelectedFunc(func(row, _ int) { cm.askSuggestion(row) })
+	cm.copilotSuggestions.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEsc {
+			cm.toggleCaseCopilot()
+			return nil
+		}
+		if event.Key() != tcell.KeyRune {
+			return event
+		}
+		// The brackets belong to the drawer wherever they are pressed, so they
+		// are never typed through. Without this, `[` on the suggestion list put
+		// a bracket in the input instead of closing the copilot.
+		switch event.Rune() {
+		case '[':
+			cm.toggleCaseCopilot()
+			return nil
+		case ']', ' ':
+			return event
+		}
+		// Anything else goes to the input, so the list never blocks a direct
+		// question. The keystroke is placed by hand: tview delivers an event to
+		// whoever held focus when it was dispatched, so moving focus drops it.
+		cm.copilotInput.SetText(cm.copilotInput.GetText() + string(event.Rune()))
+		cm.app.SetFocus(cm.copilotInput)
+		return nil
+	})
+
+	cm.copilotPages = tview.NewPages()
+	cm.copilotPages.AddPage("suggestions", cm.copilotSuggestions, true, true)
+	cm.copilotPages.AddPage("transcript", cm.copilotTranscript, true, false)
 
 	// Inline token estimate (one-line)
 	cm.copilotEstimate = tview.NewTextView().
@@ -384,7 +493,8 @@ func (cm *CaseManagement) setupCopilotPanel() {
 
 	cm.copilotPanel = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(controlsPanel, 1, 0, false).
-		AddItem(cm.copilotTranscript, 0, 1, false).
+		AddItem(cm.copilotProvider, 1, 0, false).
+		AddItem(cm.copilotPages, 0, 1, false).
 		AddItem(cm.copilotEstimate, 1, 0, false).
 		AddItem(cm.copilotInput, 1, 0, false)
 
@@ -394,21 +504,27 @@ func (cm *CaseManagement) setupCopilotPanel() {
 // setupNotesPanel creates a two-mode Notes panel (View/TextView vs Edit/TextArea) within a Pages container.
 func (cm *CaseManagement) setupNotesPanel() {
 	// Viewer (read-only, scrollable)
-	cm.notesViewer = tview.NewTextView().
-		SetDynamicColors(true).
-		SetScrollable(true).
-		SetWrap(true)
-	cm.notesViewer.SetBorder(true).SetTitle(" Notes ").SetTitleAlign(tview.AlignLeft)
-	cm.notesViewer.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+	cm.notesTable = tview.NewTable().SetSelectable(true, false)
+	cm.notesTable.SetBorder(true).SetTitle(" NOTES ").SetTitleAlign(tview.AlignLeft)
+	cm.notesTable.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyTab:
-			cm.toggleLeftRightFocus()
+			// Tab moves between the case's tabs, which is what §9 lists first
+			// and what an analyst reaches for. Pane focus moved to `h`/`l`,
+			// which are already the focus keys everywhere else.
+			cm.switchTab(wrapTab(cm.activeTab + 1))
+			return nil
+		case tcell.KeyBacktab:
+			cm.switchTab(wrapTab(cm.activeTab - 1))
 			return nil
 		case tcell.KeyRune:
 			switch event.Rune() {
 			case 'n', 'N':
 				// Start a new note (switch to editor)
 				cm.switchToNotesEdit()
+				return nil
+			case 't', 'T':
+				cm.showNoteTemplates()
 				return nil
 			}
 		}
@@ -426,7 +542,7 @@ func (cm *CaseManagement) setupNotesPanel() {
 
 	// Pages container
 	cm.notesPages = tview.NewPages()
-	cm.notesPages.AddPage("view", cm.notesViewer, true, true)
+	cm.notesPages.AddPage("view", cm.notesTable, true, true)
 	cm.notesPages.AddPage("edit", cm.notesEditor, true, false)
 }
 
@@ -438,12 +554,25 @@ func (cm *CaseManagement) setupKeybindings() {
 			// If a modal is active, close it; otherwise exit CM screen.
 			if cm.modalActive {
 				cm.popModalRoot()
-			} else {
-				cm.close()
+				return nil
 			}
+			// An unsaved note is asked about here rather than in the editor's
+			// own handler: this global capture runs first, so Esc while writing
+			// was closing the entire case screen and taking the draft with it.
+			if cm.isEditingNotes {
+				cm.discardNoteDraft()
+				return nil
+			}
+			cm.close()
 			return nil
 		case tcell.KeyTab:
-			cm.toggleLeftRightFocus()
+			// Tab moves between the case's tabs, which is what §9 lists first
+			// and what an analyst reaches for. Pane focus moved to `h`/`l`,
+			// which are already the focus keys everywhere else.
+			cm.switchTab(wrapTab(cm.activeTab + 1))
+			return nil
+		case tcell.KeyBacktab:
+			cm.switchTab(wrapTab(cm.activeTab - 1))
 			return nil
 		case tcell.KeyRune:
 			// Do not process global letter shortcuts when typing in inputs (Copilot/Notes)
@@ -472,22 +601,37 @@ func (cm *CaseManagement) setupKeybindings() {
 				// Global hotkey: Shift+L opens LLM Settings anywhere in Case Management
 				cm.showLLMSettingsModal()
 				return nil
-			case '1', '2', '3', '4', '5', '6', '7':
-				// One key per tab, indexed off caseTabNames so adding a tab
-				// cannot leave a key pointing at the wrong page.
-				if idx := int(event.Rune() - '1'); idx >= 0 && idx < len(caseTabNames) {
-					cm.switchTab(idx)
+			case 'h', 'l':
+				cm.toggleLeftRightFocus()
+				return nil
+			case ']':
+				if !cm.copilotOpen {
+					cm.toggleCaseCopilot()
 				}
 				return nil
+			case '[':
+				if cm.copilotOpen {
+					cm.toggleCaseCopilot()
+				}
+				return nil
+			case 'd', 'D':
+				// A finding is what the case is about, so detaching one is a
+				// statement about the case rather than a tidy-up. Confirmed.
+				if cm.activeTab == tabFindings {
+					cm.detachSelectedFinding()
+					return nil
+				}
 			case 'p', 'P':
-				// Allow pin on Timeline tab
-				if cm.activeTab == 2 {
+				if cm.activeTab == tabEvents {
 					cm.pinCurrentEvent()
 					return nil
 				}
 			case 'n', 'N':
-				// Allow new note on Notes tab
-				if cm.activeTab == 4 {
+				// These indices were written against the old six-tab order and
+				// never moved: this read `== 4`, which is now Indicators, so `n`
+				// opened a new note from the indicator list and did nothing on
+				// the tab named Notes.
+				if cm.activeTab == tabNotes {
 					cm.addNewNote()
 					return nil
 				}
@@ -510,7 +654,7 @@ func (cm *CaseManagement) handleEventsInput(event *tcell.EventKey) *tcell.EventK
 	case tcell.KeyRune:
 		switch event.Rune() {
 		case ' ':
-			cm.toggleEventSelection()
+			cm.togglePinnedEvent()
 			return nil
 		case 'e':
 			cm.exportSelectedEvents()
@@ -540,16 +684,20 @@ func (cm *CaseManagement) handleCopilotInput(event *tcell.EventKey) *tcell.Event
 	case tcell.KeyCtrlC:
 		cm.copilotInput.SetText("")
 		return nil
-	case tcell.KeyRune:
-		switch event.Rune() {
-		// Copilot sub-focus navigation: '[' to persona dropdown, ']' back to input
-		case '[':
+	case tcell.KeyBacktab:
+		// Persona lives one step back from the input. It used to be on '[',
+		// which now closes the drawer from everywhere in the case — a key that
+		// closes a panel in one pane and moves focus in another is two keys.
+		if cm.copilotDropdown != nil {
 			cm.app.SetFocus(cm.copilotDropdown)
 			cm.updateStatus("Copilot focus: Persona")
-			return nil
-		case ']':
-			cm.app.SetFocus(cm.copilotInput)
-			cm.updateStatus("Copilot focus: Input")
+		}
+		return nil
+	case tcell.KeyRune:
+		switch event.Rune() {
+		case '[':
+			// Closes the drawer from inside it too, so the key means one thing.
+			cm.toggleCaseCopilot()
 			return nil
 		// Focus Copilot transcript (non-alphanumeric key). Use Up/Down/PgUp/PgDn to scroll.
 		case '\\':
@@ -578,11 +726,41 @@ func (cm *CaseManagement) handleNotesInput(event *tcell.EventKey) *tcell.EventKe
 		cm.setFocusPane(FocusOverview)
 		return nil
 	case tcell.KeyEsc:
-		// Cancel edit and return to view mode
-		cm.switchToNotesView()
+		cm.discardNoteDraft()
 		return nil
 	}
 	return event
+}
+
+// discardNoteDraft leaves the editor, asking first if there is work to lose.
+//
+// Esc used to discard silently, which is the wrong default for the one screen
+// whose entire purpose is recording a decision — a mistyped Esc threw away a
+// containment note with no way back. It only asks when there is a change to
+// lose, so backing out of an untouched editor stays a single keystroke.
+func (cm *CaseManagement) discardNoteDraft() {
+	if cm.notesEditor == nil {
+		cm.switchToNotesView()
+		return
+	}
+	current := strings.TrimSpace(cm.notesEditor.GetText())
+	if current == "" || current == strings.TrimSpace(cm.notesDraftBaseline) {
+		cm.switchToNotesView()
+		return
+	}
+
+	modal := tview.NewModal().
+		SetText("Discard this note?\n\nIt has not been saved.").
+		AddButtons([]string{"Keep editing", "Discard"}).
+		SetDoneFunc(func(_ int, label string) {
+			cm.popModalRoot()
+			if label == "Discard" {
+				cm.switchToNotesView()
+				return
+			}
+			cm.app.SetFocus(cm.notesEditor)
+		})
+	cm.pushModalRoot(modal)
 }
 
 // Data loading and management
@@ -629,10 +807,21 @@ func (cm *CaseManagement) loadCaseData() {
 			}
 		}
 
+		// Which of those events the analyst starred. Loaded here so the
+		// briefing and the evidence tab agree without either querying again.
+		pinned, err := cm.store.GetPinnedMemberIDs(cm.ctx, cm.caseData.ID, store.MemberTypeEvent)
+		if err != nil {
+			if cm.logger != nil {
+				cm.logger.Warn("could not read pinned evidence for case %s: %v", cm.caseData.ID, err)
+			}
+			pinned = map[string]bool{}
+		}
+
 		// Update UI on main thread
 		cm.app.QueueUpdateDraw(func() {
 			cm.baseEvents = events
 			cm.events = events
+			cm.pinnedEvents = pinned
 			cm.notes = notes
 			cm.auditLog = audits
 
@@ -640,8 +829,13 @@ func (cm *CaseManagement) loadCaseData() {
 			cm.updateEventsTable()
 			cm.updateTimelineView()
 			cm.updateNotesText()
-			cm.renderOverview()
+			cm.renderBriefing()
 			cm.renderActivityLog()
+			cm.renderIOCs()
+			// The header's prompt reads the notes, which have only just
+			// arrived; without this it reports "no note yet" on a case with
+			// notes.
+			cm.updateMetadataBar()
 			// IOCs render will be computed lazily/placeholder
 			cm.renderIOCs()
 
@@ -688,25 +882,37 @@ func (cm *CaseManagement) updateMetadataBar() {
 		verdict = "—"
 	}
 
-	// Findings are what the case is about; events are the evidence supporting
-	// it. Showing one combined total hides that distinction.
-	line1 := fmt.Sprintf(
-		"[%s]Case ID:[-] [%s]%s[-]  [%s]Title:[-] [%s]%s[-]  [%s]Severity:[-] [%s]%s[-]  [%s]Owner:[-] [%s]%s[-]  [%s]Findings:[-] [%s]%d[-]  [%s]Evidence:[-] [%s]%d[-]  [%s]Verdict:[-] [%s]%s[-]  [%s]Created:[-] [%s]%s[-]",
-		lbl, val, shortID,
-		lbl, val, cm.caseData.Title,
-		lbl, val, cm.caseData.Severity,
-		lbl, val, owner,
-		lbl, val, cm.caseData.FindingCount,
-		lbl, val, cm.caseData.EventCount,
-		lbl, val, verdict,
-		lbl, val, cm.caseData.CreatedAt.Format("2006-01-02 15:04"),
-	)
-	// Hotkeys row: single color (accent) for all hints; exact phrasing requested
-	line2 := fmt.Sprintf("[%s]Status:[-] [%s]%s[-]   [%s]s: Change Status  E: Export   Tab: Toggle Panes  1-6: switch tabs   L: LLM Settings[-]",
-		lbl, val, strings.ToUpper(cm.caseData.Status),
-		acc,
-	)
-	cm.metadataBar.SetText(line1 + "\n" + line2)
+	// Two rows of fact, and a third only when there is something to do about
+	// it. The third row used to be a list of hotkeys, two of which named keys
+	// that never worked — digits are globally reserved and never reach a case.
+	line1 := fmt.Sprintf(" [%s]CASE[-]  ·  [%s:-:b]%s[-:-:-]        %s  %s",
+		lbl, acc, tview.Escape(cm.caseData.Title),
+		formatSeverityBadge(cm.caseData.Severity, cm.theme),
+		formatCaseStatus(cm.caseData.Status, cm.theme))
+
+	line2 := fmt.Sprintf(" [%s]owner[-] [%s]%s[-] · [%s]%s old[-] · [%s]%d findings[-] · [%s]%d evidence[-] · [%s]verdict %s[-]",
+		lbl, val, tview.Escape(owner),
+		val, renderRelativeTime(cm.caseData.CreatedAt),
+		val, cm.caseData.FindingCount,
+		val, cm.caseData.EventCount,
+		val, tview.Escape(verdict))
+
+	line3 := cm.nextActionPrompt()
+
+	text := line1 + "\n" + line2
+	rows := caseHeaderRows
+	if line3 != "" {
+		text += "\n" + line3
+		rows++
+	}
+	cm.metadataBar.SetText(text)
+
+	// The header grows by a row when the prompt is present. Fixed at four, the
+	// prompt was written and then clipped by the border — present in the widget
+	// and invisible on screen.
+	if cm.layout != nil {
+		cm.layout.ResizeItem(cm.metadataBar, rows, 0)
+	}
 }
 
 func (cm *CaseManagement) updateEventsTable() {
@@ -725,10 +931,13 @@ func (cm *CaseManagement) updateEventsTable() {
 		row := i + 1
 
 		// Selection indicator
-		selected := cm.selectedEventIDs[event.ID]
+		// ★ is the analyst's judgement about which of these events actually
+		// prove the case. It surfaces on the briefing and in exports, which is
+		// why it is stored rather than kept in the widget.
+		selected := cm.pinnedEvents[event.ID]
 		indicator := " "
 		if selected {
-			indicator = "✓"
+			indicator = "★"
 		}
 
 		// Row cells
@@ -770,82 +979,6 @@ func (cm *CaseManagement) updateEventsTable() {
 			cm.selectedEventIndex = 0
 		}
 	}
-}
-
-func (cm *CaseManagement) updateTimelineView() {
-	if len(cm.events) == 0 {
-		cm.timelineView.SetText("No events to display")
-		return
-	}
-
-	// Render in chronological order (oldest -> newest) to enhance investigative flow.
-	evs := make([]store.Event, len(cm.events))
-	copy(evs, cm.events)
-	sort.Slice(evs, func(i, j int) bool {
-		return evs[i].Timestamp.Before(evs[j].Timestamp)
-	})
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("[%s]Timeline & Evidence[-]\n\n", cm.theme.TagWarning))
-
-	for i, event := range evs {
-		isPinned := cm.pinnedEvents[event.ID]
-		pinIndicator := ""
-		if isPinned {
-			pinIndicator = fmt.Sprintf(" [%s]📌[-]", cm.theme.TagAccent)
-		}
-
-		// Header line: time, event type (severity color), pin
-		sb.WriteString(fmt.Sprintf(
-			"[%s]%s[-] [%s]%s[-]%s\n",
-			cm.theme.TagAccent,
-			event.Timestamp.Format("2006-01-02 15:04:05"),
-			cm.severityTag(event.Severity),
-			strings.ToUpper(event.EventType),
-			pinIndicator,
-		))
-
-		// Message and host line
-		sb.WriteString(fmt.Sprintf("[%s]%s[-] on [%s]%s[-]\n",
-			cm.theme.TagTextPrimary, event.Message,
-			cm.theme.TagSuccess, event.Host,
-		))
-
-		// Show additional details for pinned or recently added tail
-		if isPinned || cm.timelineExpanded[i] || i >= len(evs)-5 {
-			if event.SrcIP != "" {
-				sb.WriteString(fmt.Sprintf("  Source: [%s]%s:%d[-]\n", cm.theme.TagAccent, event.SrcIP, event.SrcPort))
-			}
-			if event.DstIP != "" {
-				sb.WriteString(fmt.Sprintf("  Destination: [%s]%s:%d[-]\n", cm.theme.TagAccent, event.DstIP, event.DstPort))
-			}
-			if event.ProcessName != "" {
-				sb.WriteString(fmt.Sprintf("  Process: [%s]%s[-]\n", cm.theme.TagWarning, event.ProcessName))
-			}
-			if event.FileName != "" {
-				sb.WriteString(fmt.Sprintf("  File: [%s]%s[-]\n", cm.theme.TagAccent, event.FileName))
-			}
-		}
-
-		sb.WriteString("\n")
-	}
-
-	cm.timelineView.SetText(sb.String())
-}
-
-// Toggle expand/collapse for a timeline card by index.
-func (cm *CaseManagement) toggleTimelineCard(idx int) {
-	if len(cm.events) == 0 {
-		return
-	}
-	if idx < 0 || idx >= len(cm.events) {
-		idx = 0
-	}
-	if cm.timelineExpanded == nil {
-		cm.timelineExpanded = make(map[int]bool)
-	}
-	cm.timelineExpanded[idx] = !cm.timelineExpanded[idx]
-	cm.updateTimelineView()
 }
 
 // Events filter modal and filtering logic (time, type, severity).
@@ -950,32 +1083,6 @@ func (cm *CaseManagement) clearEventFilters() {
 	cm.updateTimelineView()
 	cm.updateStatus("Cleared event filters")
 }
-
-func (cm *CaseManagement) updateNotesText() {
-	if cm.notesViewer == nil {
-		return
-	}
-	if len(cm.notes) == 0 {
-		cm.notesViewer.SetText("")
-		return
-	}
-
-	var content strings.Builder
-	for _, note := range cm.notes {
-		// Exclude LLM summary notes from the Notes panel (summary is shown only in Overview)
-		if strings.EqualFold(note.LinkedType, "summary") {
-			continue
-		}
-		content.WriteString(fmt.Sprintf("--- %s by %s ---\n",
-			note.CreatedAt.Format("2006-01-02 15:04"), note.Author))
-		content.WriteString(note.Content)
-		content.WriteString("\n\n")
-	}
-
-	cm.notesViewer.SetText(content.String())
-}
-
-func (cm *CaseManagement) updateActivityLog() {}
 
 // showEventDetailsModal displays plugin-wise enrichments for the given event in a themable, scrollable modal.
 func (cm *CaseManagement) showEventDetailsModal(ev store.Event) {
@@ -1090,287 +1197,47 @@ func (cm *CaseManagement) showEventDetailsModal(ev store.Event) {
 }
 
 // Overview rendering (metadata, quick stats, pinned highlights)
-func (cm *CaseManagement) renderOverview() {
+// briefingWidth is the room the briefing has to lay out in.
+//
+// The widget's own rect is one frame stale immediately after the drawer opens
+// or closes — tview recomputes it during Draw — so the pending change is
+// applied here. Without it the two-column layout is chosen for a width the
+// briefing no longer has, and every right-hand column is clipped mid-word.
+func (cm *CaseManagement) briefingWidth() int {
+	_, _, width, _ := cm.overviewView.GetInnerRect()
+	if width <= 0 {
+		return briefingTwoColumnWidth
+	}
+	return width + cm.pendingWidthShift
+}
+
+// renderBriefing paints the Briefing tab.
+//
+// The same renderer the Cases screen uses, so the two cannot disagree about a
+// case. It replaced renderOverview, which listed the title, description, status
+// and time span — facts the analyst already had, since they opened this case.
+func (cm *CaseManagement) renderBriefing() {
 	if cm.overviewView == nil {
 		return
 	}
-	// Quick stats
-	byType := map[string]int{}
-	bySev := map[string]int{}
-	var minT, maxT time.Time
-	topHostCount := map[string]int{}
-	for _, ev := range cm.events {
-		byType[ev.EventType]++
-		sev := strings.ToLower(ev.Severity)
-		bySev[sev]++
-		if minT.IsZero() || ev.Timestamp.Before(minT) {
-			minT = ev.Timestamp
-		}
-		if maxT.IsZero() || ev.Timestamp.After(maxT) {
-			maxT = ev.Timestamp
-		}
-		if ev.Host != "" {
-			topHostCount[ev.Host]++
-		}
-	}
-	// Top 5 hosts
-	type kv struct {
-		k string
-		v int
-	}
-	var hosts []kv
-	for h, c := range topHostCount {
-		hosts = append(hosts, kv{h, c})
-	}
-	sort.Slice(hosts, func(i, j int) bool { return hosts[i].v > hosts[j].v })
-	if len(hosts) > 5 {
-		hosts = hosts[:5]
+	d := briefingData{Case: cm.caseData, Events: cm.events, Pinned: cm.pinnedEvents}
+	if d.Pinned == nil {
+		d.Pinned = map[string]bool{}
 	}
 
-	lbl := cm.theme.TagWarning
-	val := cm.theme.TagTextPrimary
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("[::b][%s]Case Overview[-][-]\n\n", lbl))
-	sb.WriteString(fmt.Sprintf("  [%s]Title:[-] [%s]%s[-]\n", lbl, val, cm.caseData.Title))
-	// Show case description (between Title and Status) when present. Truncate to a sensible length to avoid overly large overview blocks.
-	if desc := strings.TrimSpace(cm.caseData.Description); desc != "" {
-		if len(desc) > 400 {
-			desc = desc[:400] + "..."
-		}
-		sb.WriteString(fmt.Sprintf("  [%s]Description:[-] [%s]%s[-]\n", lbl, val, desc))
+	brief, err := cm.store.GetBriefing(cm.ctx, cm.caseData.ID)
+	if err != nil {
+		cm.overviewView.SetText(fmt.Sprintf("\n [%s]Could not load the briefing.[-]\n [%s]%s[-]\n\n [%s]%s[-]",
+			cm.theme.TagError, cm.theme.TagMuted, tview.Escape(err.Error()),
+			cm.theme.TagAccent, tview.Escape("[r] Retry")))
+		return
 	}
-	sb.WriteString(fmt.Sprintf("  [%s]Status:[-] [%s]%s[-]\n", lbl, val, strings.ToUpper(cm.caseData.Status)))
-	sb.WriteString(fmt.Sprintf("  [%s]Findings:[-] [%s]%d[-]  [%s](press 2)[-]\n", lbl, val, len(cm.caseFindings), cm.theme.TagMuted))
-	sb.WriteString(fmt.Sprintf("  [%s]Events:[-] [%s]%d[-]\n", lbl, val, len(cm.events)))
-	// Primary timespan: prefer case creation -> now (duration). Fallback to event min/max when case CreatedAt is not available.
-	if !cm.caseData.CreatedAt.IsZero() {
-		start := cm.caseData.CreatedAt
-		end := time.Now()
-		delta := end.Sub(start)
-		days := int(delta.Hours()) / 24
-		hours := int(delta.Hours()) % 24
-		sb.WriteString(fmt.Sprintf("  [%s]Time Span:[-] [%s]%s[-] → [%s]%s[-] [%s](%dd %dh)[-]\n",
-			lbl,
-			val, start.Format("2006-01-02 15:04"),
-			val, end.Format("2006-01-02 15:04"),
-			val, days, hours,
-		))
-	} else if !minT.IsZero() && !maxT.IsZero() {
-		delta := maxT.Sub(minT)
-		days := int(delta.Hours()) / 24
-		hours := int(delta.Hours()) % 24
-		sb.WriteString(fmt.Sprintf("  [%s]Time Span:[-] [%s]%s[-] → [%s]%s[-] [%s](%dd %dh)[-]\n",
-			lbl,
-			val, minT.Format("2006-01-02 15:04"),
-			val, maxT.Format("2006-01-02 15:04"),
-			val, days, hours,
-		))
-	}
+	d.Brief = brief
 
-	// (Removed) Events by Type
-
-	// (Removed) Events by Severity
-
-	// LLM Summary block (renders under Case Overview)
-	// If no in-memory summary (and not currently generating), try to load the latest persisted summary note.
-	if !cm.isSummarizing && strings.TrimSpace(cm.overviewSummary) == "" && len(cm.notes) > 0 {
-		var latest store.Note
-		found := false
-		for _, n := range cm.notes {
-			if strings.EqualFold(n.LinkedType, "summary") {
-				if !found || n.CreatedAt.After(latest.CreatedAt) {
-					latest = n
-					found = true
-				}
-			}
-		}
-		if found {
-			cm.overviewSummary = latest.Content
-			cm.summaryAt = latest.CreatedAt
-		}
-	}
-
-	sb.WriteString(fmt.Sprintf("\n[::b][%s]LLM Summary[-][-]\n", lbl))
-	if cm.isSummarizing {
-		sb.WriteString("  Generating case summary...\n")
-	} else if strings.TrimSpace(cm.overviewSummary) == "" {
-		sb.WriteString(fmt.Sprintf("  (none)  [%s][l] Generate summary[-]\n", cm.theme.TagMuted))
-	} else {
-		sb.WriteString(cm.overviewSummary + "\n")
-		if !cm.summaryAt.IsZero() {
-			sb.WriteString(fmt.Sprintf("  [%s]Generated:[-] [%s]%s[-]", lbl, val, cm.summaryAt.Format("2006-01-02 15:04")))
-			if cm.summaryTokens > 0 {
-				sb.WriteString(fmt.Sprintf("  [%s]Tokens:[-] [%s]%d[-]", lbl, val, cm.summaryTokens))
-			}
-			if cm.summaryCost > 0 {
-				sb.WriteString(fmt.Sprintf("  [%s]Cost:[-] [%s]$%.4f[-]", lbl, val, cm.summaryCost))
-			}
-			sb.WriteString("\n")
-		}
-	}
-
-	cm.overviewView.SetText(sb.String())
+	cm.overviewView.SetText(renderBriefing(d, cm.theme, cm.briefingWidth()))
 }
 
 // IOC table rendering with extraction and grouping
-func (cm *CaseManagement) renderIOCs() {
-	if cm.iocsTable == nil {
-		return
-	}
-	// Clear existing rows
-	for row := cm.iocsTable.GetRowCount() - 1; row >= 0; row-- {
-		cm.iocsTable.RemoveRow(row)
-	}
-	// Reset mapping for manual IOC selections
-	cm.iocRowToManualID = map[int]string{}
-
-	// Header: Sel, Type, Value, Count, First Seen, Last Seen, Source
-	headers := []string{"Sel", "Type", "Value", "Count", "First Seen", "Last Seen", "Source"}
-	for c, h := range headers {
-		cell := tview.NewTableCell(h).
-			SetTextColor(cm.theme.TableHeader).
-			SetBackgroundColor(cm.theme.TableHeaderBg).
-			SetAttributes(tcell.AttrBold).
-			SetSelectable(false)
-		cm.iocsTable.SetCell(0, c, cell)
-	}
-
-	// Build auto-extracted IOCs
-	cm.extractIOCs()
-	type orderedItem struct {
-		typ  string
-		item IOCItem
-	}
-	var autos []orderedItem
-	for _, typ := range iocBuckets {
-		for _, it := range cm.iocIndex[typ] {
-			autos = append(autos, orderedItem{typ: typ, item: it})
-		}
-	}
-	// Sort auto by type then count desc then value asc
-	sort.Slice(autos, func(i, j int) bool {
-		if autos[i].typ == autos[j].typ {
-			if autos[i].item.Count == autos[j].item.Count {
-				return autos[i].item.Value < autos[j].item.Value
-			}
-			return autos[i].item.Count > autos[j].item.Count
-		}
-		return autos[i].typ < autos[j].typ
-	})
-
-	// Build manual IOCs from notes where LinkedType=="ioc"
-	type manualIOC struct {
-		noteID string
-		typ    string
-		value  string
-	}
-	var manuals []manualIOC
-	for _, n := range cm.notes {
-		if strings.EqualFold(n.LinkedType, "ioc") && n.LinkedID != "" {
-			mType := "unknown"
-			// Content convention: "ioc_type:<type>" (best-effort)
-			if strings.HasPrefix(strings.ToLower(n.Content), "ioc_type:") {
-				mType = strings.TrimSpace(strings.ToLower(strings.TrimPrefix(strings.ToLower(n.Content), "ioc_type:")))
-			}
-			manuals = append(manuals, manualIOC{
-				noteID: n.ID,
-				typ:    mType,
-				value:  n.LinkedID,
-			})
-		}
-	}
-	// Sort manual by type then value asc
-	sort.Slice(manuals, func(i, j int) bool {
-		if manuals[i].typ == manuals[j].typ {
-			return manuals[i].value < manuals[j].value
-		}
-		return manuals[i].typ < manuals[j].typ
-	})
-
-	row := 1
-	// Render auto-extracted (non-selectable)
-	for _, a := range autos {
-		zebra := cm.theme.TableZebra1
-		if row%2 == 1 {
-			zebra = cm.theme.TableZebra2
-		}
-		selCell := tview.NewTableCell(" ").SetBackgroundColor(zebra) // not selectable
-		cm.iocsTable.SetCell(row, 0, selCell)
-
-		cells := []struct {
-			text  string
-			color tcell.Color
-		}{
-			{strings.ToUpper(a.typ), cm.theme.Accent},
-			{a.item.Value, cm.theme.TextPrimary},
-			{fmt.Sprintf("%d", a.item.Count), cm.theme.TextPrimary},
-			{a.item.First.Format("2006-01-02 15:04"), cm.theme.TextPrimary},
-			{a.item.Last.Format("2006-01-02 15:04"), cm.theme.TextPrimary},
-			{iocSourceLabel(a.item), iocSourceColor(cm.theme, a.item)},
-		}
-		for c, cell := range cells {
-			tc := tview.NewTableCell(cell.text).
-				SetTextColor(cell.color).
-				SetBackgroundColor(zebra)
-			cm.iocsTable.SetCell(row, c+1, tc)
-		}
-		row++
-	}
-
-	// Render manual IOCs (selectable via space)
-	for _, m := range manuals {
-		zebra := cm.theme.TableZebra1
-		if row%2 == 1 {
-			zebra = cm.theme.TableZebra2
-		}
-		// selection indicator
-		indicator := " "
-		if cm.selectedManualIOCIDs != nil && cm.selectedManualIOCIDs[m.noteID] {
-			indicator = "✓"
-		}
-		cm.iocRowToManualID[row] = m.noteID
-
-		cm.iocsTable.SetCell(row, 0, tview.NewTableCell(indicator).
-			SetTextColor(cm.theme.Accent).
-			SetBackgroundColor(zebra))
-
-		// No count/first/last available for manual entries (show "-")
-		cells := []struct {
-			text  string
-			color tcell.Color
-		}{
-			{strings.ToUpper(m.typ), cm.theme.Accent},
-			{m.value, cm.theme.TextPrimary},
-			{"-", cm.theme.TextPrimary},
-			{"-", cm.theme.TextPrimary},
-			{"-", cm.theme.TextPrimary},
-			{"manual", cm.theme.TextPrimary},
-		}
-		for c, cell := range cells {
-			tc := tview.NewTableCell(cell.text).
-				SetTextColor(cell.color).
-				SetBackgroundColor(zebra)
-			cm.iocsTable.SetCell(row, c+1, tc)
-		}
-		row++
-	}
-
-	if row == 1 {
-		// no data
-		bg := cm.theme.TableZebra1
-		msg := tview.NewTableCell("(none)").
-			SetTextColor(cm.theme.TextPrimary).
-			SetBackgroundColor(bg).
-			SetSelectable(false)
-		cm.iocsTable.SetCell(1, 0, msg)
-		for c := 1; c < len(headers); c++ {
-			cm.iocsTable.SetCell(1, c, tview.NewTableCell("").
-				SetBackgroundColor(bg).
-				SetSelectable(false))
-		}
-	}
-}
 
 // iocBuckets is the display order of indicator groups in the IOCs tab.
 var iocBuckets = []string{"ip", "domain", "url", "hash", "file", "process", "user", "email"}
@@ -1563,27 +1430,6 @@ func (cm *CaseManagement) scrapeIOCs(ev store.Event, add func(typ, val, evID str
 }
 
 // Activity Log rendering
-func (cm *CaseManagement) renderActivityLog() {
-	if cm.activityView == nil {
-		return
-	}
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("[%s]Activity Log[-]\n\n", cm.theme.TagWarning))
-	if len(cm.auditLog) == 0 {
-		sb.WriteString("  (no activity)\n")
-	} else {
-		// Show recent entries first (newest to oldest)
-		for _, a := range cm.auditLog {
-			// Enhanced formatting with action descriptions
-			actionDesc := cm.formatActionDescription(a.Action, a.Details)
-			sb.WriteString(fmt.Sprintf("  [%s]%s[-] [%s]%s[-] [%s]%s[-]\n",
-				cm.theme.TagMuted, a.Timestamp.Format("15:04:05"),
-				cm.theme.TagAccent, a.Actor,
-				cm.theme.TagTextPrimary, actionDesc))
-		}
-	}
-	cm.activityView.SetText(sb.String())
-}
 
 // formatActionDescription provides human-readable descriptions for audit actions
 func (cm *CaseManagement) formatActionDescription(action string, details map[string]interface{}) string {
@@ -1639,12 +1485,18 @@ func (cm *CaseManagement) buildTabs() {
 
 	// Build additional views
 	cm.overviewView = tview.NewTextView().SetDynamicColors(true).SetScrollable(true)
-	cm.overviewView.SetBorder(true).SetTitle(" Overview ").SetTitleAlign(tview.AlignLeft)
+	cm.overviewView.SetBorder(true).SetTitle(" BRIEFING ").SetTitleAlign(tview.AlignLeft)
 	// Overview tab input capture: l to generate case summary, Tab to toggle focus
 	cm.overviewView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyTab:
-			cm.toggleLeftRightFocus()
+			// Tab moves between the case's tabs, which is what §9 lists first
+			// and what an analyst reaches for. Pane focus moved to `h`/`l`,
+			// which are already the focus keys everywhere else.
+			cm.switchTab(wrapTab(cm.activeTab + 1))
+			return nil
+		case tcell.KeyBacktab:
+			cm.switchTab(wrapTab(cm.activeTab - 1))
 			return nil
 		case tcell.KeyRune:
 			switch event.Rune() {
@@ -1660,17 +1512,26 @@ func (cm *CaseManagement) buildTabs() {
 		SetBorders(false).
 		SetSelectable(true, false).
 		SetFixed(1, 0)
-	cm.iocsTable.SetBorder(true).SetTitle(" Artifacts / IOCs ").SetTitleAlign(tview.AlignLeft)
+	cm.iocsTable.SetBorder(true).SetTitle(" INDICATORS ").SetTitleAlign(tview.AlignLeft)
 	// IOC tab input capture: add ( + ), delete ( d ), toggle select (space), Tab to switch panes.
 	cm.iocsTable.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Key() {
 		case tcell.KeyTab:
-			cm.toggleLeftRightFocus()
+			// Tab moves between the case's tabs, which is what §9 lists first
+			// and what an analyst reaches for. Pane focus moved to `h`/`l`,
+			// which are already the focus keys everywhere else.
+			cm.switchTab(wrapTab(cm.activeTab + 1))
+			return nil
+		case tcell.KeyBacktab:
+			cm.switchTab(wrapTab(cm.activeTab - 1))
 			return nil
 		case tcell.KeyRune:
 			switch event.Rune() {
 			case '+':
 				cm.showAddIOCModal()
+				return nil
+			case 'p', 'P':
+				cm.pivotSelectedIndicator()
 				return nil
 			case 'd':
 				cm.deleteSelectedManualIOCs()
@@ -1698,35 +1559,50 @@ func (cm *CaseManagement) buildTabs() {
 		}
 		return event
 	})
-	// Keep selection for keyboard navigation.
-	cm.iocsTable.SetSelectedFunc(func(row, col int) {})
+	// Enter pivots, as it does on Events: "where else has this appeared?" is
+	// answered the same way wherever it is asked.
+	cm.iocsTable.SetSelectedFunc(func(row, col int) { cm.pivotSelectedIndicator() })
 
-	cm.activityView = tview.NewTextView().SetDynamicColors(true).SetScrollable(true)
-	cm.activityView.SetBorder(true).SetTitle(" Activity Log ").SetTitleAlign(tview.AlignLeft)
+	cm.activityTable = tview.NewTable().SetSelectable(true, false).SetFixed(1, 0)
+	cm.activityTable.SetBorder(true).SetTitle(" ACTIVITY ").SetTitleAlign(tview.AlignLeft)
 
 	// Add pages in required order: overview, events, timeline, iocs, notes, activity
-	cm.tabsPages.AddPage("overview", cm.overviewView, true, true)
+	cm.tabsPages.AddPage("briefing", cm.overviewView, true, true)
 	cm.tabsPages.AddPage("findings", cm.findingsTable, true, false)
 	cm.tabsPages.AddPage("events", cm.eventsTable, true, false)
 	cm.tabsPages.AddPage("timeline", cm.timelineView, true, false)
 	cm.tabsPages.AddPage("iocs", cm.iocsTable, true, false)
 	cm.tabsPages.AddPage("notes", cm.notesPages, true, false)
-	cm.tabsPages.AddPage("activity", cm.activityView, true, false)
+	cm.tabsPages.AddPage("activity", cm.activityTable, true, false)
 
 	// Ensure a valid active tab, default to Overview
 	if cm.activeTab < 0 || cm.activeTab >= len(caseTabNames) {
-		cm.activeTab = tabOverview
+		cm.activeTab = tabBriefing
 	}
 	cm.tabsPages.SwitchToPage(caseTabPages[cm.activeTab].page)
 
 	// Initial renders
-	cm.renderOverview()
+	cm.renderBriefing()
 	cm.renderCaseFindings()
 	cm.loadCaseFindings()
 	cm.renderIOCs()
 	cm.renderActivityLog()
 
 	cm.renderTabBar()
+}
+
+// caseTabStripWidth is the columns the full framed strip needs.
+func caseTabStripWidth(names []string, active int) int {
+	w := 0
+	for i, name := range names {
+		// " ╭─ name ─╮ " and " ┌ name ┐ " are 9 and 7 columns of frame.
+		if i == active {
+			w += len([]rune(name)) + 9
+		} else {
+			w += len([]rune(name)) + 7
+		}
+	}
+	return w
 }
 
 func (cm *CaseManagement) renderTabBar() {
@@ -1736,6 +1612,17 @@ func (cm *CaseManagement) renderTabBar() {
 	active := cm.activeTab
 	if active < 0 || active >= len(names) {
 		active = 0
+	}
+
+	// The full strip needs about 100 columns. Below that it would truncate
+	// mid-word and drop the last tabs off the end entirely — a bar that hides
+	// where you can go is worse than one that admits it does not fit. So the
+	// narrow form states position and how to move instead.
+	if _, _, barWidth, _ := cm.tabBar.GetInnerRect(); barWidth > 0 && barWidth < caseTabStripWidth(names, active) {
+		cm.tabBar.SetText(fmt.Sprintf(
+			" [::b]%s[-]  [%s]%d/%d · Tab next · Shift+Tab back[-]",
+			names[active], cm.theme.TagMuted, active+1, len(names)))
+		return
 	}
 
 	// Build raw top pieces (no color tags) to compute visible widths.
@@ -1778,6 +1665,15 @@ func (cm *CaseManagement) renderTabBar() {
 	cm.tabBar.SetText(topLine.String() + "\n" + underline.String())
 }
 
+// wrapTab keeps a tab index inside the tab list, wrapping at both ends.
+func wrapTab(idx int) int {
+	n := len(caseTabNames)
+	if n == 0 {
+		return 0
+	}
+	return ((idx % n) + n) % n
+}
+
 func (cm *CaseManagement) switchTab(idx int) {
 	if idx < 0 || idx >= len(caseTabNames) {
 		return
@@ -1814,7 +1710,7 @@ func (cm *CaseManagement) OnThemeChanged(theme Theme) {
 	cm.updateMetadataBar()
 	cm.updateEventsTable()
 	cm.updateTimelineView()
-	cm.renderOverview()
+	cm.renderBriefing()
 	cm.renderIOCs()
 	cm.renderActivityLog()
 	cm.renderTabBar()
@@ -1893,8 +1789,8 @@ func (cm *CaseManagement) switchToNotesView() {
 	if cm.notesPages != nil {
 		cm.notesPages.SwitchToPage("view")
 	}
-	if cm.notesViewer != nil {
-		cm.app.SetFocus(cm.notesViewer)
+	if cm.notesTable != nil {
+		cm.app.SetFocus(cm.notesTable)
 	}
 	cm.setStatusDirect(cm.notesViewStatusText())
 	cm.updateFocusStyles()
@@ -1906,6 +1802,7 @@ func (cm *CaseManagement) switchToNotesEdit() {
 	if cm.notesEditor != nil {
 		// Start with an empty draft
 		cm.notesEditor.SetText("", true)
+		cm.notesDraftBaseline = ""
 	}
 	if cm.notesPages != nil {
 		cm.notesPages.SwitchToPage("edit")
@@ -2030,7 +1927,11 @@ func (cm *CaseManagement) processCopilotMessage(message string) {
 	// Clear input
 	cm.copilotInput.SetText("")
 
-	// Show loading state
+	cm.copilotStatus = copilotStatus{Pending: true}
+	cm.updateCopilotTranscript()
+	if cm.copilotTranscript != nil {
+		cm.app.SetFocus(cm.copilotTranscript)
+	}
 	cm.updateStatus("Copilot thinking...")
 
 	// Process in background
@@ -2059,6 +1960,8 @@ func (cm *CaseManagement) processCopilotMessage(message string) {
 
 		cm.app.QueueUpdateDraw(func() {
 			if err != nil {
+				cm.copilotStatus = copilotStatus{Failure: err.Error()}
+				cm.updateCopilotTranscript()
 				cm.updateStatus(fmt.Sprintf("Copilot error: %v", err))
 				return
 			}
@@ -2068,11 +1971,14 @@ func (cm *CaseManagement) processCopilotMessage(message string) {
 				if resp != nil {
 					errMsg = resp.Error
 				}
+				cm.copilotStatus = copilotStatus{Failure: errMsg}
+				cm.updateCopilotTranscript()
 				cm.updateStatus(fmt.Sprintf("Copilot error: %s", errMsg))
 				return
 			}
 
 			// Add response to transcript
+			cm.copilotStatus = copilotStatus{}
 			cm.chatHistory = append(cm.chatHistory, resp.Message)
 			cm.updateCopilotTranscript()
 
@@ -2087,26 +1993,16 @@ func (cm *CaseManagement) processCopilotMessage(message string) {
 }
 
 func (cm *CaseManagement) updateCopilotTranscript() {
-	var transcript strings.Builder
-
-	for _, msg := range cm.chatHistory {
-		timestamp := msg.Timestamp.Format("15:04")
-
-		switch msg.Role {
-		case "user":
-			transcript.WriteString(fmt.Sprintf("[blue]%s You:[-]\n%s\n\n", timestamp, msg.Content))
-		case "assistant":
-			persona := msg.Persona
-			if persona == "" {
-				persona = "Copilot"
-			}
-			transcript.WriteString(fmt.Sprintf("[green]%s %s:[-]\n%s\n\n", timestamp, persona, msg.Content))
-		}
+	if cm.copilotTranscript == nil {
+		return
 	}
-
-	cm.copilotTranscript.SetText(transcript.String())
-	// Auto-scroll to bottom
-	cm.copilotTranscript.ScrollToEnd()
+	if len(cm.chatHistory) == 0 {
+		cm.showCopilotSuggestions()
+		return
+	}
+	renderTranscript(cm.copilotTranscript,
+		buildTranscript(cm.chatHistory, cm.copilotTextWidth(), cm.copilotStatus), cm.theme)
+	cm.copilotPages.SwitchToPage("transcript")
 }
 
 // updateTokenEstimate updates the inline token/cost estimate below the chat transcript.
@@ -2440,7 +2336,7 @@ func (cm *CaseManagement) buildCaseChatContext() string {
 func (cm *CaseManagement) executeCaseSummary(prompt string, events []store.Event, estTokens int) {
 	cm.isSummarizing = true
 	cm.updateStatus("Generating case summary...")
-	cm.renderOverview()
+	cm.renderBriefing()
 
 	go func() {
 		var (
@@ -2475,7 +2371,7 @@ func (cm *CaseManagement) executeCaseSummary(prompt string, events []store.Event
 				cm.app.QueueUpdateDraw(func() {
 					cm.isSummarizing = false
 					cm.updateStatus(fmt.Sprintf("Summary error: %v", ferr))
-					cm.renderOverview()
+					cm.renderBriefing()
 				})
 				return
 			}
@@ -2505,7 +2401,7 @@ func (cm *CaseManagement) executeCaseSummary(prompt string, events []store.Event
 			go cm.store.LogCaseAction(cm.ctx, cm.caseData.ID, "case_summary", cm.getCurrentAnalyst(),
 				map[string]interface{}{"tokens": tokens, "cost": cost})
 
-			cm.renderOverview()
+			cm.renderBriefing()
 			cm.renderActivityLog()
 			cm.updateStatus("Case summary generated")
 		})
@@ -2614,15 +2510,15 @@ func (cm *CaseManagement) setFocusPane(pane int) {
 			// Edit mode status (themed)
 			cm.setStatusDirect(cm.notesEditStatusText())
 		} else {
-			if cm.notesViewer != nil {
-				cm.app.SetFocus(cm.notesViewer)
+			if cm.notesTable != nil {
+				cm.app.SetFocus(cm.notesTable)
 			}
 			// View mode status (themed)
 			cm.setStatusDirect(cm.notesViewStatusText())
 		}
 	case FocusActivity:
-		if cm.activityView != nil {
-			cm.app.SetFocus(cm.activityView)
+		if cm.activityTable != nil {
+			cm.app.SetFocus(cm.activityTable)
 		}
 		cm.updateStatus("Focus: Activity - r=refresh")
 	case FocusCopilot:
@@ -2678,7 +2574,8 @@ func (cm *CaseManagement) applyTheme() {
 	}
 
 	cm.timelineView.SetBackgroundColor(cm.theme.Surface)
-	cm.timelineView.SetTextColor(cm.theme.TextPrimary)
+	cm.timelineView.SetSelectedStyle(tcell.StyleDefault.
+		Background(cm.theme.SelectionBg).Foreground(cm.theme.SelectionFg))
 
 	cm.copilotPanel.SetBackgroundColor(cm.theme.Surface)
 
@@ -2690,16 +2587,19 @@ func (cm *CaseManagement) applyTheme() {
 	}
 
 	cm.copilotTranscript.SetBackgroundColor(cm.theme.Surface)
-	cm.copilotTranscript.SetTextColor(cm.theme.TextPrimary)
+	if cm.copilotSuggestions != nil {
+		cm.copilotSuggestions.SetBackgroundColor(cm.theme.Surface)
+	}
 
 	if cm.copilotEstimate != nil {
 		cm.copilotEstimate.SetBackgroundColor(cm.theme.Surface)
 		cm.copilotEstimate.SetTextColor(cm.theme.TextPrimary)
 	}
 
-	if cm.notesViewer != nil {
-		cm.notesViewer.SetBackgroundColor(cm.theme.Surface)
-		cm.notesViewer.SetTextColor(cm.theme.TextPrimary)
+	if cm.notesTable != nil {
+		cm.notesTable.SetBackgroundColor(cm.theme.Surface)
+		cm.notesTable.SetSelectedStyle(tcell.StyleDefault.
+			Background(cm.theme.SelectionBg).Foreground(cm.theme.SelectionFg))
 	}
 	if cm.notesEditor != nil {
 		cm.notesEditor.SetBackgroundColor(cm.theme.Surface)
@@ -2721,8 +2621,8 @@ func (cm *CaseManagement) applyTheme() {
 	}
 	cm.timelineView.SetBorderColor(cm.theme.Border)
 	cm.copilotPanel.SetBorderColor(cm.theme.Border)
-	if cm.notesViewer != nil {
-		cm.notesViewer.SetBorderColor(cm.theme.Border)
+	if cm.notesTable != nil {
+		cm.notesTable.SetBorderColor(cm.theme.Border)
 	}
 	if cm.notesEditor != nil {
 		cm.notesEditor.SetBorderColor(cm.theme.Border)
@@ -2733,8 +2633,10 @@ func (cm *CaseManagement) applyTheme() {
 	if cm.iocsTable != nil {
 		cm.iocsTable.SetBorderColor(cm.theme.Border)
 	}
-	if cm.activityView != nil {
-		cm.activityView.SetBorderColor(cm.theme.Border)
+	if cm.activityTable != nil {
+		cm.activityTable.SetBorderColor(cm.theme.Border)
+		cm.activityTable.SetSelectedStyle(tcell.StyleDefault.
+			Background(cm.theme.SelectionBg).Foreground(cm.theme.SelectionFg))
 	}
 
 	// Re-render the findings table so its cell colours follow the theme; the
@@ -2751,15 +2653,6 @@ func (cm *CaseManagement) applyTheme() {
 }
 
 // Modal and action handlers
-
-func (cm *CaseManagement) createCaseFromSelection() {
-	if len(cm.selectedEventIDs) == 0 {
-		cm.updateStatus("No events selected for new case")
-		return
-	}
-
-	cm.showCreateCaseModal()
-}
 
 func (cm *CaseManagement) addEventsToCase() {
 	if len(cm.selectedEventIDs) == 0 {
@@ -3045,9 +2938,9 @@ func (cm *CaseManagement) updateFocusStyles() {
 	cm.timelineView.SetTitleColor(cm.theme.TextPrimary)
 	cm.copilotPanel.SetBorderColor(cm.theme.Border)
 	cm.copilotPanel.SetTitleColor(cm.theme.TextPrimary)
-	if cm.notesViewer != nil {
-		cm.notesViewer.SetBorderColor(cm.theme.Border)
-		cm.notesViewer.SetTitleColor(cm.theme.TextPrimary)
+	if cm.notesTable != nil {
+		cm.notesTable.SetBorderColor(cm.theme.Border)
+		cm.notesTable.SetTitleColor(cm.theme.TextPrimary)
 	}
 	if cm.notesEditor != nil {
 		cm.notesEditor.SetBorderColor(cm.theme.Border)
@@ -3061,9 +2954,9 @@ func (cm *CaseManagement) updateFocusStyles() {
 		cm.iocsTable.SetBorderColor(cm.theme.Border)
 		cm.iocsTable.SetTitleColor(cm.theme.TextPrimary)
 	}
-	if cm.activityView != nil {
-		cm.activityView.SetBorderColor(cm.theme.Border)
-		cm.activityView.SetTitleColor(cm.theme.TextPrimary)
+	if cm.activityTable != nil {
+		cm.activityTable.SetBorderColor(cm.theme.Border)
+		cm.activityTable.SetTitleColor(cm.theme.TextPrimary)
 	}
 	// TextArea does not support SetTitleColor; leave title color implicit via border focus.
 
@@ -3084,9 +2977,9 @@ func (cm *CaseManagement) updateFocusStyles() {
 				cm.notesEditor.SetBorderColor(cm.theme.FocusBorder)
 			}
 		} else {
-			if cm.notesViewer != nil {
-				cm.notesViewer.SetBorderColor(cm.theme.FocusBorder)
-				cm.notesViewer.SetTitleColor(cm.theme.FocusBorder)
+			if cm.notesTable != nil {
+				cm.notesTable.SetBorderColor(cm.theme.FocusBorder)
+				cm.notesTable.SetTitleColor(cm.theme.FocusBorder)
 			}
 		}
 	case FocusOverview:
@@ -3100,9 +2993,9 @@ func (cm *CaseManagement) updateFocusStyles() {
 			cm.iocsTable.SetTitleColor(cm.theme.FocusBorder)
 		}
 	case FocusActivity:
-		if cm.activityView != nil {
-			cm.activityView.SetBorderColor(cm.theme.FocusBorder)
-			cm.activityView.SetTitleColor(cm.theme.FocusBorder)
+		if cm.activityTable != nil {
+			cm.activityTable.SetBorderColor(cm.theme.FocusBorder)
+			cm.activityTable.SetTitleColor(cm.theme.FocusBorder)
 		}
 	}
 }
@@ -3894,8 +3787,8 @@ func (cm *CaseManagement) popModalRoot() {
 			case FocusNotes:
 				if cm.isEditingNotes && cm.notesEditor != nil {
 					cm.app.SetFocus(cm.notesEditor)
-				} else if cm.notesViewer != nil {
-					cm.app.SetFocus(cm.notesViewer)
+				} else if cm.notesTable != nil {
+					cm.app.SetFocus(cm.notesTable)
 				}
 			case FocusCopilot:
 				cm.app.SetFocus(cm.copilotInput)
@@ -3904,8 +3797,8 @@ func (cm *CaseManagement) popModalRoot() {
 					cm.app.SetFocus(cm.overviewView)
 				}
 			case FocusActivity:
-				if cm.activityView != nil {
-					cm.app.SetFocus(cm.activityView)
+				if cm.activityTable != nil {
+					cm.app.SetFocus(cm.activityTable)
 				}
 			}
 		} else {
@@ -3942,8 +3835,8 @@ func (cm *CaseManagement) popModalRoot() {
 	case FocusNotes:
 		if cm.isEditingNotes && cm.notesEditor != nil {
 			cm.app.SetFocus(cm.notesEditor)
-		} else if cm.notesViewer != nil {
-			cm.app.SetFocus(cm.notesViewer)
+		} else if cm.notesTable != nil {
+			cm.app.SetFocus(cm.notesTable)
 		}
 	case FocusCopilot:
 		cm.app.SetFocus(cm.copilotInput)
@@ -3952,8 +3845,8 @@ func (cm *CaseManagement) popModalRoot() {
 			cm.app.SetFocus(cm.overviewView)
 		}
 	case FocusActivity:
-		if cm.activityView != nil {
-			cm.app.SetFocus(cm.activityView)
+		if cm.activityTable != nil {
+			cm.app.SetFocus(cm.activityTable)
 		}
 	}
 }
@@ -4153,4 +4046,143 @@ func iocSourceColor(theme Theme, it IOCItem) tcell.Color {
 		return theme.Accent
 	}
 	return theme.TableRowMuted
+}
+
+// copilotDrawerWidth is the drawer's width when open. Narrower than the column
+// it replaces: it is a conversation, not a second screen.
+const copilotDrawerWidth = 44
+
+// caseMinWidth is the narrowest the case may be squeezed to.
+//
+// 80 columns is the standard minimum terminal, and the case is the screen the
+// analyst is actually working on — the copilot is not entitled to push it below
+// what the case itself would get on the smallest supported terminal.
+const caseMinWidth = 80
+
+// copilotFullScreen reports whether the drawer must take the screen instead of
+// sharing it. At 100 columns a 44-column drawer would leave the case 56.
+func copilotFullScreen(totalWidth int) bool {
+	return totalWidth-copilotDrawerWidth < caseMinWidth
+}
+
+// toggleCaseCopilot opens or closes the copilot.
+//
+// Wide enough, it is a drawer beside the case. Too narrow to share, it takes
+// the screen — a 36-column case behind a drawer is neither one thing nor the
+// other.
+func (cm *CaseManagement) toggleCaseCopilot() {
+	if cm.caseBody == nil || cm.copilotPanel == nil {
+		return
+	}
+	if cm.copilotOpen {
+		if cm.copilotFull {
+			cm.popModalRoot()
+			cm.copilotFull = false
+		} else {
+			cm.caseBody.RemoveItem(cm.copilotPanel)
+			// The drawer's columns come back to the case on the next frame.
+			cm.pendingWidthShift = copilotDrawerWidth
+			cm.renderBriefing()
+			cm.pendingWidthShift = 0
+		}
+		cm.copilotOpen = false
+		cm.setFocusPane(caseTabPages[cm.activeTab].focus)
+		cm.updateStatus("Copilot closed")
+		return
+	}
+
+	cm.copilotOpen = true
+	cm.showCopilotSuggestions()
+
+	_, _, width, _ := cm.layout.GetInnerRect()
+	if copilotFullScreen(width) {
+		cm.copilotFull = true
+		cm.pushModalRoot(cm.copilotPanel)
+		cm.focusCopilotEntry()
+		cm.updateStatus("Copilot — Esc or [ returns to the case")
+		return
+	}
+
+	cm.caseBody.AddItem(cm.copilotPanel, copilotDrawerWidth, 0, false)
+	cm.pendingWidthShift = -copilotDrawerWidth
+	cm.renderBriefing()
+	cm.pendingWidthShift = 0
+	cm.focusCopilotEntry()
+	cm.updateStatus("Copilot open — [ closes it")
+}
+
+// caseHeaderRows is the header's height with its border and two rows of fact.
+// It grows by one when the next-action prompt has something to say.
+const caseHeaderRows = 4
+
+// staleCaseAfter is how long a case may go without activity before the header
+// says so.
+const staleCaseAfter = 24 * time.Hour
+
+// nextActionPrompt returns the one thing to do about a case that is drifting,
+// or empty when there is nothing to say.
+//
+// One prompt, not a list: a header that always carries advice is a header
+// nobody reads. It appears when a case has no owner, no note, or has gone
+// quiet — the three states in which a case is quietly rotting rather than
+// being worked.
+func (cm *CaseManagement) nextActionPrompt() string {
+	acc, muted := cm.theme.TagAccent, cm.theme.TagMuted
+
+	if strings.TrimSpace(cm.caseData.AssignedTo) == "" {
+		return fmt.Sprintf(" [%s]▸ NEXT:[-] [%s]no owner — press o to take it[-]", acc, muted)
+	}
+
+	var lastNote time.Time
+	for _, n := range cm.notes {
+		if n.CreatedAt.After(lastNote) {
+			lastNote = n.CreatedAt
+		}
+	}
+	if lastNote.IsZero() {
+		return fmt.Sprintf(" [%s]▸ NEXT:[-] [%s]no note yet — press n to record where this stands[-]", acc, muted)
+	}
+	if time.Since(lastNote) > staleCaseAfter {
+		return fmt.Sprintf(" [%s]▸ NEXT:[-] [%s]nothing recorded in %s — press n to say where this stands[-]",
+			acc, muted, renderRelativeTime(lastNote))
+	}
+	return ""
+}
+
+// togglePinnedEvent stars or unstars the evidence under the cursor.
+//
+// Persisted immediately rather than on some later save: a star is a judgement,
+// and a judgement that survives only until the screen closes is not one.
+func (cm *CaseManagement) togglePinnedEvent() {
+	row, _ := cm.eventsTable.GetSelection()
+	if row <= 0 || row-1 >= len(cm.events) {
+		return
+	}
+	ev := cm.events[row-1]
+
+	if cm.pinnedEvents == nil {
+		cm.pinnedEvents = map[string]bool{}
+	}
+	pin := !cm.pinnedEvents[ev.ID]
+
+	if err := cm.store.SetMemberPinned(cm.ctx, cm.caseData.ID, store.MemberTypeEvent, ev.ID, pin); err != nil {
+		cm.updateStatus(fmt.Sprintf("Could not pin: %v", err))
+		return
+	}
+	if pin {
+		cm.pinnedEvents[ev.ID] = true
+	} else {
+		delete(cm.pinnedEvents, ev.ID)
+	}
+
+	cm.updateEventsTable()
+	// The briefing lists pinned evidence, so it changes too.
+	cm.renderBriefing()
+
+	n := len(cm.pinnedEvents)
+	if pin {
+		cm.updateStatus(fmt.Sprintf("Pinned · %s pinned", plural(n, "event")))
+	} else {
+		cm.updateStatus(fmt.Sprintf("Unpinned · %s pinned", plural(n, "event")))
+	}
 }

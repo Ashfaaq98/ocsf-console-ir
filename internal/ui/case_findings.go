@@ -222,3 +222,45 @@ func timeText(t time.Time) string {
 	}
 	return t.Format("2006-01-02 15:04:05")
 }
+
+// detachSelectedFinding removes a finding from the case.
+//
+// A finding is what the case is *about* — OCSF models it as a case member, not
+// as attached evidence — so detaching one narrows what the case claims. That is
+// a decision, so it is confirmed and it is recorded in the audit trail. The
+// finding itself is untouched and can be escalated back.
+func (cm *CaseManagement) detachSelectedFinding() {
+	row, _ := cm.findingsTable.GetSelection()
+	idx := row - 1
+	if idx < 0 || idx >= len(cm.caseFindings) {
+		cm.updateStatus("Select a finding to detach")
+		return
+	}
+	f := cm.caseFindings[idx]
+
+	modal := tview.NewModal().
+		SetText(fmt.Sprintf("Detach %q from this case?\n\nThe finding is not deleted.", truncate(f.Title, 60))).
+		AddButtons([]string{"Detach", "Cancel"}).
+		SetDoneFunc(func(_ int, label string) {
+			cm.popModalRoot()
+			if label != "Detach" {
+				return
+			}
+			go func() {
+				err := cm.store.RemoveCaseMember(cm.ctx, cm.caseData.ID, store.MemberTypeFinding, f.ID)
+				cm.app.QueueUpdateDraw(func() {
+					if err != nil {
+						cm.updateStatus(fmt.Sprintf("Could not detach: %v", err))
+						return
+					}
+					cm.updateStatus(fmt.Sprintf("Detached %s", truncate(f.Title, 40)))
+					cm.loadCaseFindings()
+					cm.renderBriefing()
+				})
+				// The audit trail carries what the case used to claim.
+				_ = cm.store.LogCaseAction(cm.ctx, cm.caseData.ID, "finding_detached",
+					cm.getCurrentAnalyst(), map[string]interface{}{"finding_id": f.ID, "title": f.Title})
+			}()
+		})
+	cm.pushModalRoot(modal)
+}

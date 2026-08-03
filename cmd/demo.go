@@ -27,9 +27,12 @@ The demo never touches your real database. Everything lives in a temporary
 directory that is removed on exit, so it is safe to run before you have any data
 of your own — and safe to run again.
 
-The sample is one coherent incident: a phishing attachment leads to encoded
-PowerShell, credential access and C2 beaconing on a single host. That gives the
-findings queue, the case model and the indicator pivot something real to show.
+The sample is a working week in a small estate: a phishing-led intrusion still
+being worked, an account compromise nobody has picked up, a cryptominer that was
+closed as a true positive, and a scanner's findings closed as false positives —
+sitting inside several hundred ordinary events. The story is shifted onto
+today's calendar as it loads, so ages, filters and case headers describe a live
+investigation rather than an archive.
 
 Examples:
   # Explore, then throw it away
@@ -170,12 +173,27 @@ func seedDemoStore(cmd *cobra.Command, dbPath string, logger *logging.Logger) er
 	parser := ingest.NewParser()
 	ctx := cmd.Context()
 
-	var ingested, failed int
+	records := [][]byte{}
 	for _, line := range bytes.Split(demo.Scenario(), []byte("\n")) {
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
-		rec, err := parser.Parse(line)
+		records = append(records, line)
+	}
+
+	// Move the story onto today's calendar before anything reads it, so ages,
+	// the "last 24 hours" filter and the case header all describe a live
+	// investigation rather than an archive.
+	shift := demoTimeShift(newestDemoTime(records), time.Now().UTC())
+
+	var ingested, failed int
+	for _, line := range records {
+		shifted, err := shiftDemoRecord(line, shift)
+		if err != nil {
+			failed++
+			continue
+		}
+		rec, err := parser.Parse(shifted)
 		if err != nil {
 			failed++
 			continue
@@ -192,6 +210,14 @@ func seedDemoStore(cmd *cobra.Command, dbPath string, logger *logging.Logger) er
 	}
 	if failed > 0 {
 		logger.Printf("warning: %d demo records could not be loaded", failed)
+	}
+
+	// Cases are not ingested: Console-IR does not yet read OCSF Incident
+	// Findings back into cases (roadmap, NEXT). Without this the demo would open
+	// on an empty Cases screen and the case room — briefing, timeline, notes,
+	// copilot — would have nothing to show.
+	if err := seedDemoCases(ctx, st, shift); err != nil {
+		return fmt.Errorf("failed to build the demo cases: %w", err)
 	}
 	return nil
 }

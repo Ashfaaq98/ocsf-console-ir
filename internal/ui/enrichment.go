@@ -214,3 +214,7 @@ func eventIndicatorValues(observables []store.Observable, event *store.Event) []
 	}
 	return out
 }
+
+// runtimeLogHint names where a failed lookup is recorded. The UI package does
+// not own the log path, and "see log" without saying which log is not help.
+func runtimeLogHint() string { return "the log" }

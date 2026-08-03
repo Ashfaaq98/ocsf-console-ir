@@ -72,6 +72,11 @@ Examples:
 
   # Start without TUI (experimental headless mode)
   console-ir serve --no-tui`,
+	// The same guard the root command carries, and for the same reason: without
+	// it any stray word launches the TUI instead of reporting an unknown
+	// command. `serve live-events` was a real subcommand until recently, so it
+	// has to say it is gone rather than silently open the interface.
+	Args: cobra.NoArgs,
 	RunE: runServe,
 }
 
@@ -138,10 +143,35 @@ func runServe(cmd *cobra.Command, args []string) error {
 	// Pre-determine if we'll use TUI so we can configure logging/bus before starting services
 	willUseTUI = determineTUIMode(cmd, args)
 
-	// Initialize store
-	logger.Println("Initializing database...")
 	baseDir := getWorkingDir()
 	resolvedDBPath := resolvePathRelativeToBase(baseDir, config.Database.Path)
+
+	// Entry routing: a missing database means a first run, which gets the
+	// Welcome Screen. There are exactly two destinations — no database goes to
+	// Welcome, a database goes to the main UI — and no branch on whether that
+	// database holds any findings, cases or events. An existing but empty
+	// database opens the app, which renders its own empty states.
+	//
+	// This runs before store.NewStore below, which would otherwise create the
+	// file and make the check answer yes on every run.
+	if willUseTUI && !databaseExists(resolvedDBPath) {
+		logger.Info("no database at %s; showing the welcome screen", resolvedDBPath)
+		res, err := runWelcome(cmd, resolvedDBPath)
+		if err != nil {
+			return err
+		}
+		if res.Action == ui.WelcomeQuit {
+			logger.Info("welcome screen quit without creating a database")
+			return nil
+		}
+		if res.Action == ui.WelcomeWatch {
+			// So the folder watcher started below is the one that was asked for.
+			ingestDir = res.Path
+		}
+	}
+
+	// Initialize store
+	logger.Println("Initializing database...")
 	logger.Printf("Using database at %s", resolvedDBPath)
 	st, err := store.NewStore(resolvedDBPath)
 	if err != nil {
@@ -313,13 +343,35 @@ func runServe(cmd *cobra.Command, args []string) error {
 				}
 			}()
 
-			ui := ui.NewUI(ctx, st, llmProvider, uiLogger, GetVersion())
+			tui := ui.NewUI(ctx, st, llmProvider, uiLogger, GetVersion())
 			// So empty-state hints name the folder that is genuinely watched,
 			// which --ingest-dir can move.
-			ui.SetIngestDir(ingestDir)
+			tui.SetIngestDir(ingestDir)
+
+			// The evidence pulse reports on two subsystems the store knows
+			// nothing about. Both are read through a function so the ui package
+			// depends on a shape rather than on ingest and plugins.
+			tui.SetWatcherStatus(func() ui.WatcherStatus {
+				s := fing.Status()
+				return ui.WatcherStatus{
+					Dir:      s.Dir,
+					Active:   s.Watching,
+					Errors:   s.Errors,
+					LastErr:  s.LastErr,
+					Ingested: s.Ingested,
+				}
+			})
+			tui.SetEnrichmentStatus(func() ui.EnrichmentStatus {
+				q := pluginManager.EnrichmentQueue()
+				return ui.EnrichmentStatus{
+					Pending: q.Pending,
+					Failed:  q.Failed,
+					Dropped: q.Dropped,
+				}
+			})
 
 			// Start TUI directly - tcell can handle terminal compatibility
-			if err := ui.Start(ctx); err != nil {
+			if err := tui.Start(ctx); err != nil {
 				return fmt.Errorf("TUI error: %w", err)
 			}
 		}

@@ -17,9 +17,9 @@
 
 </div>
 
-<!-- VISUAL 1: demo GIF (~15s, 100x30 terminal): open on the findings queue,
-     Enter a finding, v to set a verdict, e to escalate into a case, 2 for the
-     case's Findings tab. Belongs here, immediately below the badges. -->
+<div align="center">
+  <img src="assets/demo.gif" alt="Console-IR in use: working the findings queue, opening a detection, and escalating it into a case" width="900" />
+</div>
 
 ## Overview
 
@@ -33,11 +33,16 @@ rather than a wall of log lines. Raw events stay one keystroke away as the corro
 Everything runs from a single binary backed by SQLite. No broker, no server, no cloud.
 
 ```bash
-console-ir demo     # a full sample incident, in a throwaway database
+console-ir demo     # a week of sample cases, in a throwaway database
 ```
 
-> **Status:** early and evolving (v0.2.x). The TUI workflow is the supported path today; headless
-> mode is experimental and the external threat-intel plugins are optional.
+> **Status: early and evolving (v0.2.x).** The TUI workflow is the supported path today. Anything
+> marked **⚗ experimental** below works but is not settled — expect rough edges, and expect it to
+> change between releases.
+>
+> **Found a bug? Please [open an issue](https://github.com/Ashfaaq98/ocsf-console-ir/issues/new).**
+> Include what you ran, what you expected and what happened; `console-ir version` prints the build
+> and resolved paths. Bug reports on early software are the most useful thing you can send.
 
 ## Why Console-IR?
 
@@ -46,21 +51,13 @@ That holds in the SOC and breaks everywhere else: on a jump box mid-incident, on
 datacentre, in an airgapped lab, over SSH on a host you were handed ten minutes ago.
 
 Console-IR assumes the opposite: one binary you can copy anywhere, storage in a file, an interface
-that works over SSH.
+that works over SSH. Ingesting, triaging and writing up a case need no network at all; only the
+optional enrichment and LLM features reach outside the machine.
 
-|  | Console-IR | Traditional IR platform |
-|---|---|---|
-| Interface | Terminal, works over SSH | Browser |
-| Backend | None | Application server, queue, workers |
-| Database | Embedded SQLite | Postgres or Elasticsearch to operate |
-| Install | One static binary | Deployment |
-| Offline | Yes, fully | Rarely |
-| Schema | OCSF native | Vendor schema, OCSF via mapping |
-| Multi-user | No, single analyst | Yes, with RBAC |
-
-That last row is a limitation, not a feature. Console-IR complements the tools you already run: your
-SIEM and EDR collect and detect, MISP and OpenCTI hold threat intel, and Console-IR is the focused
-investigation layer once relevant OCSF records exist.
+It is single-analyst by design, which is a limitation rather than a feature: there is no RBAC and no
+shared server. Console-IR complements the tools you already run — your SIEM and EDR collect and
+detect, MISP and OpenCTI hold threat intel, and Console-IR is the focused investigation layer once
+relevant OCSF records exist.
 
 ## Core features
 
@@ -68,11 +65,22 @@ investigation layer once relevant OCSF records exist.
 - **Real OCSF semantics.** The `activity_id` lifecycle is honoured, so one alert reported five times stays one row
 - **Indicator pivot.** Observables are indexed, so "everything touching this IP" is a lookup, not a scan
 - **Cases that match the schema.** Findings as *members*, events as *evidence*, many-to-many
-- **Built-in enrichment.** GeoIP and WHOIS in-process, no external services
+- **Built-in enrichment.** GeoIP and WHOIS run in-process — no enrichment service to deploy,
+  though both query the internet today (offline GeoIP is on the roadmap)
 - **Local SQLite storage.** Full-text search, and your data never leaves the machine
 
-Also inside: stdin and folder ingestion, timelines, notes, IOC extraction, optional LLM summaries and
-Redis-backed threat-intel plugins.
+Also inside: stdin and folder ingestion, case timelines, a decision log, and indicator extraction.
+
+**⚗ Experimental** — usable, but not settled:
+
+- **The AI copilot and case summaries.** Optional and off unless configured. The shipped default
+  (local Ollama) needs a model that answers within 60 seconds, which CPU-only hardware may not manage
+- **Headless / HTTP ingestion.** `ingest --watch` is headless today; the HTTP receiver refuses to
+  start without a TUI rather than accept events it would not store
+- **External threat-intel plugins.** MISP, OpenCTI and IntelOwl integrations live in `plugins/` and
+  run as separate processes over Redis Streams. Embedding them in the binary, the way GeoIP and WHOIS
+  already are, is roadmap — until then they need a Redis to talk over
+- **The high-contrast and colourblind-safe themes.** Registered, but not yet verified screen by screen
 
 ### What "OCSF-native" means here
 
@@ -108,8 +116,8 @@ More in [docs/installation.md](docs/installation.md).
 console-ir demo
 ```
 
-Loads a sample incident (phishing attachment, encoded PowerShell, credential access, C2 beaconing)
-into a throwaway database and opens the TUI. It never touches your real data.
+Loads a working week — four cases in different states, a few hundred events, one intrusion still
+being worked — into a throwaway database and opens the TUI. It never touches your real data.
 
 Then point it at your own:
 
@@ -118,28 +126,15 @@ console-ir ingest events.jsonl   # a file, a directory, or - for stdin
 console-ir                       # open the TUI
 ```
 
-<!-- VISUAL 2: static screenshot of the findings queue with the detail pane
-     open on a critical finding. Belongs here, so a reader who skipped the GIF
-     still sees the tool before reaching the key table. -->
+<div align="center">
+  <img src="assets/findings.png" alt="The findings queue: a risk-ranked list on the left, the selected finding's evidence, indicators and ATT&amp;CK mapping on the right" width="900" />
+</div>
 
-From the findings queue:
-
-| Key | Does |
-|---|---|
-| `Enter` | Open the finding: evidence, source events, indicators |
-| `s` / `v` | Set status / verdict |
-| `e` | Escalate into a case |
-| `A` | Switch to all events |
-| `?` | Every other key |
-
+Press `?` anywhere for the keys that apply to the screen you are on.
 [docs/getting-started.md](docs/getting-started.md) walks through a first investigation.
 
 ## Architecture
 
-<!-- VISUAL 3: architecture diagram. Records flow ingest -> OCSF parser -> router
-     -> SQLite -> TUI, with the router branching three ways on class_uid and
-     is_alert (finding / finding+event / event). An ASCII version of this flow is
-     in docs/architecture.md if it is useful as a reference. -->
 
 Records flow **ingest → OCSF parser → router → SQLite → TUI**. The router reads `class_uid` and
 `is_alert` to decide what arrived, and indicators are indexed on the way through, which is what makes

@@ -58,7 +58,10 @@ func getCommit() string {
 // than per-directory, being able to confirm them from any working directory is
 // how you check the two agree.
 var versionCmd = &cobra.Command{
-	Use:   "version",
+	Use: "version",
+	// Takes no positionals; without this a stray word is accepted and ignored,
+	// so a mistyped flag runs the command instead of reporting the mistake.
+	Args:  cobra.NoArgs,
 	Short: "Print version information and resolved runtime paths",
 	Run: func(cmd *cobra.Command, args []string) {
 		dirs := paths.Current()

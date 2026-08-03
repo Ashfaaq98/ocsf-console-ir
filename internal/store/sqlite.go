@@ -207,6 +207,27 @@ type Enrichment struct {
 }
 
 // NewStore creates a new SQLite store instance
+// sqliteBusyTimeoutMS is how long a writer waits for the lock before giving up.
+//
+// Ingest and enrichment write concurrently, and SQLite allows one writer at a
+// time. Without a busy timeout the default is to fail *immediately* rather than
+// wait, so a write that arrived during another's millisecond returned "database
+// is locked" and the record was dropped. Three ingests of the same 15-event file
+// gave 15, 14 and 15 — same data, different answer, decided by timing.
+//
+// Five seconds is far longer than any write here takes; it exists for the case
+// of a second Console-IR process on the same database, where a busy period can
+// last as long as the other process's transaction.
+//
+// The timeout alone is not enough. Every transaction in this package reads
+// before it writes, and a deferred transaction that upgrades from read to write
+// fails on a stale snapshot no matter how long it waits — retrying can never
+// succeed, because the snapshot it holds is already out of date. `_txlock=immediate`
+// takes the write lock at BEGIN instead, so the wait happens where the timeout
+// applies. Every transaction here is a writer, so nothing pays for a lock it did
+// not need.
+const sqliteBusyTimeoutMS = 5000
+
 func NewStore(dbPath string) (*Store, error) {
 	// Ensure target directory exists (e.g., ./data)
 	if dir := filepath.Dir(dbPath); dir != "" && dir != "." {
@@ -611,7 +632,10 @@ func (s *Store) SaveEvent(ctx context.Context, ocsfEvent *ocsf.Event) (string, e
 func (s *Store) CreateOrUpdateCase(ctx context.Context, case_ Case) (string, error) {
 	if case_.ID == "" {
 		case_.ID = "case_" + uuid.New().String()
-		case_.CreatedAt = time.Now()
+		// CreatedAt is left as the caller set it. Overwriting it here discarded
+		// the opening time of any case that did not begin now — an imported
+		// incident, or a seeded one — and the zero case is already handled
+		// below.
 	}
 
 	// Preserve existing metadata when updating with zero-value fields

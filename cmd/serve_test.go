@@ -60,3 +60,38 @@ func TestRuntimeErrorsDoNotPrintUsage(t *testing.T) {
 		t.Error("SilenceUsage is off: a runtime error will be followed by the whole flag list")
 	}
 }
+
+// Every command must say how many positionals it takes.
+//
+// Without a declaration cobra accepts any number and the command runs anyway:
+// `console-ir reset something` reset the database, `console-ir list cases events`
+// listed cases and ignored the rest, and `console-ir serve live-events` opened
+// the interface instead of reporting a command that had just been removed. A
+// stray word is a mistake, and a mistake should be reported rather than
+// interpreted.
+func TestEveryCommandDeclaresItsArity(t *testing.T) {
+	var walk func(*cobra.Command)
+	walk = func(c *cobra.Command) {
+		// Cobra generates help and completion itself; their arity is not ours.
+		if c.Name() != "help" && c.Name() != "completion" && !isGenerated(c) {
+			if c.Args == nil {
+				t.Errorf("%q declares no Args, so it accepts any number of positionals and ignores them",
+					c.CommandPath())
+			}
+		}
+		for _, sub := range c.Commands() {
+			walk(sub)
+		}
+	}
+	walk(rootCmd)
+}
+
+// isGenerated reports whether cobra added the command rather than we did.
+func isGenerated(c *cobra.Command) bool {
+	for p := c; p != nil; p = p.Parent() {
+		if p.Name() == "completion" || p.Name() == "help" {
+			return true
+		}
+	}
+	return false
+}

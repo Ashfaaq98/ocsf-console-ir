@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/bus"
@@ -63,8 +64,12 @@ type FolderIngestor struct {
 	offsets map[string]int64 // per-file tail offset for jsonl
 	mu      sync.Mutex
 
-	ingested int
-	errors   int
+	// Counters, read by the dashboard from the UI goroutine while ingestion
+	// writes them. Atomic, and lastErr under mu, so the evidence pulse can show
+	// watcher health without racing the watcher.
+	ingested int64
+	errors   int64
+	lastErr  string
 }
 
 // NewFolderIngestor constructs a folder ingestor.
@@ -93,12 +98,10 @@ func NewFolderIngestor(parser *Parser, st *store.Store, b bus.Bus, opts FolderOp
 
 // Run executes the ingestion per options (one-shot or watch).
 func (fi *FolderIngestor) Run(ctx context.Context) error {
-	// Only ensure/create case when a title is provided. If empty, skip case assignment.
-	if fi.opts.CaseTitle != "" {
-		if err := fi.ensureCase(ctx); err != nil {
-			return err
-		}
-	}
+	// The case is created on the first record that lands in it, not here.
+	// Creating it up front puts an empty "Ingested Events" case in the Cases
+	// list of anyone who merely configures a watch folder — and it is the first
+	// thing they see, ahead of the cases they actually opened.
 
 	// In watch mode, resume from persisted offsets so a restart does not
 	// re-ingest files that were already read.
@@ -112,9 +115,11 @@ func (fi *FolderIngestor) Run(ctx context.Context) error {
 	}
 
 	if !fi.opts.Watch {
-		// Final case count sync
-		_ = fi.store.UpdateCaseEventCount(ctx, fi.caseID)
-		fi.opts.Logger.Printf("Completed one-shot ingest: ingested=%d errors=%d", fi.ingested, fi.errors)
+		// Final case count sync, if anything created the case.
+		if fi.caseID != "" {
+			_ = fi.store.UpdateCaseEventCount(ctx, fi.caseID)
+		}
+		fi.opts.Logger.Printf("Completed one-shot ingest: ingested=%d errors=%d", atomic.LoadInt64(&fi.ingested), atomic.LoadInt64(&fi.errors))
 		return nil
 	}
 
@@ -170,7 +175,7 @@ func (fi *FolderIngestor) scanOnce(ctx context.Context) error {
 			newOffset, err := fi.processJSONL(ctx, path, offset)
 			if err != nil {
 				fi.opts.Logger.Printf("error processing %s: %v", path, err)
-				fi.errors++
+				fi.recordError(err)
 				continue
 			}
 			fi.mu.Lock()
@@ -179,7 +184,7 @@ func (fi *FolderIngestor) scanOnce(ctx context.Context) error {
 		} else if strings.HasSuffix(strings.ToLower(e.Name()), ".json") {
 			if err := fi.processJSONFile(ctx, path); err != nil {
 				fi.opts.Logger.Printf("error processing %s: %v", path, err)
-				fi.errors++
+				fi.recordError(err)
 			}
 		}
 	}
@@ -207,7 +212,7 @@ func (fi *FolderIngestor) watchLoop(ctx context.Context) error {
 			if fi.caseID != "" {
 				_ = fi.store.UpdateCaseEventCount(context.Background(), fi.caseID)
 			}
-			fi.opts.Logger.Printf("Watch stopping: ingested=%d errors=%d", fi.ingested, fi.errors)
+			fi.opts.Logger.Printf("Watch stopping: ingested=%d errors=%d", atomic.LoadInt64(&fi.ingested), atomic.LoadInt64(&fi.errors))
 			return ctx.Err()
 		case ev := <-w.Events:
 			// Only handle writes/creates on matching files
@@ -228,7 +233,7 @@ func (fi *FolderIngestor) watchLoop(ctx context.Context) error {
 					newOffset, err := fi.processJSONL(ctx, ev.Name, offset)
 					if err != nil {
 						fi.opts.Logger.Printf("error tailing %s: %v", ev.Name, err)
-						fi.errors++
+						fi.recordError(err)
 						continue
 					}
 					fi.mu.Lock()
@@ -239,7 +244,7 @@ func (fi *FolderIngestor) watchLoop(ctx context.Context) error {
 					// Re-process entire file on write
 					if err := fi.processJSONFile(ctx, ev.Name); err != nil {
 						fi.opts.Logger.Printf("error processing %s: %v", ev.Name, err)
-						fi.errors++
+						fi.recordError(err)
 					}
 				}
 			}
@@ -346,10 +351,10 @@ func (fi *FolderIngestor) processJSONL(ctx context.Context, path string, startOf
 		}
 		if err := fi.processEventJSON(ctx, []byte(line)); err != nil {
 			fi.opts.Logger.Printf("parse error in %s: %v", path, err)
-			fi.errors++
+			fi.recordError(err)
 			continue
 		}
-		fi.ingested++
+		atomic.AddInt64(&fi.ingested, 1)
 	}
 	if err := reader.Err(); err != nil {
 		return bytesRead, err
@@ -375,10 +380,10 @@ func (fi *FolderIngestor) processJSONFile(ctx context.Context, path string) erro
 		}
 		for _, raw := range arr {
 			if err := fi.processEventJSON(ctx, raw); err != nil {
-				fi.errors++
+				fi.recordError(err)
 				continue
 			}
-			fi.ingested++
+			atomic.AddInt64(&fi.ingested, 1)
 		}
 		return nil
 	}
@@ -386,7 +391,7 @@ func (fi *FolderIngestor) processJSONFile(ctx context.Context, path string) erro
 	if err := fi.processEventJSON(ctx, []byte(trim)); err != nil {
 		return err
 	}
-	fi.ingested++
+	atomic.AddInt64(&fi.ingested, 1)
 	return nil
 }
 
@@ -394,6 +399,13 @@ func (fi *FolderIngestor) processEventJSON(ctx context.Context, raw []byte) erro
 	rec, err := fi.parser.Parse(raw)
 	if err != nil {
 		return err
+	}
+
+	// There is something to put in it now, so it is worth existing.
+	if fi.opts.CaseTitle != "" && fi.caseID == "" {
+		if err := fi.ensureCase(ctx); err != nil {
+			return err
+		}
 	}
 
 	saved, err := fi.store.SaveRecord(ctx, rec)
@@ -462,4 +474,49 @@ func (fi *FolderIngestor) ensureCase(ctx context.Context) error {
 	}
 	fi.caseID = id
 	return nil
+}
+
+// WatcherStatus is what the dashboard shows about folder ingestion: which
+// directory is being watched, whether it is healthy, and what went wrong if not.
+type WatcherStatus struct {
+	Dir string
+	// Watching is false for a one-shot ingest, which finishes rather than tails.
+	Watching bool
+	Ingested int
+	Errors   int
+	LastErr  string
+}
+
+// Healthy reports whether the watcher has anything to complain about.
+func (s WatcherStatus) Healthy() bool { return s.Errors == 0 }
+
+// Status returns a snapshot of the ingestor's health.
+//
+// Safe to call from any goroutine while ingestion is running. This is the only
+// way the watcher's state leaves the ingest package; before it existed, a
+// watcher that had failed on every file since startup looked identical to one
+// that had nothing to do.
+func (fi *FolderIngestor) Status() WatcherStatus {
+	fi.mu.Lock()
+	lastErr := fi.lastErr
+	fi.mu.Unlock()
+
+	return WatcherStatus{
+		Dir:      fi.opts.Dir,
+		Watching: fi.opts.Watch,
+		Ingested: int(atomic.LoadInt64(&fi.ingested)),
+		Errors:   int(atomic.LoadInt64(&fi.errors)),
+		LastErr:  lastErr,
+	}
+}
+
+// recordError counts a failure and remembers its message.
+func (fi *FolderIngestor) recordError(err error) {
+	atomic.AddInt64(&fi.errors, 1)
+	if err == nil {
+		return
+	}
+	fi.mu.Lock()
+	fi.lastErr = err.Error()
+	fi.mu.Unlock()
 }

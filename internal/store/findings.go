@@ -453,8 +453,47 @@ type FindingFilter struct {
 	OpenOnly bool
 	Search   string
 
+	// MinSeverityID keeps findings at or above a severity. Fatal counts as
+	// critical; Other (99) is a sentinel and never satisfies a minimum.
+	MinSeverityID int
+
+	// SeenAfter and SeenBefore bound last_seen. SeenAfter backs "last 24h";
+	// SeenBefore backs "stale", which is the same field read the other way.
+	SeenAfter  time.Time
+	SeenBefore time.Time
+
+	// Assignee matches the owner exactly. Empty matches every owner.
+	Assignee string
+
+	// HasObservables keeps only findings carrying at least one indicator.
+	HasObservables bool
+
+	// Sort selects the ordering. The zero value keeps the historical
+	// most-recently-seen-first, so existing callers are unaffected.
+	Sort FindingSort
+
 	Limit  int
 	Offset int
+}
+
+// FindingSort names an ordering for a findings query.
+type FindingSort int
+
+const (
+	// SortRecent is most recently seen first.
+	SortRecent FindingSort = iota
+	// SortPriority is the triage ordering: the same sequence the Analyst Home
+	// priority queue applies, so the queue and its full version agree about
+	// which finding matters most.
+	SortPriority
+)
+
+// orderBy renders the sort as SQL, with the arguments its CASE expression needs.
+func (f FindingFilter) orderBy() (string, []interface{}) {
+	if f.Sort == SortPriority {
+		return priorityOrder, []interface{}{ocsf.FindingStatusNew, ocsf.FindingStatusInProgress}
+	}
+	return " ORDER BY last_seen DESC, severity_id DESC", nil
 }
 
 func (f FindingFilter) where() (string, []interface{}) {
@@ -499,6 +538,40 @@ func (f FindingFilter) where() (string, []interface{}) {
 			ocsf.ClassIncidentFinding, ocsf.FindingStatusResolved, ocsf.FindingStatusSuppressed,
 			ocsf.FindingStatusArchived, ocsf.FindingStatusDeleted)
 	}
+	if f.MinSeverityID > 0 {
+		// Enumerated rather than `severity_id >= ?`: Other is 99, a sentinel
+		// rather than the top of the scale, and would satisfy every minimum.
+		levels := []int{}
+		for _, id := range []int{
+			ocsf.SeverityInformational, ocsf.SeverityLow, ocsf.SeverityMedium,
+			ocsf.SeverityHigh, ocsf.SeverityCritical, ocsf.SeverityFatal,
+		} {
+			if id >= f.MinSeverityID {
+				levels = append(levels, id)
+			}
+		}
+		ph := make([]string, len(levels))
+		for i, id := range levels {
+			ph[i] = "?"
+			args = append(args, id)
+		}
+		clause += " AND severity_id IN (" + strings.Join(ph, ",") + ")"
+	}
+	if !f.SeenAfter.IsZero() {
+		clause += " AND last_seen >= ?"
+		args = append(args, f.SeenAfter.Unix())
+	}
+	if !f.SeenBefore.IsZero() {
+		clause += " AND last_seen < ?"
+		args = append(args, f.SeenBefore.Unix())
+	}
+	if a := strings.TrimSpace(f.Assignee); a != "" {
+		clause += " AND assignee = ?"
+		args = append(args, a)
+	}
+	if f.HasObservables {
+		clause += " AND EXISTS (SELECT 1 FROM observables o WHERE o.finding_id = findings.id)"
+	}
 	if q := strings.TrimSpace(f.Search); q != "" {
 		pattern := "%" + escapeLIKE(q) + "%"
 		clause += ` AND (title LIKE ? ESCAPE '\' OR message LIKE ? ESCAPE '\' OR analytic_name LIKE ? ESCAPE '\')`
@@ -511,8 +584,9 @@ func (f FindingFilter) where() (string, []interface{}) {
 // GetFindings returns findings matching the filter, most recently seen first.
 func (s *Store) GetFindings(ctx context.Context, f FindingFilter) ([]Finding, error) {
 	clause, args := f.where()
-	query := `SELECT ` + findingColumns + ` FROM findings WHERE 1=1` + clause +
-		` ORDER BY last_seen DESC, severity_id DESC`
+	order, orderArgs := f.orderBy()
+	args = append(args, orderArgs...)
+	query := `SELECT ` + findingColumns + ` FROM findings WHERE 1=1` + clause + order
 
 	if f.Limit > 0 {
 		query += " LIMIT ?"

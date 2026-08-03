@@ -1,0 +1,239 @@
+package ui
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
+	"github.com/rivo/tview"
+)
+
+// Indicators are the case's IOCs, aggregated by identity and carrying their
+// provenance.
+//
+// **Provenance is mandatory and visually distinct.** An indicator the producer
+// asserted and one Console-IR inferred are defended differently — the first is
+// somebody else's claim, the second is ours — so they must never render alike.
+// A glyph as well as a colour, because this is exactly the distinction that has
+// to survive a 16-colour terminal.
+//
+// This tab previously counted "3 events" for every indicator whatever the case
+// held, and wrote provenance as "[asserted]" — which tview reads as a colour
+// tag and swallows, so the mandatory distinction rendered as nothing at all.
+
+// Provenance values an indicator can carry. "manual" is an analyst's own
+// entry, which is neither the producer's claim nor our inference and must not
+// be mistaken for either.
+const provenanceManual = "manual"
+
+// provenanceMark renders an indicator's origin.
+func provenanceMark(source string, t Theme) (glyph, colour, label string) {
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "derived":
+		return "◦", t.TagMuted, "derived"
+	case provenanceManual:
+		return "✎", t.TagWarning, "manual"
+	default:
+		return "▪", t.TagAccent, "asserted"
+	}
+}
+
+// manualIndicators are the analyst's own entries, stored as notes tagged "ioc".
+//
+// They are merged with the observables rather than shown separately: an analyst
+// who typed an address in wants to see it beside the ones the parser found, and
+// dropping them from this tab would silently lose their input.
+func manualIndicators(notes []store.Note) ([]store.CaseIndicator, map[string]string) {
+	out := []store.CaseIndicator{}
+	byValue := map[string]string{}
+
+	for _, n := range notes {
+		if !strings.EqualFold(n.LinkedType, "ioc") || strings.TrimSpace(n.LinkedID) == "" {
+			continue
+		}
+		kind := strings.TrimPrefix(strings.TrimSpace(n.Content), "ioc_type:")
+		if kind == "" || kind == n.Content {
+			kind = "manual"
+		}
+		out = append(out, store.CaseIndicator{
+			Type: kind, Value: n.LinkedID, Source: provenanceManual,
+			Sightings: 1, FirstSeen: n.CreatedAt, LastSeen: n.CreatedAt,
+		})
+		byValue[n.LinkedID] = n.ID
+	}
+	return out, byValue
+}
+
+// renderCaseIndicators draws the aggregated indicators.
+func renderCaseIndicators(table *tview.Table, indicators []store.CaseIndicator, t Theme) {
+	table.Clear()
+
+	headers := []string{"TYPE", "VALUE", "PROVENANCE", "SIGHTINGS", "FIRST", "LAST"}
+	for col, h := range headers {
+		table.SetCell(0, col, tview.NewTableCell(" "+h).
+			SetTextColor(t.TableHeader).SetBackgroundColor(t.TableHeaderBg).SetSelectable(false))
+	}
+
+	if len(indicators) == 0 {
+		for i, line := range []string{
+			"No indicators extracted.",
+			"",
+			"Indicators come from the observables on this case's events and findings.",
+			"Attach evidence, or wait for enrichment to derive them.",
+		} {
+			colour := t.TextMuted
+			if i == 0 {
+				colour = t.TextPrimary
+			}
+			table.SetCell(i+1, 0, tview.NewTableCell(" "+line).
+				SetTextColor(colour).SetSelectable(false).SetExpansion(1))
+		}
+		return
+	}
+
+	for i, ind := range indicators {
+		glyph, colour, label := provenanceMark(ind.Source, t)
+		row := i + 1
+
+		table.SetCell(row, 0, tview.NewTableCell(" "+tview.Escape(orDash(ind.Type))).SetTextColor(t.TextMuted))
+		table.SetCell(row, 1, tview.NewTableCell(tview.Escape(truncate(ind.Value, 44))).
+			SetTextColor(t.TextPrimary).SetExpansion(1))
+		table.SetCell(row, 2, tview.NewTableCell(fmt.Sprintf("[%s]%s %s[-]", colour, glyph, label)))
+		table.SetCell(row, 3, tview.NewTableCell(fmt.Sprintf("%9d", ind.Sightings)).SetTextColor(t.TextMuted))
+		table.SetCell(row, 4, tview.NewTableCell(stampOrDash(ind.FirstSeen)).SetTextColor(t.TextMuted))
+		table.SetCell(row, 5, tview.NewTableCell(stampOrDash(ind.LastSeen)).SetTextColor(t.TextMuted))
+	}
+}
+
+func stampOrDash(at time.Time) string {
+	if at.IsZero() {
+		return "—"
+	}
+	return at.Format("15:04")
+}
+
+// renderIOCs paints the Indicators tab.
+func (cm *CaseManagement) renderIOCs() {
+	if cm.iocsTable == nil {
+		return
+	}
+	indicators, err := cm.store.GetCaseIndicators(cm.ctx, cm.caseData.ID)
+	if err != nil {
+		cm.iocsTable.Clear()
+		for i, line := range []string{"Could not load indicators.", tview.Escape(err.Error()), "", "r  Retry"} {
+			colour := cm.theme.TextMuted
+			if i == 0 {
+				colour = cm.theme.Error
+			}
+			cm.iocsTable.SetCell(i, 0, tview.NewTableCell(" "+line).
+				SetTextColor(colour).SetSelectable(false).SetExpansion(1))
+		}
+		return
+	}
+	manual, noteIDs := manualIndicators(cm.notes)
+	seen := map[string]bool{}
+	for _, ind := range indicators {
+		seen[strings.ToLower(ind.Value)] = true
+	}
+	for _, ind := range manual {
+		// An analyst entry for a value the evidence already carries is the same
+		// indicator; listing it twice would double the apparent corroboration.
+		if !seen[strings.ToLower(ind.Value)] {
+			indicators = append(indicators, ind)
+		}
+	}
+
+	cm.caseIndicators = indicators
+	renderCaseIndicators(cm.iocsTable, indicators, cm.theme)
+
+	// Map the manual rows back to their notes, so Space and d still act on the
+	// analyst's own entries.
+	cm.iocRowToManualID = map[int]string{}
+	for i, ind := range indicators {
+		if id, ok := noteIDs[ind.Value]; ok && strings.EqualFold(ind.Source, provenanceManual) {
+			cm.iocRowToManualID[i+1] = id
+		}
+	}
+}
+
+// pivotSelectedIndicator opens the pivot for the indicator under the cursor.
+//
+// It reuses the Events screen's pivot rather than building a second one, so
+// "where else has this appeared?" is answered the same way wherever it is
+// asked.
+func (cm *CaseManagement) pivotSelectedIndicator() {
+	row, _ := cm.iocsTable.GetSelection()
+	if row <= 0 || row-1 >= len(cm.caseIndicators) {
+		return
+	}
+	ind := cm.caseIndicators[row-1]
+
+	if cm.parentUI == nil {
+		cm.updateStatus("Pivot needs the main window")
+		return
+	}
+	cm.close()
+	cm.parentUI.pivotTo(pivotTarget{
+		TypeID: ind.TypeID,
+		Value:  ind.Value,
+		Kind:   orDash(ind.Type),
+	})
+}
+
+// buildCaseIndicatorsTab renders a case's indicators for the Indicators
+// destination, using the same renderer the case tab uses.
+func (ui *UI) buildCaseIndicatorsTab(_ []store.Event) *tview.Table {
+	table := tview.NewTable().SetSelectable(true, false).SetFixed(1, 0)
+	stylePanel(table.Box, "INDICATORS", PanelRolePrimary, ui.theme)
+	table.SetBackgroundColor(ui.theme.Bg)
+
+	// Across every case, since this is the cross-case view rather than one
+	// case's tab.
+	var all []store.CaseIndicator
+	for _, c := range ui.cases {
+		ind, err := ui.store.GetCaseIndicators(ui.ctx, c.ID)
+		if err != nil {
+			ui.logger.Warn("indicators: could not aggregate case %s: %v", c.ID, err)
+			continue
+		}
+		all = append(all, ind...)
+	}
+	renderCaseIndicators(table, mergeIndicators(all), ui.theme)
+	return table
+}
+
+// mergeIndicators combines the same indicator seen in several cases.
+func mergeIndicators(in []store.CaseIndicator) []store.CaseIndicator {
+	byKey := map[string]store.CaseIndicator{}
+	order := []string{}
+
+	for _, ind := range in {
+		key := fmt.Sprintf("%d/%s", ind.TypeID, ind.Value)
+		prev, seen := byKey[key]
+		if !seen {
+			byKey[key] = ind
+			order = append(order, key)
+			continue
+		}
+		prev.Sightings += ind.Sightings
+		// Asserted anywhere means asserted: one producer's claim is not
+		// weakened by another case having only inferred it.
+		if strings.EqualFold(ind.Source, "asserted") {
+			prev.Source = ind.Source
+		}
+		if !ind.FirstSeen.IsZero() && (prev.FirstSeen.IsZero() || ind.FirstSeen.Before(prev.FirstSeen)) {
+			prev.FirstSeen = ind.FirstSeen
+		}
+		if ind.LastSeen.After(prev.LastSeen) {
+			prev.LastSeen = ind.LastSeen
+		}
+		byKey[key] = prev
+	}
+
+	out := make([]store.CaseIndicator, 0, len(order))
+	for _, k := range order {
+		out = append(out, byKey[k])
+	}
+	return out
+}
