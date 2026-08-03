@@ -5,13 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-08-03
 
-Shaping up as 0.2.0. Findings become a first-class entity. Console-IR now opens on a dashboard of
-what needs attention rather than a wall of log lines, and models what OCSF actually says about
-investigation.
+Findings become a first-class entity. Console-IR now opens on a dashboard of what needs attention
+rather than a wall of log lines, and models what OCSF actually says about investigation.
 
-### Upgrading from 0.1.x (when this ships)
+### Upgrading from 0.1.x
 
 **Your database moves.** 0.1.x resolved every path against the current working directory, so an
 installed binary opened a different, empty database per directory — indistinguishable from having
@@ -28,6 +27,11 @@ moved from `data/incoming/` to `./incoming/`; move anything staged there, or pas
 **The database migrates in place** when opened: OCSF identity columns are added and backfilled from
 stored raw events, observables are extracted into an indexed table, and `event_type` is rewritten to
 OCSF category slugs. Nothing is lost and the migration is safe to re-run.
+
+**Ingest now fails on input that is not OCSF.** A file whose records carry no `class_uid` used to
+report success and store unusable rows; it now reports how many were not recognised and exits
+non-zero. If you pipe non-OCSF data through `console-ir ingest`, that step will start failing — pass
+`--skip-invalid` to keep the old exit behaviour, or map your source to OCSF first.
 
 **Downgrading afterwards is not clean.** A 0.1.x binary reads the migrated database but offers only
 its old five type filters, none of which match the new values, so filtering appears to return
@@ -57,10 +61,32 @@ nothing. Back up the database first if you may roll back.
   `--data-dir`, `--config-dir`, `--log-dir` or `--db`; `--portable` restores the old layout.
 - **The detail pane refreshes itself when enrichment arrives**, instead of showing what was true when
   the event was opened until `r` is pressed.
-- **`console-ir demo`** opens a sample incident in a throwaway database. The data is embedded in the
-  binary, so it works on a fresh install and never touches your own database.
+- **`console-ir demo`** opens a working week in a throwaway database: four cases in different states
+  — one being worked, one unassigned, one closed as a true positive, one as a false positive — inside
+  several hundred ordinary events. The story is shifted onto today's calendar as it loads, so ages
+  and filters describe a live investigation whenever you run it. The data is embedded in the binary,
+  so it works on a fresh install and never touches your own database.
 - **`console-ir list findings`**, and findings are now the default listing. Works over SSH with no
   TTY, or from a script.
+- **Analyst Home.** Every session opens on a dashboard: open findings, active cases and today's
+  evidence as metric cards, a risk-ranked priority queue, recent cases and a live event pulse.
+- **A navigation rail.** Five numbered destinations — Triage, Events, Cases, Indicators, Reports —
+  reachable from anywhere with `1`–`5`. `Esc` returns Home, `:` opens a command palette, `?` help.
+- **Triage filters and saved views.** Filter chips for status, severity, age and indicators, a search
+  bar, multi-select for bulk status and verdict changes, and views you can save and recall.
+- **Event clustering, search and pivoting.** Events on one host inside a short window collapse into a
+  single row that expands on `Enter`; full-text search over messages; and any observable pivots to
+  everywhere else it appears.
+- **The case management room.** Seven tabs behind `Tab` — Briefing, Findings, Events, Timeline,
+  Indicators, Notes, Activity — under a header carrying status, owner, age and counts, plus a prompt
+  naming the next action when a case has no owner, no note or no recent activity. The briefing holds
+  an incident statement, scope, working hypotheses and next actions; the timeline merges events,
+  findings and audit into one narrative; indicators carry their provenance. `Space` pins decisive
+  evidence, which then surfaces on the briefing and in exports.
+- **A copilot drawer inside cases.** `]` opens it beside the case and `[` closes it, so it costs no
+  space until asked for. Its suggested questions are built from the open case, and generated text is
+  marked as generated — it enters the record only when you accept it into the notes.
+
 - **The findings a case is about have their own tab.** Escalation always recorded them as case
   members, but nothing read that back, so an escalated finding disappeared from view the moment the
   case was opened. Press `2` in a case.
@@ -75,6 +101,11 @@ nothing. Back up the database first if you may roll back.
 ### Changed
 
 - **Running the bare binary opens the TUI.** `console-ir serve` implied a daemon, which this is not.
+- **Ingest refuses records that are not OCSF.** A record with no usable `class_uid` is reported
+  rather than stored: the summary counts them, names the cause once and quotes the first offender,
+  and the exit status reflects it. Previously any valid JSON was accepted, so a Sysmon or CEF export
+  reported `Ingested 500 of 500` and produced 500 rows with no host, message or severity.
+  `--skip-invalid` still ingests what it can and exits 0.
 - **`ingest` and `ingest-folder` are one command.** `console-ir ingest <path>` resolves a file, a
   directory (`--watch` to tail), or `-` for stdin.
 - **`ingest` enriches by default** and waits for the lookups to finish. It previously skipped
@@ -124,6 +155,17 @@ nothing. Back up the database first if you may roll back.
   field, and was read by no code at all. `MCPMode` was set by every LLM provider and read by none.
 
 ### Fixed
+
+- **Ingest could silently drop records when writing concurrently.** Ingest and enrichment write at
+  the same time and no busy timeout was set, so a write that arrived while the database was locked
+  failed instead of waiting: three ingests of the same 15-event file gave 15, 14 and 15. Writers now
+  wait, and transactions take their write lock up front.
+- **Cases could be missing from the case list**, and the list shared a screen with events. Cases now
+  have their own screen and nothing is filtered out of it.
+- **An empty "Ingested Events" case appeared** for anyone who merely configured a watch folder. It is
+  created when the first record lands in it.
+- **A supplied creation time was discarded** when adding a case or a note, so anything carried in
+  from elsewhere was stamped with the moment it was imported.
 
 - **Enrichment failures were invisible while the TUI ran.** Plugin logs were routed to `io.Discard`
   so they could not corrupt the screen — a guard that stopped being necessary when logs moved to a
@@ -202,6 +244,7 @@ nothing. Back up the database first if you may roll back.
 - Headless runtime mode with `--no-tui`
 - Devcontainer and VS Code debug configuration for contributors
 
-[Unreleased]: https://github.com/Ashfaaq98/ocsf-console-ir/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/Ashfaaq98/ocsf-console-ir/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Ashfaaq98/ocsf-console-ir/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/Ashfaaq98/ocsf-console-ir/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Ashfaaq98/ocsf-console-ir/releases/tag/v0.1.0
