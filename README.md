@@ -25,16 +25,7 @@
 
 Console-IR is a **terminal-first, OCSF-native** incident-response workspace. It ingests
 [OCSF](https://schema.ocsf.io/) detections and events, enriches indicators, and gives an analyst a
-keyboard-driven place to triage, investigate and document incidents.
-
-You open it to a ranked queue of **findings**, the detections your SIEM or EDR actually flagged,
-rather than a wall of log lines. Raw events stay one keystroke away as the corroboration layer.
-
-Everything runs from a single binary backed by SQLite. No broker, no server, no cloud.
-
-```bash
-console-ir demo     # a week of sample cases, in a throwaway database
-```
+keyboard-driven place to triage, investigate and document incidents. You open it to a ranked queue of **findings**, the detections your SIEM or EDR actually flagged, rather than a wall of log lines. Raw events stay one keystroke away as the corroboration layer. Everything runs from a single binary backed by SQLite. No broker, no server, no cloud.
 
 > **Status: early and evolving (v0.2.x).** The TUI workflow is the supported path today. Anything
 > marked **⚗ experimental** below works but is not settled — expect rough edges, and expect it to
@@ -44,20 +35,55 @@ console-ir demo     # a week of sample cases, in a throwaway database
 > Include what you ran, what you expected and what happened; `console-ir version` prints the build
 > and resolved paths. Bug reports on early software are the most useful thing you can send.
 
+## Install
+
+```bash
+# Homebrew (macOS / Linux)
+brew install Ashfaaq98/tap/console-ir
+
+# curl (Linux / macOS)
+curl -sSfL https://raw.githubusercontent.com/Ashfaaq98/ocsf-console-ir/main/scripts/install.sh | bash
+
+# From source (Go >= 1.23)
+git clone https://github.com/Ashfaaq98/ocsf-console-ir.git
+cd ocsf-console-ir && make build
+```
+
+Prebuilt archives for Linux, macOS and Windows are on the
+[releases page](https://github.com/Ashfaaq98/ocsf-console-ir/releases), with checksums and an SBOM.
+More in [docs/installation.md](docs/installation.md).
+
+## Quick start
+
+```bash
+console-ir demo
+```
+
+Loads a working week of four cases in different states, a few hundred events, one intrusion still
+being worked into a throwaway database and opens the TUI. It never touches your real data.
+
+Then point it at your own:
+
+```bash
+console-ir ingest events.jsonl   # a file, a directory, or - for stdin
+console-ir                       # open the TUI
+```
+
+<div align="center">
+  <img src="assets/findings.png" alt="The findings queue: a risk-ranked list on the left, the selected finding's evidence, indicators and ATT&amp;CK mapping on the right" width="900" />
+</div>
+
+Press `?` anywhere for the keys that apply to the screen you are on.
+[docs/getting-started.md](docs/getting-started.md) walks through a first investigation.
+
 ## Why Console-IR?
 
 Most IR tooling assumes you have already deployed it: a backend, a browser, a database to operate.
 That holds in the SOC and breaks everywhere else: on a jump box mid-incident, on an IR laptop in a
-datacentre, in an airgapped lab, over SSH on a host you were handed ten minutes ago.
-
-Console-IR assumes the opposite: one binary you can copy anywhere, storage in a file, an interface
+datacentre, in an airgapped lab, over SSH on a host you were handed ten minutes ago. Console-IR assumes the opposite: one binary you can copy anywhere, storage in a file, an interface
 that works over SSH. Ingesting, triaging and writing up a case need no network at all; only the
 optional enrichment and LLM features reach outside the machine.
 
-It is single-analyst by design, which is a limitation rather than a feature: there is no RBAC and no
-shared server. Console-IR complements the tools you already run — your SIEM and EDR collect and
-detect, MISP and OpenCTI hold threat intel, and Console-IR is the focused investigation layer once
-relevant OCSF records exist.
 
 ## Core features
 
@@ -92,46 +118,6 @@ A vendored **OCSF 1.8.0** registry decides what each record is, rather than hand
 | Activity class with `is_alert: true` | **both** a finding and an event |
 | Any other activity class | an **event** |
 
-## Install
-
-```bash
-# Homebrew (macOS / Linux)
-brew install Ashfaaq98/tap/console-ir
-
-# curl (Linux / macOS)
-curl -sSfL https://raw.githubusercontent.com/Ashfaaq98/ocsf-console-ir/main/scripts/install.sh | bash
-
-# From source (Go >= 1.23)
-git clone https://github.com/Ashfaaq98/ocsf-console-ir.git
-cd ocsf-console-ir && make build
-```
-
-Prebuilt archives for Linux, macOS and Windows are on the
-[releases page](https://github.com/Ashfaaq98/ocsf-console-ir/releases), with checksums and an SBOM.
-More in [docs/installation.md](docs/installation.md).
-
-## Quick start
-
-```bash
-console-ir demo
-```
-
-Loads a working week — four cases in different states, a few hundred events, one intrusion still
-being worked — into a throwaway database and opens the TUI. It never touches your real data.
-
-Then point it at your own:
-
-```bash
-console-ir ingest events.jsonl   # a file, a directory, or - for stdin
-console-ir                       # open the TUI
-```
-
-<div align="center">
-  <img src="assets/findings.png" alt="The findings queue: a risk-ranked list on the left, the selected finding's evidence, indicators and ATT&amp;CK mapping on the right" width="900" />
-</div>
-
-Press `?` anywhere for the keys that apply to the screen you are on.
-[docs/getting-started.md](docs/getting-started.md) walks through a first investigation.
 
 ## Architecture
 
