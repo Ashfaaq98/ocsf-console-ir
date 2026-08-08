@@ -144,6 +144,9 @@ type homeView struct {
 
 	stop chan struct{}
 	once sync.Once
+	// inflight counts the loads that have been started and not yet finished, so
+	// a caller that is about to take the database away can wait for them.
+	inflight sync.WaitGroup
 }
 
 // showAnalystHome opens the dashboard. It is the only destination the UI starts
@@ -275,7 +278,7 @@ func homeText(theme Theme, align int) *tview.TextView {
 
 // start issues the first load and begins the clock and refresh timers.
 func (h *homeView) start() {
-	go h.load()
+	h.reload()
 
 	go func() {
 		clock := time.NewTicker(homeClockInterval)
@@ -296,7 +299,7 @@ func (h *homeView) start() {
 				// their loading and loaded states forever.
 				h.ui.queueUpdate(h.renderHeader)
 			case <-refresh.C:
-				go h.load()
+				h.reload()
 			}
 		}
 	}()
@@ -336,9 +339,29 @@ func (h *homeView) applyTheme() {
 	h.renderInspector()
 }
 
+// reload runs a load off the UI goroutine, tracked so it can be waited for.
+func (h *homeView) reload() {
+	h.inflight.Add(1)
+	go func() {
+		defer h.inflight.Done()
+		h.load()
+	}()
+}
+
 // close stops the timers. Safe to call more than once.
+//
+// It does not wait for a load that is already running: close is called from the
+// UI goroutine, and a load part-way through queueing a repaint is waiting for
+// that same goroutine. Waiting here would deadlock the application on every
+// screen change. Callers that are about to remove the database — which in
+// practice means tests — call wait afterwards.
 func (h *homeView) close() {
 	h.once.Do(func() { close(h.stop) })
+}
+
+// wait blocks until no load is in flight.
+func (h *homeView) wait() {
+	h.inflight.Wait()
 }
 
 // load issues every query concurrently and paints each panel as its own query
@@ -351,6 +374,14 @@ func (h *homeView) load() {
 	st := h.ui.store
 	if st == nil {
 		return
+	}
+	// Already closed. The ticker that scheduled this may have fired just before
+	// the screen went away, and there is no point querying on behalf of a view
+	// nobody is looking at — or, in a test, one whose database is being removed.
+	select {
+	case <-h.stop:
+		return
+	default:
 	}
 
 	var wg sync.WaitGroup
@@ -1002,7 +1033,7 @@ func (h *homeView) refresh() {
 	}
 	h.mu.Unlock()
 	h.renderAll()
-	go h.load()
+	h.reload()
 }
 
 // selectedFinding returns the finding under the cursor, if any.

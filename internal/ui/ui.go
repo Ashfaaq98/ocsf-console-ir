@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -445,6 +446,14 @@ type UI struct {
 	lastLoadStart int64                       // unix nano timestamp of last load start (for watchdog)
 	showAll       bool                        // when true, sidebar selection is "ALL EVENTS"
 	queryStates   map[string]*EventQueryState // per-context (ALL or caseID) filter+pagination
+	// queryStatesMu guards the map itself, not the states in it.
+	//
+	// Load goroutines reach it through setStatus → buildStatusMain →
+	// activeFilterTag while the UI goroutine is reading the same map to lay out
+	// the status bar. The map was unsynchronised; the race was invisible only
+	// because those goroutines used to deadlock on the update queue before they
+	// got this far.
+	queryStatesMu sync.Mutex
 
 	// Findings triage queue. Findings are the analyst's unit of work; ALL EVENTS
 	// remains available alongside it for raw-log triage.
@@ -621,6 +630,9 @@ func (ui *UI) getContextID() string {
 
 // getOrInitState returns the per-context state, initializing defaults if missing.
 func (ui *UI) getOrInitState(id string) *EventQueryState {
+	ui.queryStatesMu.Lock()
+	defer ui.queryStatesMu.Unlock()
+
 	if ui.queryStates == nil {
 		ui.queryStates = make(map[string]*EventQueryState)
 	}
@@ -777,7 +789,7 @@ func (ui *UI) watchEnrichments() {
 		case <-ui.ctx.Done():
 			return
 		case eventID := <-ui.enrichNotify:
-			ui.app.QueueUpdateDraw(func() {
+			ui.queueUpdate(func() {
 				// Re-check on the UI goroutine: the selection may have moved
 				// between the notification and this redraw.
 				if ui.selectedEventID == eventID {
@@ -792,6 +804,15 @@ func (ui *UI) watchEnrichments() {
 func (ui *UI) Start(ctx context.Context) error {
 	ui.logger.Println("Starting TUI application")
 
+	// Live before any goroutine below can queue against the application.
+	//
+	// ui.queueUpdate runs its function inline when this is false, which is what
+	// makes the UI drivable from tests. Setting it here rather than beside
+	// app.Run means the startup goroutines cannot read "not running", decide to
+	// mutate widgets inline, and then race the event loop that started between
+	// the two. They queue instead, and the queue drains as soon as Run does.
+	ui.running.Store(true)
+
 	go ui.watchEnrichments()
 
 	// Show UI immediately, then load data asynchronously
@@ -802,7 +823,7 @@ func (ui *UI) Start(ctx context.Context) error {
 		ui.logger.Println("Loading initial data...")
 		if err := ui.refreshCases(); err != nil {
 			ui.logger.Printf("Failed to load cases: %v", err)
-			ui.app.QueueUpdate(func() {
+			ui.queueUpdate(func() {
 				ui.setStatusDirect("[red]Error loading cases: %v", err)
 			})
 		} else {
@@ -818,7 +839,7 @@ func (ui *UI) Start(ctx context.Context) error {
 			// then cases, then events. It meant the first screen an analyst saw
 			// changed with the contents of the database, so there was no screen
 			// to learn and no stable place to return to.
-			ui.app.QueueUpdate(func() {
+			ui.queueUpdate(func() {
 				ui.showAnalystHome()
 			})
 		}
@@ -847,13 +868,12 @@ func (ui *UI) Start(ctx context.Context) error {
 				ui.logger.Printf("UI_AUTOCYCLE_THEME=1 enabled: scheduling theme cycles")
 			}
 			time.Sleep(1200 * time.Millisecond)
-			ui.app.QueueUpdate(func() { ui.cycleTheme() })
+			ui.queueUpdate(func() { ui.cycleTheme() })
 			time.Sleep(1200 * time.Millisecond)
-			ui.app.QueueUpdate(func() { ui.cycleTheme() })
+			ui.queueUpdate(func() { ui.cycleTheme() })
 		}()
 	}
 
-	ui.running.Store(true)
 	err := ui.app.Run()
 	ui.running.Store(false)
 	ui.logger.Printf("app.Run() returned with error: %v", err)
@@ -1277,11 +1297,11 @@ func (ui *UI) setupKeybindings() {
 				ui.setStatusDirect("[%s]Refreshing...[-:-:-]", ui.theme.TagAccent)
 				go func() {
 					if err := ui.refreshCases(); err != nil {
-						ui.app.QueueUpdate(func() {
+						ui.queueUpdate(func() {
 							ui.setStatusDirect("[%s]Error refreshing cases: %v[-:-:-]", ui.theme.TagError, err)
 						})
 					} else {
-						ui.app.QueueUpdate(func() {
+						ui.queueUpdate(func() {
 							ui.setStatusDirect("[%s]Cases refreshed[-:-:-]", ui.theme.TagSuccess)
 						})
 					}
@@ -1652,7 +1672,7 @@ func (ui *UI) refreshCases() error {
 
 // updateCasesList updates the cases sidebar
 func (ui *UI) updateCasesList() {
-	ui.app.QueueUpdate(func() {
+	ui.queueUpdate(func() {
 		ui.sidebar.Clear()
 
 		if len(ui.cases) == 0 {
@@ -1743,7 +1763,7 @@ func (ui *UI) loadCaseEvents() {
 		ui.logger.Printf("Error counting events for case %s: %v", ui.selectedCaseID, err)
 		// Reset filter apply guard on failure
 		atomic.StoreInt32(&ui.filterApplying, 0)
-		ui.app.QueueUpdate(func() {
+		ui.queueUpdate(func() {
 			if ctx.Err() == context.DeadlineExceeded {
 				ui.setStatusDirect("[%s]Timed out counting events (database busy)[-:-:-]", ui.theme.TagError)
 			} else {
@@ -1780,7 +1800,7 @@ func (ui *UI) loadCaseEvents() {
 		ui.logger.Printf("Error loading events for case %s: %v", ui.selectedCaseID, err)
 		// Reset filter apply guard on failure
 		atomic.StoreInt32(&ui.filterApplying, 0)
-		ui.app.QueueUpdate(func() {
+		ui.queueUpdate(func() {
 			if ctx.Err() == context.DeadlineExceeded {
 				ui.setStatusDirect("[%s]Timed out loading events (database busy)[-:-:-]", ui.theme.TagError)
 			} else {
@@ -1799,7 +1819,7 @@ func (ui *UI) loadCaseEvents() {
 	}
 
 	// Update UI in main thread
-	ui.app.QueueUpdateDraw(func() {
+	ui.queueUpdate(func() {
 		// Clear any previous selections when data changes (avoid stale IDs across pages)
 		ui.selectedEventIDs = make(map[string]bool)
 		ui.events = events
@@ -2195,13 +2215,13 @@ func (ui *UI) showCaseSummary() {
 	go func() {
 		summary, err := ui.llm.SummarizeCase(ui.ctx, *selectedCase, ui.events)
 		if err != nil {
-			ui.app.QueueUpdate(func() {
+			ui.queueUpdate(func() {
 				ui.setStatusDirect("[%s]Error generating summary: %v[-:-:-]", ui.theme.TagError, err)
 			})
 			return
 		}
 
-		ui.app.QueueUpdate(func() {
+		ui.queueUpdate(func() {
 			ui.showModal("Case Summary", summary)
 			ui.setStatusDirect("[%s]Case summary generated[-:-:-]", ui.theme.TagSuccess)
 		})
@@ -3001,7 +3021,7 @@ func (ui *UI) handleShortcutKey(digit rune) {
 	if canExtendValid {
 		// Wait briefly for an additional digit; on timeout, commit current caseNum.
 		ui.shortcutTimer = time.AfterFunc(ui.shortcutTimeout, func() {
-			ui.app.QueueUpdate(func() {
+			ui.queueUpdate(func() {
 				if num, err := strconv.Atoi(ui.shortcutBuffer); err == nil && num >= 1 && num <= len(ui.cases) {
 					ui.selectCaseByNumber(num)
 				}
@@ -3305,7 +3325,7 @@ func (ui *UI) createCaseWithEvents(title, description, severity, assignedTo stri
 
 		caseID, err := ui.store.CreateOrUpdateCase(ui.ctx, newCase)
 		if err != nil {
-			ui.app.QueueUpdate(func() {
+			ui.queueUpdate(func() {
 				ui.setStatusDirect("[%s]Error creating case: %v[-:-:-]", ui.theme.TagError, err)
 			})
 			return
@@ -3333,19 +3353,19 @@ func (ui *UI) createCaseWithEvents(title, description, severity, assignedTo stri
 
 		// Refresh UI without blocking the UI goroutine on DB calls
 		// 1) Clear selections and show immediate status on UI thread
-		ui.app.QueueUpdate(func() {
+		ui.queueUpdate(func() {
 			ui.selectedEventIDs = make(map[string]bool)
 			ui.setStatusDirect("[%s]Case created; refreshing cases...[-:-:-]", ui.theme.TagWarning)
 		})
 
 		// 2) Refresh cases off the UI thread to avoid freezing the event loop
 		if err := ui.refreshCases(); err != nil {
-			ui.app.QueueUpdate(func() {
+			ui.queueUpdate(func() {
 				ui.setStatusDirect("[%s]Error refreshing cases after create: %v[-:-:-]", ui.theme.TagError, err)
 			})
 		} else {
 			// 3) Finalize UI updates and auto-select the newly created case
-			ui.app.QueueUpdateDraw(func() {
+			ui.queueUpdate(func() {
 				// Set selection to the new case
 				ui.selectedCaseID = caseID
 				// Find the sidebar index for the new case (cases list only; ALL EVENTS is separate)
@@ -3407,19 +3427,19 @@ func (ui *UI) addEventsToCase(caseNumberStr string) {
 
 		// Refresh UI without blocking the UI goroutine on DB calls
 		// 1) Clear selections and show immediate status on UI thread
-		ui.app.QueueUpdate(func() {
+		ui.queueUpdate(func() {
 			ui.selectedEventIDs = make(map[string]bool)
 			ui.setStatusDirect("[%s]Updating cases...[-:-:-]", ui.theme.TagWarning)
 		})
 
 		// 2) Refresh cases off the UI thread
 		if err := ui.refreshCases(); err != nil {
-			ui.app.QueueUpdate(func() {
+			ui.queueUpdate(func() {
 				ui.setStatusDirect("[%s]Error refreshing cases after add: %v[-:-:-]", ui.theme.TagError, err)
 			})
 		} else {
 			// 3) Finalize UI updates; keep or reselect the target case and reload its events
-			ui.app.QueueUpdateDraw(func() {
+			ui.queueUpdate(func() {
 				// Ensure the selected case remains the target one
 				ui.selectedCaseID = selectedCase.ID
 				// Find and set the sidebar index for the selected case (+1 for ALL EVENTS)
@@ -3993,7 +4013,7 @@ func (ui *UI) loadAllEvents() {
 		}
 		// Reset filter apply guard on failure
 		atomic.StoreInt32(&ui.filterApplying, 0)
-		ui.app.QueueUpdate(func() {
+		ui.queueUpdate(func() {
 			if ctx.Err() == context.DeadlineExceeded {
 				ui.setStatusDirect("[%s]Timed out counting ALL events (database busy)[-:-:-]", ui.theme.TagError)
 			} else {
@@ -4032,7 +4052,7 @@ func (ui *UI) loadAllEvents() {
 		}
 		// Reset filter apply guard on failure
 		atomic.StoreInt32(&ui.filterApplying, 0)
-		ui.app.QueueUpdate(func() {
+		ui.queueUpdate(func() {
 			if ctx.Err() == context.DeadlineExceeded {
 				ui.setStatusDirect("[%s]Timed out loading ALL events (database busy)[-:-:-]", ui.theme.TagError)
 			} else {
@@ -4051,7 +4071,7 @@ func (ui *UI) loadAllEvents() {
 	}
 
 	// Update UI in main thread
-	ui.app.QueueUpdateDraw(func() {
+	ui.queueUpdate(func() {
 		ui.selectedEventIDs = make(map[string]bool)
 		ui.events = events
 		ui.updateEventsList()
@@ -4134,7 +4154,7 @@ func (ui *UI) showDeleteCaseConfirm() {
 				ui.logger.Printf("DeleteCase: deleting caseID=%s (unassigning events)", caseID)
 			}
 			if err := ui.store.DeleteCaseAndUnassign(ui.ctx, caseID); err != nil {
-				ui.app.QueueUpdate(func() {
+				ui.queueUpdate(func() {
 					ui.restoreMainLayout()
 					ui.setStatusDirect("[%s]Error deleting case: %v[-:-:-]", ui.theme.TagError, err)
 				})
@@ -4143,7 +4163,7 @@ func (ui *UI) showDeleteCaseConfirm() {
 
 			// Refresh cases off the UI goroutine
 			if err := ui.refreshCases(); err != nil {
-				ui.app.QueueUpdate(func() {
+				ui.queueUpdate(func() {
 					ui.restoreMainLayout()
 					ui.setStatusDirect("[%s]Error refreshing cases after delete: %v[-:-:-]", ui.theme.TagError, err)
 				})
@@ -4151,7 +4171,7 @@ func (ui *UI) showDeleteCaseConfirm() {
 			}
 
 			// Finalize UI: select ALL EVENTS and reload
-			ui.app.QueueUpdateDraw(func() {
+			ui.queueUpdate(func() {
 				ui.restoreMainLayout()
 				ui.selectedCaseID = ""
 				ui.showAll = true
@@ -4461,7 +4481,7 @@ func (ui *UI) showDeleteEventsConfirm(ids []string) {
 		// Run deletion in background
 		go func(idsCopy []string) {
 			if err := ui.store.DeleteEvents(ui.ctx, idsCopy); err != nil {
-				ui.app.QueueUpdate(func() {
+				ui.queueUpdate(func() {
 					ui.restoreMainLayout()
 					ui.setStatusDirect("[%s]Error deleting events: %v[-:-:-]", ui.theme.TagError, err)
 				})
@@ -4472,7 +4492,7 @@ func (ui *UI) showDeleteEventsConfirm(ids []string) {
 			_ = ui.refreshCases()
 
 			// Finalize UI: clear selections and reload current context
-			ui.app.QueueUpdateDraw(func() {
+			ui.queueUpdate(func() {
 				ui.restoreMainLayout()
 				ui.selectedEventIDs = make(map[string]bool)
 				// Reload events for current context
@@ -4624,7 +4644,7 @@ func (ui *UI) showCaseFilterModal() {
 
 		// Update UI in background to avoid deadlock
 		go func() {
-			ui.app.QueueUpdateDraw(func() {
+			ui.queueUpdate(func() {
 				ui.sidebar.Clear()
 				if len(ui.cases) > 0 {
 					for i, case_ := range ui.cases {
@@ -4687,7 +4707,7 @@ func (ui *UI) clearCaseFilters() {
 	// Perform UI mutations in a single batch from a background goroutine to avoid deadlock
 	// when invoked from key handlers (e.g., Shift+F).
 	go func() {
-		ui.app.QueueUpdateDraw(func() {
+		ui.queueUpdate(func() {
 			// Rebuild sidebar directly (avoid nested QueueUpdate calls)
 			ui.sidebar.Clear()
 			if len(ui.cases) > 0 {

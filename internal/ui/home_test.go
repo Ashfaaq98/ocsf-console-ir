@@ -35,7 +35,19 @@ func newTestHome(t *testing.T) (*homeView, *store.Store) {
 	// key router, applyTheme, currentFinding — silently skips it.
 	ui.home = h
 	ui.destination = destHome
-	t.Cleanup(h.close)
+	// Close whichever view is live at cleanup, not this one.
+	//
+	// showAnalystHome replaces ui.home with a fresh view and starts its clock
+	// and refresh tickers; closing the original leaves the replacement querying
+	// a store whose temporary directory is being deleted out from under it.
+	t.Cleanup(func() {
+		if ui.home != nil {
+			ui.home.close()
+			ui.home.wait()
+		}
+		h.close()
+		h.wait()
+	})
 	return h, st
 }
 

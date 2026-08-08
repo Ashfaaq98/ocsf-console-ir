@@ -510,12 +510,12 @@ func (ui *UI) showFindingStatusModal() {
 		statusID := statuses[selected]
 		go func() {
 			if err := ui.store.UpdateFindingStatus(ui.ctx, f.ID, statusID); err != nil {
-				ui.app.QueueUpdateDraw(func() {
+				ui.queueUpdate(func() {
 					ui.setStatusDirect("[%s]Failed to set status: %v[-:-:-]", ui.theme.TagError, err)
 				})
 				return
 			}
-			ui.app.QueueUpdateDraw(func() {
+			ui.queueUpdate(func() {
 				ui.setStatusDirect("[%s]Status set to %s[-:-:-]",
 					ui.theme.TagSuccess, ocsf.FindingStatusName(f.ClassUID, statusID))
 			})
@@ -561,12 +561,12 @@ func (ui *UI) showFindingVerdictModal() {
 		verdictID := verdicts[selected]
 		go func() {
 			if err := ui.store.UpdateFindingVerdict(ui.ctx, f.ID, verdictID); err != nil {
-				ui.app.QueueUpdateDraw(func() {
+				ui.queueUpdate(func() {
 					ui.setStatusDirect("[%s]Failed to set verdict: %v[-:-:-]", ui.theme.TagError, err)
 				})
 				return
 			}
-			ui.app.QueueUpdateDraw(func() {
+			ui.queueUpdate(func() {
 				ui.setStatusDirect("[%s]Verdict set to %s[-:-:-]",
 					ui.theme.TagSuccess, ocsf.VerdictName(verdictID))
 			})
@@ -663,7 +663,7 @@ func (ui *UI) escalateFindingToCase() {
 				}
 				id, err := ui.store.CreateOrUpdateCase(ui.ctx, newCase)
 				if err != nil {
-					ui.app.QueueUpdateDraw(func() {
+					ui.queueUpdate(func() {
 						ui.setStatusDirect("[%s]Failed to create case: %v[-:-:-]", ui.theme.TagError, err)
 					})
 					return
@@ -672,7 +672,7 @@ func (ui *UI) escalateFindingToCase() {
 			}
 
 			if err := ui.store.AssignFindingToCase(ui.ctx, f.ID, caseID); err != nil {
-				ui.app.QueueUpdateDraw(func() {
+				ui.queueUpdate(func() {
 					ui.setStatusDirect("[%s]Failed to attach finding: %v[-:-:-]", ui.theme.TagError, err)
 				})
 				return
@@ -685,7 +685,7 @@ func (ui *UI) escalateFindingToCase() {
 			_ = ui.store.LogCaseAction(ui.ctx, caseID, "finding_escalated", ui.currentAnalyst(),
 				map[string]interface{}{"finding_uid": f.FindingUID, "title": f.Title})
 
-			ui.app.QueueUpdateDraw(func() {
+			ui.queueUpdate(func() {
 				ui.setStatusDirect("[%s]Finding attached to case[-:-:-]", ui.theme.TagSuccess)
 			})
 			ui.loadFindings()
