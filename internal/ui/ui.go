@@ -452,7 +452,12 @@ type UI struct {
 	showFindings      bool
 	findings          []store.Finding
 	selectedFindingID string
-	findingsOpenOnly  bool
+
+	// pendingFindingID is a finding to select once the Triage list has loaded.
+	// It carries a selection across a screen change — Home's Enter, for one —
+	// and is cleared as soon as it is honoured or found to be missing.
+	pendingFindingID string
+	findingsOpenOnly bool
 	// findingsTotal is the unfiltered count from the last load, kept so the
 	// queue can be repainted (e.g. on a theme change) without re-querying.
 	findingsTotal int
@@ -1174,12 +1179,39 @@ func (ui *UI) onSidebarSelect(index int) {
 	go ui.loadCaseEvents()
 }
 
+// screenKeys is the current screen's own key handler, or nil where the screen
+// owns no keys.
+//
+// Adding a screen here is how it gets keys of its own. Returning nil from the
+// handler claims the key; returning the event passes it on to the global
+// bindings below.
+func (ui *UI) screenKeys() func(*tcell.EventKey) *tcell.EventKey {
+	if ui.destination == destHome && ui.home != nil {
+		return ui.home.handleKey
+	}
+	return nil
+}
+
 // setupKeybindings sets up global keybindings
 func (ui *UI) setupKeybindings() {
 	handler := func(event *tcell.EventKey) *tcell.EventKey {
 		// While a modal or form is active, allow it to handle all keys (avoid global shortcuts like q/h/Tab).
 		if ui.isDialogActive() {
 			return event
+		}
+
+		// The screen showing gets first refusal on every key.
+		//
+		// tview runs this application-wide capture before any primitive's own,
+		// so a screen cannot own a key by binding it to one of its widgets:
+		// whatever this handler claims never reaches the screen below. Asking
+		// the screen first is the only way it can own anything — and until it
+		// did, Home's handler was unreachable code and Tab on the dashboard
+		// reached cycleFocus, which cycles widgets Home does not contain.
+		if screen := ui.screenKeys(); screen != nil {
+			if screen(event) == nil {
+				return nil
+			}
 		}
 
 		// A case owns Tab and Shift+Tab, which move between its seven tabs.

@@ -214,11 +214,16 @@ func newHomeView(ui *UI) *homeView {
 }
 
 // openSelected opens the finding under the cursor in Triage.
+//
+// The selection travels with it. Jumping to a queue of a hundred findings with
+// the cursor on the first one loses the very thing that was being looked at,
+// which makes Enter a change of scenery rather than an action.
 func (h *homeView) openSelected() {
 	f := h.selectedFinding()
 	if f == nil {
 		return
 	}
+	h.ui.pendingFindingID = f.ID
 	h.ui.jumpToFindings()
 }
 
@@ -857,17 +862,65 @@ func (h *homeView) cardRows() int {
 // Input
 // ---------------------------------------------------------------------------
 
-// handleKey handles the keys Home owns. Global navigation is handled upstream.
+// handleKey handles the keys Home owns.
+//
+// It is called from the application-wide capture before any global binding
+// applies — see UI.screenKeys. Returning nil claims the key; returning the
+// event lets navigation, the palette and the rest of the globals have it.
+//
+// Every key here would otherwise mean something else. j and k are the global
+// move-selection pair, Tab is cycleFocus, r refreshes the Cases screen, and e
+// and v are guarded by showFindings, which Home clears on the way in.
 func (h *homeView) handleKey(ev *tcell.EventKey) *tcell.EventKey {
-	if ev.Key() != tcell.KeyRune {
-		return ev
-	}
-	switch ev.Rune() {
-	case 'r':
-		h.refresh()
+	switch ev.Key() {
+	case tcell.KeyTab, tcell.KeyBacktab:
+		// Claimed and dropped. Unclaimed it reaches cycleFocus, which cycles
+		// the sidebar, the event list and the event detail — none of which are
+		// in Home's tree, so focus lands on a primitive that is not on screen
+		// and the status bar announces a panel nobody can see.
 		return nil
+
+	case tcell.KeyEnter:
+		h.openSelected()
+		return nil
+
+	case tcell.KeyRune:
+		switch ev.Rune() {
+		case 'j':
+			h.moveQueue(1)
+			return nil
+		case 'k':
+			h.moveQueue(-1)
+			return nil
+		case 'r':
+			h.refresh()
+			return nil
+		case 'e':
+			h.ui.escalateFindingToCase()
+			return nil
+		case 'v':
+			h.ui.showFindingVerdictModal()
+			return nil
+		}
 	}
 	return ev
+}
+
+// moveQueue steps the queue cursor, which j and k would otherwise never reach.
+func (h *homeView) moveQueue(delta int) {
+	rows := h.queue.GetRowCount()
+	if rows == 0 {
+		return
+	}
+	row, col := h.queue.GetSelection()
+	row += delta
+	if row < 0 {
+		row = 0
+	}
+	if row >= rows {
+		row = rows - 1
+	}
+	h.queue.Select(row, col)
 }
 
 // refresh reloads every panel, returning each to its loading state so the

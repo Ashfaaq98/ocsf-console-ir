@@ -250,9 +250,30 @@ func (ui *UI) updateFindingsList(total int) {
 		}
 	}
 
-	if ui.eventList.GetRowCount() > 1 {
-		ui.eventList.Select(1, 0)
+	ui.selectLoadedFinding()
+}
+
+// selectLoadedFinding puts the cursor on the finding another screen asked for,
+// falling back to the top of the queue.
+func (ui *UI) selectLoadedFinding() {
+	if ui.eventList.GetRowCount() <= 1 {
+		return
 	}
+	want := ui.pendingFindingID
+	ui.pendingFindingID = ""
+
+	if want != "" {
+		for i, f := range ui.findings {
+			if f.ID == want {
+				ui.eventList.Select(i+1, 0)
+				return
+			}
+		}
+		// Asked for and not in this page: the filters or the page size put it
+		// somewhere else. The top of the queue is a better answer than a cursor
+		// left wherever the previous screen happened to leave it.
+	}
+	ui.eventList.Select(1, 0)
 }
 
 func shortSeverity(sev string) string {
@@ -293,6 +314,16 @@ func (ui *UI) findingVerdictColor(f store.Finding) tcell.Color {
 
 // currentFinding returns the finding under the cursor.
 func (ui *UI) currentFinding() (store.Finding, bool) {
+	// Whichever screen is showing owns the answer. Escalation and verdicts both
+	// act on "the selected finding", and that used to mean Triage's table
+	// specifically — so pressing e on the dashboard interrogated an empty table
+	// and reported that nothing was selected.
+	if ui.destination == destHome && ui.home != nil {
+		if f := ui.home.selectedFinding(); f != nil {
+			return *f, true
+		}
+		return store.Finding{}, false
+	}
 	row, _ := ui.eventList.GetSelection()
 	if row > 0 && row-1 < len(ui.findings) {
 		return ui.findings[row-1], true
