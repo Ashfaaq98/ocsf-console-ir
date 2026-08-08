@@ -430,3 +430,59 @@ func TestOpeningHomeAdvancesTheVisitClock(t *testing.T) {
 		t.Error("the visit clock was not persisted")
 	}
 }
+
+// The header says nothing about freshness while the data is fresh.
+//
+// It used to report the age unconditionally, and the dashboard reloads every
+// ten seconds — so the number counted zero to nine and reset, forever. A
+// counter that only ever cycles reads as a fault, not as a health indicator.
+func TestHomeHeaderIsSilentWhileFresh(t *testing.T) {
+	h, _ := newTestHome(t)
+	h.loadAndRender(t)
+
+	got := stripTags(h.header.GetText(true))
+
+	if strings.Contains(got, "⟳") {
+		t.Errorf("the header reports freshness while the data is fresh:\n%q", got)
+	}
+	// The clock is the proof the screen is alive, and it stays.
+	if !strings.Contains(got, ":") {
+		t.Errorf("the header lost its clock:\n%q", got)
+	}
+}
+
+// And speaks up once the data has actually stopped arriving.
+func TestHomeHeaderWarnsWhenStale(t *testing.T) {
+	h, _ := newTestHome(t)
+	h.loadAndRender(t)
+	h.set(func(d *homeData) { d.loadedAt = time.Now().Add(-homeStaleAfter - time.Second) })
+	h.renderHeader()
+
+	if got := stripTags(h.header.GetText(true)); !strings.Contains(got, "stale") {
+		t.Errorf("the header does not warn that the data has stopped refreshing:\n%q", got)
+	}
+}
+
+// One late cycle is not a fault. The threshold is several intervals so a slow
+// query does not put a warning on the screen.
+func TestHomeHeaderToleratesOneSlowRefresh(t *testing.T) {
+	h, _ := newTestHome(t)
+	h.loadAndRender(t)
+	h.set(func(d *homeData) { d.loadedAt = time.Now().Add(-homeRefreshInterval - time.Second) })
+	h.renderHeader()
+
+	if got := stripTags(h.header.GetText(true)); strings.Contains(got, "stale") {
+		t.Errorf("a single late refresh was reported as stale:\n%q", got)
+	}
+}
+
+// Before the first load has landed there is nothing to be stale about, and the
+// header says it is working rather than showing an age of zero.
+func TestHomeHeaderBeforeTheFirstLoad(t *testing.T) {
+	h, _ := newTestHome(t)
+	h.renderHeader()
+
+	if got := stripTags(h.header.GetText(true)); !strings.Contains(got, "loading") {
+		t.Errorf("the header does not say it is still loading:\n%q", got)
+	}
+}

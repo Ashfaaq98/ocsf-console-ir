@@ -443,17 +443,32 @@ func (h *homeView) renderHeader() {
 		db = fmt.Sprintf("[%s]●[-:-:-] [%s]DB unavailable[-:-:-]", t.TagError, t.TagMuted)
 	}
 
-	// How old what you are looking at is. The dashboard re-queries every ten
-	// seconds and never said so, so there was no way to tell a live screen from
-	// one that had quietly stopped refreshing.
-	age := fmt.Sprintf("[%s]⟳ %s[-:-:-]", t.TagMuted, renderRelativeTime(d.loadedAt))
-	if d.loadedAt.IsZero() {
-		age = fmt.Sprintf("[%s]⟳ loading[-:-:-]", t.TagMuted)
-	}
-
 	// No product name here. It is on the status bar, once.
-	h.header.SetText(fmt.Sprintf(" [%s:-:b]Analyst Home[-:-:-]    %s    %s    [%s]%s[-:-:-]",
-		t.TagAccent, db, age, t.TagMuted, time.Now().Format("15:04:05")))
+	h.header.SetText(fmt.Sprintf(" [%s:-:b]Analyst Home[-:-:-]    %s%s    [%s]%s[-:-:-]",
+		t.TagAccent, db, h.stalenessText(d), t.TagMuted, time.Now().Format("15:04:05")))
+}
+
+// stalenessText warns when the data has stopped arriving, and says nothing when
+// it has not.
+//
+// It used to report the age unconditionally. The dashboard reloads every ten
+// seconds, so that age only ever counted zero to nine and reset — a number that
+// cycles forever without meaning anything, and which reads as a fault rather
+// than as the health indicator it was meant to be.
+//
+// Silence is the healthy state. The clock beside it already ticks every second,
+// which is the proof that the screen is alive; this speaks only when the data
+// behind it has stopped keeping up.
+func (h *homeView) stalenessText(d homeData) string {
+	t := h.ui.theme
+	if d.loadedAt.IsZero() {
+		return fmt.Sprintf("    [%s]⟳ loading[-:-:-]", t.TagMuted)
+	}
+	if age := time.Since(d.loadedAt); age >= homeStaleAfter {
+		return fmt.Sprintf("    [%s]⟳ stale · last updated %s ago[-:-:-]",
+			t.TagWarning, renderRelativeTime(d.loadedAt))
+	}
+	return ""
 }
 
 // renderCards paints the three metric cards. Each is a shortcut to the work it
@@ -884,6 +899,11 @@ const (
 
 	// Below this height the metric cards go. The queue speaks for itself.
 	homeShortCardsBelow = 20
+
+	// homeStaleAfter is how far behind the data may fall before the header says
+	// so. Three refresh intervals, so a single slow or missed cycle does not cry
+	// wolf — it is a signal that the reload has stopped, not that one was late.
+	homeStaleAfter = 3 * homeRefreshInterval
 
 	// homeVolumeHours is the sparkline's window: a day, so the shape covers a
 	// shift handover as well as the hour just gone.
