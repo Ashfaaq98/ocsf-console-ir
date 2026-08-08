@@ -91,28 +91,28 @@ func (f *frameBuffer) lines() []string {
 	return out
 }
 
-// Moving between states must replace the card, not draw a second one over it.
+// Moving between states must replace the right-hand column, not draw a second
+// one over it.
 //
-// The card's height changes with its state, and tview does not clear the screen
-// between frames, so without an explicit clear the rows the previous card
-// occupied keep its border and the screen ends up with two overlapping cards
-// and a duplicated title.
+// tview does not clear the screen between frames and the column changes height
+// with its state, so without the canvas being repainted every frame the rows the
+// previous state occupied keep its text and the two read on top of each other.
 func TestWelcomeLeavesNoStaleRowsBetweenStates(t *testing.T) {
 	v := newTestWelcome(t, WelcomeOptions{
 		DBPath:  "/read-only/console-ir.db",
 		Perform: func(WelcomeResult, func(string)) error { return errPermission },
 	})
-	fb := newFrameBuffer(t, 100, 30)
+	fb := newFrameBuffer(t, 120, 34)
 
-	// Menu, then the prompt, then the error card: the three heights this screen
-	// has, in the order a failing import walks through them.
+	// Menu, then the prompt, then the failure: the three shapes this screen has,
+	// in the order a failing import walks through them.
 	fb.paint(v)
 	press(v, '3')
 	fb.paint(v)
 
 	lines := fb.lines()
-	if line, ok := findLine(lines, welcomeMessage); ok {
-		t.Errorf("the menu card survived the switch to the prompt: %q\n%s",
+	if line, ok := findLine(lines, welcomeOptions[0].label); ok {
+		t.Errorf("the action list survived the switch to the prompt: %q\n%s",
 			line, strings.Join(lines, "\n"))
 	}
 
@@ -122,29 +122,20 @@ func TestWelcomeLeavesNoStaleRowsBetweenStates(t *testing.T) {
 
 	lines = fb.lines()
 	if line, ok := findLine(lines, "Path to a JSON"); ok {
-		t.Errorf("the prompt survived the switch to the error card: %q\n%s",
+		t.Errorf("the prompt survived the switch to the failure: %q\n%s",
 			line, strings.Join(lines, "\n"))
 	}
 
-	// Exactly one card, so exactly one top border and one bottom border.
-	var tops, bottoms, titles int
+	// The brand is drawn once, not once per state that has been through here.
+	marks := 0
 	for _, l := range lines {
-		switch {
-		case strings.Contains(l, "┌") || strings.Contains(l, "╔"):
-			tops++
-		case strings.Contains(l, "└") || strings.Contains(l, "╚"):
-			bottoms++
-		}
-		if strings.Contains(l, welcomeTitleText) {
-			titles++
+		if strings.Contains(l, wordmarkLines()[0]) {
+			marks++
 		}
 	}
-	if tops != 1 || bottoms != 1 {
-		t.Errorf("found %d card tops and %d bottoms, want 1 of each\n%s",
-			tops, bottoms, strings.Join(lines, "\n"))
-	}
-	if titles != 1 {
-		t.Errorf("the title is on screen %d times, want once\n%s", titles, strings.Join(lines, "\n"))
+	if marks != 1 {
+		t.Errorf("the wordmark is on screen %d times, want once\n%s",
+			marks, strings.Join(lines, "\n"))
 	}
 }
 
@@ -165,6 +156,19 @@ func TestWelcomeLeavesNoStaleRowsAfterResize(t *testing.T) {
 			t.Errorf("row %d is %d columns wide after shrinking", i, len([]rune(l)))
 		}
 	}
+}
+
+// screenColumnOf is the column substr starts at, counting screen cells.
+//
+// Not strings.Index, which counts bytes: the brand column is drawn in
+// box-drawing characters at three bytes each, so a byte offset stopped being a
+// column the moment the wordmark arrived.
+func screenColumnOf(row, substr string) int {
+	at := strings.Index(row, substr)
+	if at < 0 {
+		return -1
+	}
+	return len([]rune(row[:at]))
 }
 
 // findLine returns the first rendered row containing substr.
@@ -192,7 +196,7 @@ func TestWelcomeRendersTheActionListCleanly(t *testing.T) {
 	joined := strings.Join(lines, "\n")
 
 	for _, o := range welcomeOptions {
-		want := string([]rune{'[', o.key, ']'}) + "  " + o.label
+		want := keycapFor(o.key) + "  " + o.label
 		if _, ok := findLine(lines, want); !ok {
 			t.Errorf("the screen does not show %q\nrendered:\n%s", want, joined)
 		}
@@ -221,9 +225,9 @@ func TestWelcomeRendersTheErrorCardCleanly(t *testing.T) {
 	lines := renderPrimitive(t, v.root, 100, 30)
 	joined := strings.Join(lines, "\n")
 
-	for _, want := range []string{"[r]  Retry", "[q]  Quit", "permission denied", "/read-only/console-ir.db"} {
+	for _, want := range []string{" r   Retry", " q   Quit", "permission denied", "/read-only/console-ir.db"} {
 		if _, ok := findLine(lines, want); !ok {
-			t.Errorf("the error card does not show %q\nrendered:\n%s", want, joined)
+			t.Errorf("the error state does not show %q\nrendered:\n%s", want, joined)
 		}
 	}
 	for _, leak := range []string{"[-:-:-]", ":-]", "-:-"} {
@@ -258,24 +262,23 @@ func TestWelcomePaintsTheWholeCanvas(t *testing.T) {
 	}
 }
 
-// The card is two columns wherever it fits: the intro on the left, the actions
-// on the right, sharing rows rather than stacking. Stacked, the card runs to
-// twelve rows and pushes the tip off a short terminal.
+// The page is two columns wherever they fit: the brand on the left, the choices
+// on the right, sharing rows rather than stacking.
 //
 // The assertion is that a single rendered row carries both, because that is the
 // only thing that distinguishes two columns from one.
-func TestWelcomeCardIsTwoColumns(t *testing.T) {
+func TestWelcomePageIsTwoColumns(t *testing.T) {
 	for _, size := range [][2]int{{140, 40}, {100, 30}, {80, 24}} {
 		v := newTestWelcome(t, WelcomeOptions{})
 		v.relayout(size[0], size[1])
 
 		lines := renderPrimitive(t, v.root, size[0], size[1])
-		row, ok := findLine(lines, welcomeMessage)
+		row, ok := findLine(lines, wordmarkLines()[0])
 		if !ok {
-			t.Fatalf("%dx%d: the message is not on screen:\n%s", size[0], size[1], strings.Join(lines, "\n"))
+			t.Fatalf("%dx%d: the wordmark is not on screen:\n%s", size[0], size[1], strings.Join(lines, "\n"))
 		}
-		if !strings.Contains(row, "[1]  "+welcomeOptions[0].label) {
-			t.Errorf("%dx%d: the card is stacked, not two columns — the message row is %q",
+		if !strings.Contains(row, welcomeOptions[0].label) {
+			t.Errorf("%dx%d: the page is stacked, not two columns — the wordmark row is %q",
 				size[0], size[1], row)
 		}
 	}
@@ -290,18 +293,18 @@ func TestWelcomeColumnsAlign(t *testing.T) {
 
 	want := -1
 	for _, o := range welcomeOptions {
-		key := string([]rune{'[', o.key, ']'})
+		key := keycapFor(o.key)
 		row, ok := findLine(lines, key+"  "+o.label)
 		if !ok {
-			t.Fatalf("the action %s is not on screen:\n%s", key, strings.Join(lines, "\n"))
+			t.Fatalf("the action %q is not on screen:\n%s", key, strings.Join(lines, "\n"))
 		}
-		at := strings.Index(row, key)
+		at := screenColumnOf(row, key)
 		if want == -1 {
 			want = at
 			continue
 		}
 		if at != want {
-			t.Errorf("%s starts at column %d, but the first action starts at %d:\n%s",
+			t.Errorf("%q starts at column %d, but the first action starts at %d:\n%s",
 				key, at, want, strings.Join(lines, "\n"))
 		}
 	}
@@ -313,13 +316,13 @@ func TestWelcomeFallsBackToOneColumnWhenNarrow(t *testing.T) {
 	v := newTestWelcome(t, WelcomeOptions{})
 	v.relayout(70, 30)
 
-	if v.twoColumnFits() {
-		t.Fatalf("a %d-column card claims to fit two columns", v.cardInnerWidth())
+	if v.splitFits(v.leftColumn(), v.rightColumn()) {
+		t.Fatalf("a %d-column terminal claims to fit two columns", v.width)
 	}
 
 	lines := renderPrimitive(t, v.root, 70, 30)
 	for _, o := range welcomeOptions {
-		if _, ok := findLine(lines, "["+string(o.key)+"]  "+o.label); !ok {
+		if _, ok := findLine(lines, keycapFor(o.key)+"  "+o.label); !ok {
 			t.Errorf("the one-column fallback dropped %q:\n%s", o.label, strings.Join(lines, "\n"))
 		}
 	}
@@ -333,14 +336,15 @@ func TestWelcomeShowsTheVersion(t *testing.T) {
 	v.relayout(140, 40)
 
 	lines := renderPrimitive(t, v.root, 140, 40)
-	row, ok := findLine(lines, welcomeTitleText)
+	// In buildinfo's spelling, so the answer to "what am I running" is the same
+	// word here as it is in the main header and in `console-ir version`.
+	row, ok := findLine(lines, "v0.2.0")
 	if !ok {
-		t.Fatalf("the title is not on screen:\n%s", strings.Join(lines, "\n"))
+		t.Fatalf("the version is not on screen:\n%s", strings.Join(lines, "\n"))
 	}
-	// Beside the name, and in buildinfo's spelling, so the answer to "what am I
-	// running" is the same word here as everywhere else it is asked.
-	if !strings.Contains(row, "v0.2.0") {
-		t.Errorf("the version is not beside the name: %q", row)
+	// Beside the schema it speaks: the two facts a bug report needs.
+	if !strings.Contains(row, "OCSF") {
+		t.Errorf("the version is not beside the schema version: %q", row)
 	}
 }
 
@@ -358,7 +362,7 @@ func TestWelcomeRendersWithinItsTerminal(t *testing.T) {
 			}
 		}
 
-		// The actions and the action bar survive every size.
+		// The actions and the navigation bar survive every size.
 		for _, o := range welcomeOptions {
 			if _, ok := findLine(lines, o.label); !ok {
 				t.Errorf("%dx%d dropped the action %q from the render:\n%s",
@@ -366,7 +370,7 @@ func TestWelcomeRendersWithinItsTerminal(t *testing.T) {
 			}
 		}
 		if _, ok := findLine(lines, "q Quit"); !ok {
-			t.Errorf("%dx%d dropped the action bar:\n%s", size[0], size[1], strings.Join(lines, "\n"))
+			t.Errorf("%dx%d dropped the navigation bar:\n%s", size[0], size[1], strings.Join(lines, "\n"))
 		}
 	}
 }

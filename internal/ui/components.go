@@ -294,3 +294,23 @@ func formatSeverityBadge(sev string, theme Theme) string {
 	}
 	return fmt.Sprintf("[%s]%s %s[-:-:-]", color, glyph, upper)
 }
+
+// stripTags removes dynamic-colour markup, leaving what actually reaches the
+// screen. Anything that measures a rendered string has to go through this: a
+// tagged string's length counts "[yellow]" and "[-:-:-]", neither of which is
+// drawn, so widths computed from it are wrong by however much markup it carries.
+func stripTags(s string) string {
+	var b strings.Builder
+	depth := 0
+	for _, r := range s {
+		switch {
+		case r == '[':
+			depth++
+		case r == ']' && depth > 0:
+			depth--
+		case depth == 0:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
