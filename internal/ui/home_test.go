@@ -96,8 +96,12 @@ func TestHomeEmptyQueuePointsSomewhereReal(t *testing.T) {
 	if strings.Contains(joined, "Press 3 to import") {
 		t.Errorf("the empty queue still sends the analyst to Cases to import:\n%s", joined)
 	}
-	if !strings.Contains(joined, ":") {
-		t.Errorf("the empty queue offers no way forward:\n%s", joined)
+	// Both routes that actually exist: the drop folder, named, and the command.
+	if !strings.Contains(joined, "console-ir ingest") {
+		t.Errorf("the empty queue does not name the ingest command:\n%s", joined)
+	}
+	if !strings.Contains(joined, "Drop OCSF") {
+		t.Errorf("the empty queue does not name the drop folder:\n%s", joined)
 	}
 }
 
@@ -364,5 +368,65 @@ func TestHumanCount(t *testing.T) {
 		if got := humanCount(tc.in); got != tc.want {
 			t.Errorf("humanCount(%d) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// A dashboard checked ten times a shift has to say which findings are new since
+// the last look — otherwise every glance re-reads the same queue.
+func TestHomeMarksFindingsSinceTheLastVisit(t *testing.T) {
+	h, st := newTestHome(t)
+
+	// The previous visit was an hour ago; this finding arrived just now.
+	h.ui.markSince = time.Now().Add(-time.Hour)
+	seedTestFinding(t, st, "fresh", 90, ocsf.SeverityCritical, ocsf.FindingStatusNew)
+	h.loadAndRender(t)
+
+	joined := strings.Join(renderPrimitive(t, h.root, 140, 40), "\n")
+	if !strings.Contains(joined, "•") {
+		t.Errorf("a finding newer than the last visit is not marked:\n%s", joined)
+	}
+}
+
+// Against the previous visit, not against now: comparing with now would unmark
+// everything ten seconds after opening, when the first refresh landed.
+func TestHomeDoesNotMarkOlderFindings(t *testing.T) {
+	h, st := newTestHome(t)
+
+	seedTestFinding(t, st, "old", 90, ocsf.SeverityCritical, ocsf.FindingStatusNew)
+	h.ui.markSince = time.Now().Add(time.Hour) // everything predates this visit
+	h.loadAndRender(t)
+
+	joined := strings.Join(renderPrimitive(t, h.root, 140, 40), "\n")
+	if strings.Contains(joined, "•") {
+		t.Errorf("a finding older than the last visit is marked as new:\n%s", joined)
+	}
+}
+
+// A first run has no previous visit. Marking the whole queue marks nothing.
+func TestHomeMarksNothingOnAFirstRun(t *testing.T) {
+	h, st := newTestHome(t)
+	seedTestFinding(t, st, "a", 90, ocsf.SeverityCritical, ocsf.FindingStatusNew)
+	h.ui.markSince = time.Time{}
+	h.loadAndRender(t)
+
+	joined := strings.Join(renderPrimitive(t, h.root, 140, 40), "\n")
+	if strings.Contains(joined, "•") {
+		t.Errorf("a first run marked findings as new:\n%s", joined)
+	}
+}
+
+// Opening Home banks the clock: what was new this visit is not new the next.
+func TestOpeningHomeAdvancesTheVisitClock(t *testing.T) {
+	h, _ := newTestHome(t)
+	before := time.Now()
+
+	h.ui.showAnalystHome()
+
+	if h.ui.lastVisit.Before(before) {
+		t.Errorf("lastVisit = %v, want it moved to now", h.ui.lastVisit)
+	}
+	// And the persisted copy survives a reload, or the mark resets every launch.
+	if got := loadUISettings().LastVisit; got.IsZero() {
+		t.Error("the visit clock was not persisted")
 	}
 }

@@ -347,6 +347,7 @@ func (h *homeView) inspectorWidth() int {
 // inspectorColumns builds the two halves beneath the narrative.
 func (h *homeView) inspectorColumns(f store.Finding, fc findingContext) (left, right []welcomeCell) {
 	t := h.ui.theme
+	budget := h.rightColumnBudget()
 
 	left = append(left, textCell("INDICATORS", t.TagMuted))
 	switch {
@@ -370,16 +371,29 @@ func (h *homeView) inspectorColumns(f store.Finding, fc findingContext) (left, r
 		right = append(right, textCell("  none mapped", t.TagMuted))
 	}
 	for _, tech := range techniques {
-		right = append(right, textCell("  "+tech, t.TagTextPrimary))
+		right = append(right, textCell("  "+truncate(tech, budget-2), t.TagTextPrimary))
 	}
 
 	right = append(right, welcomeCell{})
 	right = append(right, textCell("DETAIL", t.TagMuted))
-	right = append(right, h.labelled("analytic", orDash(f.AnalyticName)))
-	right = append(right, h.labelled("verdict", fmt.Sprintf("%s  ·  confidence %s  ·  assignee %s",
-		orDash(f.Verdict), orDash(ocsf.ConfidenceName(f.ConfidenceID)), orDash(f.Assignee))))
-	right = append(right, h.labelled("seen", seenRange(f)))
+	right = append(right, h.labelled("analytic", truncate(orDash(f.AnalyticName), budget-12)))
+	right = append(right, h.labelled("verdict", truncate(fmt.Sprintf("%s  ·  confidence %s  ·  assignee %s",
+		orDash(f.Verdict), orDash(ocsf.ConfidenceName(f.ConfidenceID)), orDash(f.Assignee)), budget-12)))
+	right = append(right, h.labelled("seen", truncate(seenRange(f), budget-12)))
 	return left, right
+}
+
+// rightColumnBudget is how wide the right column may be.
+//
+// Measured from the left column's widest row, which is fixed by the indicator
+// table, rather than from the widget: tview reports the previous frame's rect,
+// so asking it gives an answer one repaint out of date.
+func (h *homeView) rightColumnBudget() int {
+	const leftColumnWidth = 2 + indicatorTypeWidth + 1 + 22 + 1 + 14
+	if b := h.inspectorWidth() - leftColumnWidth - 4; b > 20 {
+		return b
+	}
+	return 20
 }
 
 // indicatorCell is one observable and how widely it is seen.

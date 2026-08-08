@@ -157,6 +157,13 @@ type homeView struct {
 // Home renders its own empty states, so an existing but empty database is not a
 // special case.
 func (ui *UI) showAnalystHome() {
+	// What was new last time stops being new now. The mark is read from the
+	// previous visit and the clock is reset here, on the way in, so a finding
+	// stays marked for the whole of the visit that first saw it.
+	ui.markSince = ui.lastVisit
+	ui.lastVisit = time.Now()
+	ui.saveUISettings()
+
 	ui.showFindings = false
 	ui.showAll = false
 	ui.selectedCaseID = ""
@@ -200,6 +207,10 @@ func newHomeView(ui *UI) *homeView {
 		Background(t.SelectionBg).Foreground(t.SelectionFg))
 
 	h.inspector = homeText(t, tview.AlignLeft)
+	// Two columns composed into one string per row, so a row that overran its
+	// panel used to reflow onto the next and push the rows below it out. The
+	// narrative wraps deliberately; nothing else may.
+	h.inspector.SetWrap(false)
 	stylePanel(h.inspector.Box, "SELECTED FINDING", PanelRoleInspector, t)
 	h.inspector.SetBackgroundColor(t.Surface)
 
@@ -507,23 +518,16 @@ func (h *homeView) renderCards() {
 	}
 }
 
-// pulseTop is what arrived today, and the enrichment backlog when there is one.
-//
-// Enrichment says nothing while it is idle, so it is absent then rather than
-// spending a third of the card to report that nothing is happening.
+// pulseTop is what arrived today, and the shape it arrived in.
 func (h *homeView) pulseTop(d homeData) string {
 	t := h.ui.theme
 	spark := ""
 	if w := h.sparkWidth(); w > 0 {
 		spark = fmt.Sprintf(" [%s]%s[-:-:-] ", t.TagAccent, sparkline(d.volume, w))
 	}
-	line := fmt.Sprintf("[%s:-:b]%s[-:-:-] [%s]events[-:-:-]%s  [%s]%s indicators[-:-:-]",
+	return fmt.Sprintf("[%s:-:b]%s[-:-:-] [%s]events[-:-:-]%s  [%s]%s indicators[-:-:-]",
 		t.TagTextPrimary, humanCount(d.eventsToday), t.TagMuted, spark,
 		t.TagMuted, humanCount(d.observables))
-	if !d.enrichment.Idle() {
-		line += "   " + h.enrichmentText(d)
-	}
-	return line
 }
 
 // sparkWidth is how much of the card the chart may have.
@@ -546,11 +550,14 @@ func (h *homeView) sparkWidth() int {
 
 // pulseBottom is the state of the pipeline that produced it.
 //
-// The watcher's own error text goes here when there is one. It was collected on
-// every refresh and rendered nowhere, so a failing watcher showed a warning
-// glyph and a path — the symptom, never the reason.
+// Enrichment is silent while idle rather than spending a third of a two-row
+// card to report that nothing is happening.
 func (h *homeView) pulseBottom(d homeData) string {
-	return fmt.Sprintf("%s   %s", h.lastEventText(d), h.watcherText(d))
+	line := fmt.Sprintf("%s  %s", h.lastEventText(d), h.watcherText(d))
+	if e := h.enrichmentText(d); e != "" {
+		line += "  " + e
+	}
+	return line
 }
 
 func (h *homeView) lastEventText(d homeData) string {
@@ -582,7 +589,11 @@ func (h *homeView) watcherText(d homeData) string {
 	}
 	// The folder's own name, not its path. The card is a third of the screen
 	// and the path filled it end to end with the part that never changes.
-	return fmt.Sprintf("[%s]●[-:-:-] [%s]%s · %d in[-:-:-]", t.TagSuccess, t.TagMuted,
+	//
+	// The watcher's own error text replaces all of this when there is one: it
+	// was collected on every refresh and rendered nowhere, so a failing watcher
+	// showed a glyph and a path — the symptom, never the reason.
+	return fmt.Sprintf("[%s]●[-:-:-] [%s]%s %d[-:-:-]", t.TagSuccess, t.TagMuted,
 		tview.Escape(filepath.Base(d.watcher.Dir)), d.watcher.Ingested)
 }
 
@@ -665,7 +676,13 @@ func (h *homeView) renderQueue() {
 		h.queue.SetCell(i, 1, tview.NewTableCell(fmt.Sprintf("[%s]%3d[-:-:-]",
 			t.TagTextPrimary, f.RiskScore)))
 
-		h.queue.SetCell(i, 2, tview.NewTableCell(tview.Escape(f.Title)).
+		// Arrived since the last visit. A dashboard checked ten times a shift
+		// is only useful if it can say which of these are new.
+		mark := "  "
+		if h.isNew(f) {
+			mark = fmt.Sprintf("[%s]• [-:-:-]", t.TagAccent)
+		}
+		h.queue.SetCell(i, 2, tview.NewTableCell(mark+tview.Escape(f.Title)).
 			SetTextColor(t.TextPrimary).SetExpansion(1))
 
 		// Whether somebody has already picked this up. Without it the queue
@@ -690,17 +707,47 @@ func (h *homeView) renderQueue() {
 	}
 }
 
+// isNew reports whether a finding arrived since the previous visit.
+//
+// Against the previous visit, not against this one: comparing with now would
+// unmark everything the moment the screen refreshed, ten seconds after opening.
+func (h *homeView) isNew(f store.Finding) bool {
+	if h.ui.markSince.IsZero() {
+		// No previous visit recorded. Marking every finding on a first run
+		// would mark the whole queue, which marks nothing.
+		return false
+	}
+	return f.CreatedAt.After(h.ui.markSince)
+}
+
 // renderEmptyQueue is a first run, or a database with nothing in it yet.
 //
 // The instruction has to name something that exists. It used to say "Press 3 to
 // import events" — 3 is Cases, and there is no import destination at all, so
 // the one direction the screen gave a new install sent them nowhere useful.
+//
+// The two routes that do exist are the drop folder and the command line, and
+// the drop folder is named rather than described: "put files where the watcher
+// is looking" is not an instruction anybody can follow.
 func (h *homeView) renderEmptyQueue() {
+	d, _ := h.snapshot()
 	t := h.ui.theme
+
 	h.queue.SetCell(0, 0, tview.NewTableCell(fmt.Sprintf("\n  [%s]No findings yet.[-:-:-]",
 		t.TagTextPrimary)).SetSelectable(false))
-	h.queue.SetCell(1, 0, tview.NewTableCell(fmt.Sprintf("  [%s]Press[-:-:-] %s [%s]and choose Import a file, or Load the demo investigation.[-:-:-]",
-		t.TagMuted, renderKey(":", "", t), t.TagMuted)).SetSelectable(false))
+
+	drop := strings.TrimSpace(d.watcher.Dir)
+	if drop == "" {
+		drop = h.ui.watchedDir()
+	}
+	if drop != "" {
+		h.queue.SetCell(1, 0, tview.NewTableCell(fmt.Sprintf(
+			"  [%s]Drop OCSF JSON or JSONL into[-:-:-] [%s]%s[-:-:-]",
+			t.TagMuted, t.TagAccent, tview.Escape(shortenPath(drop, 48)))).SetSelectable(false))
+	}
+	h.queue.SetCell(2, 0, tview.NewTableCell(fmt.Sprintf(
+		"  [%s]or run[-:-:-] [%s]console-ir ingest <file>[-:-:-]",
+		t.TagMuted, t.TagAccent)).SetSelectable(false))
 }
 
 func orDash(s string) string {

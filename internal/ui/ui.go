@@ -452,6 +452,11 @@ type UI struct {
 	findings          []store.Finding
 	selectedFindingID string
 
+	// lastVisit and markSince drive the dashboard's new-since-you-looked mark.
+	// lastVisit is persisted; markSince is what it held when this visit began.
+	lastVisit time.Time
+	markSince time.Time
+
 	// pendingFindingID is a finding to select once the Triage list has loaded.
 	// It carries a selection across a screen change — Home's Enter, for one —
 	// and is cleared as soon as it is honoured or found to be missing.
@@ -736,6 +741,7 @@ func NewUI(ctx context.Context, store *store.Store, llmProvider llm.LLMProvider,
 	ui.themeName = uiSettings.Theme
 	ui.recentCases = uiSettings.RecentCases
 	ui.recentPivots = uiSettings.RecentPivots
+	ui.lastVisit = uiSettings.LastVisit
 	if !ui.hasTrueColor {
 		ui.theme = themeBasic()
 	} else {
