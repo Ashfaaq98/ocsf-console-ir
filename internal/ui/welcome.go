@@ -160,9 +160,15 @@ type welcomeView struct {
 	density welcomeDensity
 	// truecolor is whether this terminal can draw the wordmark's gradient.
 	truecolor bool
-	pending   WelcomeResult
-	loading   string
-	err       error
+
+	// The reveal. frame is the animation clock and is meaningless while
+	// revealing is false, which is when every part of the page is on screen.
+	revealing  bool
+	frame      int
+	revealDone chan struct{}
+	pending    WelcomeResult
+	loading    string
+	err        error
 
 	// Outcome, read by RunWelcome once the application stops.
 	result  WelcomeResult
@@ -187,6 +193,7 @@ func RunWelcome(opts WelcomeOptions) (WelcomeResult, error) {
 
 	v.app.SetRoot(v.root, true)
 	v.focusForState()
+	v.startReveal()
 
 	if err := v.app.Run(); err != nil {
 		return WelcomeResult{}, err
@@ -553,6 +560,11 @@ func (v *welcomeView) promptLabel() string {
 // keys its footer advertises, so nothing on this screen is reachable without
 // being shown.
 func (v *welcomeView) handleKey(ev *tcell.EventKey) *tcell.EventKey {
+	// Whatever the key was, it means the analyst is ready and the reveal is
+	// not. Finishing it here rather than in each branch means no key can be
+	// swallowed by an animation that happened to be running when it arrived.
+	v.finishReveal()
+
 	switch v.state {
 	case welcomeStateLoading:
 		// Work is in flight against the filesystem; the only safe answer is to
@@ -757,6 +769,9 @@ func (v *welcomeView) update(fn func()) {
 }
 
 func (v *welcomeView) stop() {
+	// Before the application, so the reveal's goroutine sees the screen going
+	// away rather than queueing an update nothing will ever run.
+	v.finishReveal()
 	if v.app != nil {
 		v.app.Stop()
 	}

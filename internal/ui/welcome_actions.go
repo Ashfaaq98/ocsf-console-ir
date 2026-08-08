@@ -67,19 +67,24 @@ func (v *welcomeView) actionCells() []welcomeCell {
 
 	for i, o := range welcomeOptions {
 		selected := i == v.cursor
-		out = append(out, actionCell(o.key, o.label, v.theme, selected))
+		rows := []welcomeCell{actionCell(o.key, o.label, v.theme, selected)}
 
-		if !details || o.detail == nil {
-			continue
+		if details && o.detail != nil {
+			if text := o.detail(v); text != "" {
+				rows = append(rows, detailCell(text, v.theme, selected))
+				// A blank between the pairs, so each detail reads as belonging
+				// to the label above it. Only where there are pairs: bare
+				// labels are a list, and double-spacing a list costs four rows
+				// to say nothing.
+				if i < len(welcomeOptions)-1 {
+					rows = append(rows, welcomeCell{})
+				}
+			}
 		}
-		text := o.detail(v)
-		if text == "" {
-			continue
-		}
-		out = append(out, detailCell(text, v.theme, selected))
-		if i < len(welcomeOptions)-1 {
-			out = append(out, welcomeCell{})
-		}
+
+		// One action per frame, so they arrive in a run down the column rather
+		// than all at once.
+		out = append(out, v.maskActions(rows, i)...)
 	}
 	return out
 }

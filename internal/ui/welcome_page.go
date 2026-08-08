@@ -276,18 +276,21 @@ func cellAt(cells []welcomeCell, i int) welcomeCell {
 // for a path.
 func (v *welcomeView) leftColumn() []welcomeCell {
 	t := v.theme
+
+	// The mark sweeps in character by character; everything below it arrives
+	// together once the mark is whole.
 	cells := v.wordmarkCells()
-	cells = append(cells,
-		welcomeCell{},
+	below := []welcomeCell{
+		{},
 		textCell(v.identityLine(), t.TagMuted),
-		welcomeCell{},
+		{},
 		textCell(welcomeDescription, t.TagTextPrimary),
-	)
+	}
 
 	// The privacy statement is the product's main claim about itself, so it is
 	// dropped only when there is genuinely no room left for it.
 	if v.density < densityMinimal {
-		cells = append(cells,
+		below = append(below,
 			welcomeCell{},
 			bulletCell(welcomePrivacyA, t.TagMuted),
 			bulletCell(welcomePrivacyB, t.TagMuted),
@@ -300,7 +303,7 @@ func (v *welcomeView) leftColumn() []welcomeCell {
 	// known exactly where all along.
 	if v.density < densityNoDatabase {
 		if path := shortenPath(v.opts.DBPath, welcomePathWidth); path != "" {
-			cells = append(cells,
+			below = append(below,
 				welcomeCell{},
 				textCell(welcomeDatabaseLeadA, t.TagMuted),
 				textCell(welcomeDatabaseLeadB, t.TagMuted),
@@ -308,7 +311,7 @@ func (v *welcomeView) leftColumn() []welcomeCell {
 			)
 		}
 	}
-	return cells
+	return append(cells, v.maskCells(below, welcomeBrandFrame)...)
 }
 
 // rightColumn is what this state is asking of the analyst.

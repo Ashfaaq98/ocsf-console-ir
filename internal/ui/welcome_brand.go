@@ -85,14 +85,27 @@ func (v *welcomeView) wordmarkCells() []welcomeCell {
 // colours bands into visible steps, which looks like a rendering fault on the
 // first screen — worse than the flat accent it replaced.
 func (v *welcomeView) paintWordmark(line string) string {
-	if !v.truecolor {
+	runes := []rune(line)
+	edge := v.sweepEdge(len(runes))
+
+	if !v.truecolor && edge < 0 {
 		return fmt.Sprintf("[%s]%s[-:-:-]", v.theme.TagAccent, tview.Escape(line))
 	}
 
-	runes := []rune(line)
 	var b strings.Builder
 	for i, r := range runes {
-		fmt.Fprintf(&b, "[%s]%c", tagColor(v.rampAt(rampFraction(i, len(runes)))), r)
+		switch {
+		case edge >= 0 && i > edge:
+			// Not arrived. A blank rather than nothing, so the mark occupies
+			// its full width from the first frame and the page never reflows.
+			b.WriteRune(' ')
+		case edge >= 0 && i == edge:
+			fmt.Fprintf(&b, "[%s:-:b]%c[-:-:-]", tagColor(v.glowColor()), r)
+		case v.truecolor:
+			fmt.Fprintf(&b, "[%s]%c", tagColor(v.rampAt(rampFraction(i, len(runes)))), r)
+		default:
+			fmt.Fprintf(&b, "[%s]%c", v.theme.TagAccent, r)
+		}
 	}
 	b.WriteString("[-:-:-]")
 	return b.String()
