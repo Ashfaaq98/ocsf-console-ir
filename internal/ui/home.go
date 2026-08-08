@@ -74,6 +74,9 @@ type homeData struct {
 	observables    int
 	observablesErr error
 
+	// volume is the last day's event count per hour, oldest first.
+	volume []int
+
 	queue    []store.Finding
 	queueErr error
 	// queueTotal is how many open findings there are, so the panel can say what
@@ -320,11 +323,16 @@ func (h *homeView) load() {
 	})
 
 	run(panelEvidence, func() {
-		n, err := st.CountEventsToday(ctx, time.Now())
+		now := time.Now()
+		n, err := st.CountEventsToday(ctx, now)
 		o, oerr := st.CountObservables(ctx)
+		// The shape of the day, which the total cannot carry. A failure here
+		// costs the sparkline and nothing else.
+		v, _ := st.EventVolumeBuckets(ctx, now, homeVolumeHours)
 		h.set(func(d *homeData) {
 			d.eventsToday, d.eventsTodayErr = n, err
 			d.observables, d.observablesErr = o, oerr
+			d.volume = v
 		})
 	})
 
@@ -457,8 +465,10 @@ func (h *homeView) renderCards() {
 		// beside "12" disagreed with itself about how counts are written.
 		h.cardBox[0].SetText(h.homeCard(
 			metric("", strconv.Itoa(d.findings.Total),
-				fmt.Sprintf("%d critical · %d high", d.findings.Critical, d.findings.High), tone, t),
-			fmt.Sprintf("[%s]%d medium · %d low[-:-:-]", t.TagMuted, d.findings.Medium, d.findings.Low)))
+				h.severityBar(d.findings, homeSeverityBarWidth), tone, t),
+			fmt.Sprintf("[%s]%d critical · %d high · %d medium · %d low[-:-:-]",
+				t.TagMuted, d.findings.Critical, d.findings.High,
+				d.findings.Medium, d.findings.Low)))
 	}
 
 	switch {
@@ -497,8 +507,9 @@ func (h *homeView) renderCards() {
 // spending a third of the card to report that nothing is happening.
 func (h *homeView) pulseTop(d homeData) string {
 	t := h.ui.theme
-	line := fmt.Sprintf("[%s:-:b]%s[-:-:-] [%s]events[-:-:-]   [%s]%s indicators[-:-:-]",
+	line := fmt.Sprintf("[%s:-:b]%s[-:-:-] [%s]events[-:-:-] [%s]%s[-:-:-]  [%s]%s indicators[-:-:-]",
 		t.TagTextPrimary, humanCount(d.eventsToday), t.TagMuted,
+		t.TagAccent, sparkline(d.volume, homeSparkWidth),
 		t.TagMuted, humanCount(d.observables))
 	if !d.enrichment.Idle() {
 		line += "   " + h.enrichmentText(d)
@@ -797,9 +808,19 @@ const (
 	// screen. One line each, and the second line's content moves into the first.
 	homeCardRowsCompact = 3
 
-	// Below this height the metric cards go, after the pulse. Their numbers are
-	// repeated in the pulse and the queue speaks for itself.
+	// Below this height the metric cards go. The queue speaks for itself.
 	homeShortCardsBelow = 20
+
+	// homeVolumeHours is the sparkline's window: a day, so the shape covers a
+	// shift handover as well as the hour just gone.
+	homeVolumeHours = 24
+
+	// homeSparkWidth and homeSeverityBarWidth are drawn widths. Both sit inside
+	// a card that is a third of the screen, so they are fixed rather than
+	// elastic — a chart that changes resolution with the window is a chart you
+	// cannot compare against the one you saw a minute ago.
+	homeSparkWidth       = 16
+	homeSeverityBarWidth = 14
 )
 
 // cardRows is the height of the metric row, which stacks when compact.
