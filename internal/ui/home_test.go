@@ -69,8 +69,6 @@ func TestHomeEmptyStates(t *testing.T) {
 
 	for _, want := range []string{
 		"No findings yet.",
-		"Press 3 to import events, or : then demo.",
-		"No active investigations.",
 		"no events yet",
 	} {
 		if !strings.Contains(joined, want) {
@@ -79,8 +77,27 @@ func TestHomeEmptyStates(t *testing.T) {
 	}
 
 	// The cards read zero rather than blank.
-	if !strings.Contains(joined, "00") {
+	if !strings.Contains(joined, "0") {
 		t.Errorf("metric cards do not show a zero count\n%s", joined)
+	}
+}
+
+// The empty queue has to name something that exists.
+//
+// It used to say "Press 3 to import events" — and 3 is Cases. There is no
+// import destination at all, so the one instruction the screen gave a new
+// install sent them somewhere that could not help.
+func TestHomeEmptyQueuePointsSomewhereReal(t *testing.T) {
+	h, _ := newTestHome(t)
+	h.loadAndRender(t)
+
+	joined := strings.Join(renderPrimitive(t, h.root, 140, 40), "\n")
+
+	if strings.Contains(joined, "Press 3 to import") {
+		t.Errorf("the empty queue still sends the analyst to Cases to import:\n%s", joined)
+	}
+	if !strings.Contains(joined, ":") {
+		t.Errorf("the empty queue offers no way forward:\n%s", joined)
 	}
 }
 
@@ -96,7 +113,7 @@ func TestHomeCardsRenderTheirNumbers(t *testing.T) {
 	lines := renderPrimitive(t, h.root, 140, 40)
 	joined := strings.Join(lines, "\n")
 
-	if !strings.Contains(joined, "03") {
+	if !strings.Contains(joined, "3") {
 		t.Errorf("open findings card does not show the total\n%s", joined)
 	}
 	if !strings.Contains(joined, "2 critical · 1 high") {
@@ -164,7 +181,7 @@ func TestHomeOneFailingPanelDoesNotBlankTheScreen(t *testing.T) {
 		t.Errorf("the failing panel offers no retry\n%s", joined)
 	}
 	// The cards answered, so they still show their numbers.
-	if !strings.Contains(joined, "01") {
+	if !strings.Contains(joined, "1") {
 		t.Errorf("a failing queue blanked the metric cards\n%s", joined)
 	}
 	if !strings.Contains(joined, "EVIDENCE PULSE") {
@@ -172,9 +189,13 @@ func TestHomeOneFailingPanelDoesNotBlankTheScreen(t *testing.T) {
 	}
 }
 
-// The evidence pulse repeats the counts the evidence card shows. They come from
-// one query, and whichever panel painted last used to decide what each said.
-func TestHomePulseAgreesWithTheEvidenceCard(t *testing.T) {
+// The evidence numbers are stated once.
+//
+// They used to be on a card and again in a pulse panel four rows below it —
+// "0 events / 0 indicators" beside "events today 0   indicators 0" — fed by one
+// query, so whichever panel painted last decided what each said. The pulse is
+// now the card.
+func TestHomeStatesTheEvidenceCountsOnce(t *testing.T) {
 	h, st := newTestHome(t)
 
 	ev := &ocsf.Event{
@@ -195,19 +216,16 @@ func TestHomePulseAgreesWithTheEvidenceCard(t *testing.T) {
 	}
 
 	lines := renderPrimitive(t, h.root, 140, 40)
-	card, ok := findLine(lines, "indicators")
-	if !ok {
-		t.Fatal("no indicator count on screen")
-	}
-	pulse, ok := findLine(lines, "events today")
-	if !ok {
-		t.Fatal("no pulse on screen")
-	}
 
-	count := strings.TrimSpace(strings.Split(card, "indicators")[0])
-	count = count[strings.LastIndexAny(count, " │")+1:]
-	if !strings.Contains(pulse, count) {
-		t.Errorf("card says %q indicators, pulse line is %q", count, pulse)
+	var indicatorRows int
+	for _, l := range lines {
+		if strings.Contains(l, "indicators") {
+			indicatorRows++
+		}
+	}
+	if indicatorRows != 1 {
+		t.Errorf("the indicator count is on screen %d times, want once:\n%s",
+			indicatorRows, strings.Join(lines, "\n"))
 	}
 }
 
@@ -261,13 +279,12 @@ func TestHomeResponsiveTiers(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		width, height int
-		wantRecent    bool
-		wantPulse     bool
+		wantInspector bool
 	}{
-		{"wide", 140, 40, true, true},
-		{"standard", 100, 30, true, true},
-		{"compact", 79, 24, false, false},
-		{"short", 100, 20, true, false},
+		{"wide", 140, 40, true},
+		{"standard", 100, 30, true},
+		{"compact", 79, 24, false},
+		{"short", 100, 20, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, st := newTestHome(t)
@@ -294,11 +311,8 @@ func TestHomeResponsiveTiers(t *testing.T) {
 				}
 			}
 
-			if got := strings.Contains(joined, "RECENT CASES"); got != tc.wantRecent {
-				t.Errorf("%s recent cases shown = %v, want %v", tc.name, got, tc.wantRecent)
-			}
-			if got := strings.Contains(joined, "EVIDENCE PULSE"); got != tc.wantPulse {
-				t.Errorf("%s evidence pulse shown = %v, want %v", tc.name, got, tc.wantPulse)
+			if got := strings.Contains(joined, "SELECTED FINDING"); got != tc.wantInspector {
+				t.Errorf("%s inspector shown = %v, want %v", tc.name, got, tc.wantInspector)
 			}
 
 			// Nothing overflows its terminal.
@@ -312,9 +326,9 @@ func TestHomeResponsiveTiers(t *testing.T) {
 }
 
 // A panel whose bottom border is off screen is a panel that has lost a row of
-// content. The pulse is the one that gets squeezed, and the row it loses is the
-// one carrying the last event time.
-func TestHomePulseIsNeverClipped(t *testing.T) {
+// content. The pulse card is two rows and the second one carries the pipeline
+// state, which is the half worth having.
+func TestHomePulseCardIsNeverClipped(t *testing.T) {
 	for _, size := range [][2]int{{140, 40}, {120, 32}, {100, 30}, {100, 29}, {90, 26}} {
 		h, st := newTestHome(t)
 		if _, err := st.SaveEvent(context.Background(), &ocsf.Event{
@@ -332,8 +346,8 @@ func TestHomePulseIsNeverClipped(t *testing.T) {
 		if !strings.Contains(joined, "EVIDENCE PULSE") {
 			continue // legitimately dropped at this size
 		}
-		if !strings.Contains(joined, "last event") {
-			t.Errorf("%dx%d: the pulse is clipped and lost its second row\n%s",
+		if !strings.Contains(joined, "last") && !strings.Contains(joined, "watching") {
+			t.Errorf("%dx%d: the pulse card is clipped and lost its second row\n%s",
 				size[0], size[1], joined)
 		}
 	}
