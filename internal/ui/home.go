@@ -136,6 +136,12 @@ type homeView struct {
 	// queueRows is the height the queue was last laid out at, including its
 	// border. The query asks for what fits.
 	queueRows int
+	// width is the width the screen was last laid out at, so panels can wrap
+	// text without asking a widget for a rect that is a frame out of date.
+	width int
+
+	// inspect holds the selected finding's context and its debounce timer.
+	inspect homeInspector
 
 	stop chan struct{}
 	once sync.Once
@@ -205,7 +211,7 @@ func newHomeView(ui *UI) *homeView {
 
 	// Every number on this screen is a shortcut to the work it counts.
 	h.queue.SetSelectedFunc(func(row, _ int) { h.openSelected() })
-	h.queue.SetSelectionChangedFunc(func(row, _ int) { h.renderInspector() })
+	h.queue.SetSelectionChangedFunc(func(row, _ int) { h.selectionChanged() })
 
 	h.rebuild(100, 30)
 	h.renderAll()
@@ -485,12 +491,19 @@ func (h *homeView) renderCards() {
 	}
 }
 
-// pulseTop is what arrived today.
+// pulseTop is what arrived today, and the enrichment backlog when there is one.
+//
+// Enrichment says nothing while it is idle, so it is absent then rather than
+// spending a third of the card to report that nothing is happening.
 func (h *homeView) pulseTop(d homeData) string {
 	t := h.ui.theme
-	return fmt.Sprintf("[%s:-:b]%s[-:-:-] [%s]events[-:-:-]   [%s]%s indicators[-:-:-]",
+	line := fmt.Sprintf("[%s:-:b]%s[-:-:-] [%s]events[-:-:-]   [%s]%s indicators[-:-:-]",
 		t.TagTextPrimary, humanCount(d.eventsToday), t.TagMuted,
 		t.TagMuted, humanCount(d.observables))
+	if !d.enrichment.Idle() {
+		line += "   " + h.enrichmentText(d)
+	}
+	return line
 }
 
 // pulseBottom is the state of the pipeline that produced it.
@@ -499,7 +512,7 @@ func (h *homeView) pulseTop(d homeData) string {
 // every refresh and rendered nowhere, so a failing watcher showed a warning
 // glyph and a path — the symptom, never the reason.
 func (h *homeView) pulseBottom(d homeData) string {
-	return fmt.Sprintf("%s   %s   %s", h.lastEventText(d), h.watcherText(d), h.enrichmentText(d))
+	return fmt.Sprintf("%s   %s", h.lastEventText(d), h.watcherText(d))
 }
 
 func (h *homeView) lastEventText(d homeData) string {
@@ -538,7 +551,7 @@ func (h *homeView) watcherText(d homeData) string {
 func (h *homeView) enrichmentText(d homeData) string {
 	t := h.ui.theme
 	if d.enrichment.Idle() {
-		return fmt.Sprintf("[%s]enrichment idle[-:-:-]", t.TagMuted)
+		return ""
 	}
 	parts := []string{}
 	if d.enrichment.Pending > 0 {
@@ -652,51 +665,6 @@ func (h *homeView) renderEmptyQueue() {
 		t.TagMuted, renderKey(":", "", t), t.TagMuted)).SetSelectable(false))
 }
 
-// renderInspector paints the selected finding.
-//
-// The order is Triage's order (§7), so a finding reads the same wherever it is
-// seen, and the human explanation comes before the raw record — never the other
-// way round.
-func (h *homeView) renderInspector() {
-	_, loading := h.snapshot()
-	t := h.ui.theme
-
-	if loading[panelQueue] {
-		h.inspector.SetText(" " + loadingState("", t))
-		return
-	}
-	f := h.selectedFinding()
-	if f == nil {
-		h.inspector.SetText(fmt.Sprintf("\n [%s]Select a finding to see why it matters.[-:-:-]", t.TagMuted))
-		return
-	}
-
-	var b strings.Builder
-	fmt.Fprintf(&b, " [%s:-:b]%s[-:-:-]\n", t.TagTextPrimary, tview.Escape(f.Title))
-	fmt.Fprintf(&b, " [%s]risk[-:-:-] %s   %s   [%s]%s[-:-:-]\n",
-		t.TagMuted, fmt.Sprintf("[%s]%d[-:-:-]", riskTag(f.RiskScore, t), f.RiskScore),
-		formatSeverityBadge(severityLabel(f.SeverityID), t),
-		t.TagTextPrimary, tview.Escape(orDash(f.Status)))
-
-	fmt.Fprintf(&b, " [%s]analytic[-:-:-] %s      [%s]first seen[-:-:-] %s   [%s]last seen[-:-:-] %s\n",
-		t.TagMuted, tview.Escape(orDash(f.AnalyticName)),
-		t.TagMuted, stamp(f.FirstSeen), t.TagMuted, stamp(f.LastSeen))
-
-	why := strings.TrimSpace(f.Message)
-	if why == "" {
-		why = "No description was supplied by the producer."
-	}
-	fmt.Fprintf(&b, "\n [%s]WHY IT MATTERS[-:-:-]  [%s]%s[-:-:-]\n",
-		t.TagMuted, t.TagTextPrimary, tview.Escape(truncate(why, 110)))
-
-	fmt.Fprintf(&b, " [%s]EVIDENCE[-:-:-] %d   [%s]CASE[-:-:-] %s        [%s]e[-:-:-] escalate   [%s]a[-:-:-] add to case   [%s]j[-:-:-] raw OCSF",
-		t.TagMuted, evidenceCount(f.EvidencesJSON),
-		t.TagMuted, tview.Escape(orNone(f.CaseID)),
-		t.TagAccent, t.TagAccent, t.TagAccent)
-
-	h.inspector.SetText(b.String())
-}
-
 func orDash(s string) string {
 	if strings.TrimSpace(s) == "" {
 		return "—"
@@ -751,6 +719,7 @@ func (h *homeView) relayout(width, height int) {
 // shared by every screen; Home used to carry a second bar of its own above it.
 func (h *homeView) rebuild(width, height int) {
 	h.mode, h.short = GetLayoutMode(width, height)
+	h.width = width
 
 	showInspector := !h.short && h.mode != LayoutCompact
 	showCards := !(h.short && height < homeShortCardsBelow)
