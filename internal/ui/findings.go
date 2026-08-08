@@ -22,9 +22,8 @@ const contextFindings = "FINDINGS"
 // Findings are the analyst's unit of work: a queue of a dozen detections rather
 // than thousands of log lines. ALL EVENTS remains available for raw-log triage.
 func (ui *UI) jumpToFindings() {
-	ui.showFindings = true
-	ui.showAll = false
-	ui.selectedCaseID = ""
+	// The context flags come from the destination table via beginScreen. Set
+	// here as well, four functions kept four copies of the same three lines.
 	ui.restoreEventsView()
 
 	ui.app.SetFocus(ui.eventList)
@@ -34,7 +33,7 @@ func (ui *UI) jumpToFindings() {
 		SetTextColor(ui.theme.TableRowMuted))
 	ui.setStatusDirect("[%s]Loading findings...[-:-:-]", ui.theme.TagWarning)
 
-	go ui.loadFindings()
+	ui.spawnLoad(ui.loadFindings)
 }
 
 // triageColumns returns the visible columns for the current width.
@@ -583,7 +582,7 @@ func (ui *UI) showFindingVerdictModal() {
 // toggleFindingsScope switches between open findings and everything.
 func (ui *UI) toggleFindingsScope() {
 	ui.findingsOpenOnly = !ui.findingsOpenOnly
-	go ui.loadFindings()
+	ui.spawnLoad(ui.loadFindings)
 }
 
 // applyFormTheme styles a modal form consistently with the rest of the TUI.
@@ -721,7 +720,7 @@ func (ui *UI) repaintCurrentList() {
 	// Home is not a list. Restyling it means rebuilding it against the new
 	// theme, which is what re-entering it does.
 	if ui.home != nil && ui.onHome() {
-		ui.showAnalystHome()
+		ui.enterScreen(destHome)
 		return
 	}
 	// The table may not exist yet: setTheme runs while restoring the persisted
@@ -749,7 +748,7 @@ func (ui *UI) refreshCurrentView(source string) {
 		return
 	}
 	if ui.showFindings {
-		go ui.loadFindings()
+		ui.spawnLoad(ui.loadFindings)
 		return
 	}
 	ui.scheduleEventsReload(source)
@@ -763,7 +762,7 @@ func (ui *UI) refreshCurrentView(source string) {
 func (ui *UI) toggleTriageChip(id chipID) {
 	ui.triageFilterState().toggle(id)
 	ui.repaintTriageChrome()
-	go ui.loadFindings()
+	ui.spawnLoad(ui.loadFindings)
 }
 
 // clearTriageFilters returns to the default view.
@@ -772,7 +771,7 @@ func (ui *UI) clearTriageFilters() {
 	f.applyView(0)
 	f.search = ""
 	ui.repaintTriageChrome()
-	go ui.loadFindings()
+	ui.spawnLoad(ui.loadFindings)
 }
 
 // cycleTriageView moves to the next saved view.
@@ -780,5 +779,5 @@ func (ui *UI) cycleTriageView() {
 	ui.triageFilterState().cycleView()
 	ui.repaintTriageChrome()
 	ui.setStatusDirect("[%s]View: %s[-:-:-]", ui.theme.TagAccent, ui.triageFilterState().viewName())
-	go ui.loadFindings()
+	ui.spawnLoad(ui.loadFindings)
 }

@@ -38,6 +38,14 @@ type destination struct {
 	name string
 	// desc is one line, used by the command palette and the key reference.
 	desc string
+
+	// showFindings and showAll are the two flags that decide what the shared
+	// events table is showing. They live here rather than being set by hand at
+	// the top of each switchTo* function, where four copies could and did
+	// disagree about what a screen is.
+	showFindings bool
+	showAll      bool
+
 	open func(*UI)
 }
 
@@ -46,20 +54,42 @@ type destination struct {
 // A function rather than a package variable: the handlers are methods that
 // transitively read this table when they repaint the rail, and Go rejects that
 // as an initialisation cycle at package level.
+// The order follows the work: triage a finding, escalate it into a case, work
+// the case. Events is the corroboration surface you reach from a finding or a
+// case rather than the second place you go, so it sits behind Cases.
 func destinations() []destination {
 	return []destination{
-		{destTriage, '1', "Triage", "Ranked queue of open findings", (*UI).jumpToFindings},
-		{destEvents, '2', "Events", "Corroborating OCSF events", (*UI).switchToAllEvents},
-		{destCases, '3', "Cases", "Investigations and briefings", (*UI).switchToCases},
-		{destIndicators, '4', "Indicators", "Observables and watchlists", (*UI).switchToIndicators},
-		{destReports, '5', "Reports", "Exports and case bundles", (*UI).switchToReports},
+		{destTriage, '1', "Triage", "Ranked queue of open findings",
+			true, false, (*UI).jumpToFindings},
+		{destCases, '2', "Cases", "Investigations and briefings",
+			false, false, (*UI).switchToCases},
+		{destEvents, '3', "Events", "Corroborating OCSF events",
+			false, true, (*UI).switchToAllEvents},
+		{destIndicators, '4', "Indicators", "Cross-case observables",
+			false, false, (*UI).switchToIndicators},
+		{destReports, '5', "Reports", "Exports and case bundles",
+			false, false, (*UI).switchToReports},
 	}
+}
+
+// lookupDestinationByID returns a destination by identity.
+func lookupDestinationByID(id destinationID) (destination, bool) {
+	if id == destHome {
+		return homeDestination(), true
+	}
+	for _, d := range destinations() {
+		if d.id == id {
+			return d, true
+		}
+	}
+	return destination{}, false
 }
 
 // homeDestination is Home's entry, kept out of the numbered list but present in
 // the palette and the key reference so it is never an undocumented screen.
 func homeDestination() destination {
-	return destination{destHome, 0, "Home", "What needs attention now", (*UI).showAnalystHome}
+	return destination{destHome, 0, "Home", "What needs attention now",
+		false, false, (*UI).showAnalystHome}
 }
 
 // lookupDestination returns the destination bound to a key.
@@ -82,9 +112,79 @@ func (ui *UI) navigate(key rune) bool {
 	if !ok {
 		return false
 	}
-	ui.setDestination(d.id)
-	d.open(ui)
+	ui.enterScreen(d.id)
 	return true
+}
+
+// enterScreen is the one way to arrive at a screen.
+//
+// Every route in — a digit, a letter shortcut, Esc, the command palette, a
+// pivot, a cleared filter — goes through here, so none of them can forget to
+// mark the rail or to clear what the previous screen left behind. Both were
+// forgotten routinely: reaching Events with `A` left the rail marking Triage,
+// and Events opened titled "FINDINGS · N of N" with the previous finding still
+// in the inspector.
+func (ui *UI) enterScreen(id destinationID) {
+	d, ok := lookupDestinationByID(id)
+	if !ok {
+		return
+	}
+	ui.beginScreen(id)
+	d.open(ui)
+}
+
+// beginScreen does everything except open the screen.
+//
+// Separate from enterScreen for the one caller that has to run its own load:
+// pivotTo assigns the pivot it is about to display, and calling the destination's
+// own open would immediately discard it.
+func (ui *UI) beginScreen(id destinationID) {
+	d, ok := lookupDestinationByID(id)
+	if !ok {
+		return
+	}
+	ui.leaveScreen()
+	ui.showFindings = d.showFindings
+	ui.showAll = d.showAll
+	ui.selectedCaseID = ""
+	ui.setDestination(id)
+}
+
+// leaveScreen clears everything the outgoing screen leaves in shared state.
+//
+// Triage and Events are one table and one detail pane wearing two names, and
+// the switch used to reset four fields out of a dozen. Everything below either
+// belongs to whichever of the two was last shown, or describes a query that no
+// longer applies; a screen that inherits any of it is a screen describing the
+// one before it.
+func (ui *UI) leaveScreen() {
+	if ui.eventDetail != nil {
+		ui.eventDetail.SetTitle(" Details ")
+		ui.eventDetail.SetText("")
+	}
+	if ui.eventList != nil {
+		ui.eventList.SetTitle("")
+	}
+
+	// Triage's result set and its selection.
+	ui.findings = nil
+	ui.findingsErr = nil
+	ui.findingsTotal = 0
+	ui.findingsUnfiltered = 0
+	ui.selectedFindingID = ""
+	if ui.triageSel != nil {
+		ui.triageSel.clear()
+	}
+
+	// The events page, its clustering, and the queries that produced it.
+	ui.events = nil
+	ui.selectedEventID = ""
+	ui.selectedEventIDs = nil
+	ui.eventClusters = nil
+	ui.eventAtRow = nil
+	ui.expandedCluster = ""
+	ui.searchQuery = ""
+	ui.pivot = nil
 }
 
 // setDestination records where the analyst now is, so the rail can mark it.
@@ -193,7 +293,7 @@ func (ui *UI) destinationCommands() []CommandItem {
 			Name:        "go " + strings.ToLower(d.name),
 			Shortcut:    shortcut,
 			Description: d.desc,
-			Action:      func() { ui.setDestination(d.id); d.open(ui) },
+			Action:      func() { ui.enterScreen(d.id) },
 		})
 	}
 	return out

@@ -446,6 +446,9 @@ type UI struct {
 	lastLoadStart int64                       // unix nano timestamp of last load start (for watchdog)
 	showAll       bool                        // when true, sidebar selection is "ALL EVENTS"
 	queryStates   map[string]*EventQueryState // per-context (ALL or caseID) filter+pagination
+	// loads counts the screen loads started and not yet finished.
+	loads sync.WaitGroup
+
 	// queryStatesMu guards the map itself, not the states in it.
 	//
 	// Load goroutines reach it through setStatus → buildStatusMain →
@@ -840,7 +843,7 @@ func (ui *UI) Start(ctx context.Context) error {
 			// changed with the contents of the database, so there was no screen
 			// to learn and no stable place to return to.
 			ui.queueUpdate(func() {
-				ui.showAnalystHome()
+				ui.enterScreen(destHome)
 			})
 		}
 	}()
@@ -1194,7 +1197,7 @@ func (ui *UI) onSidebarSelect(index int) {
 	if ui.logger != nil {
 		ui.logger.Printf("onSidebarSelect: starting loadCaseEvents (caseID=%s, filterStart=%v, filterEnd=%v)", ui.selectedCaseID, ui.filterStart, ui.filterEnd)
 	}
-	go ui.loadCaseEvents()
+	ui.spawnLoad(ui.loadCaseEvents)
 }
 
 // screenKeys is the current screen's own key handler, or nil where the screen
@@ -1204,11 +1207,39 @@ func (ui *UI) onSidebarSelect(index int) {
 // handler claims the key; returning the event passes it on to the global
 // bindings below.
 func (ui *UI) screenKeys() func(*tcell.EventKey) *tcell.EventKey {
-	if ui.destination == destHome && ui.home != nil {
-		return ui.home.handleKey
+	switch ui.destination {
+	case destHome:
+		if ui.home != nil {
+			return ui.home.handleKey
+		}
+	case destTriage:
+		return ui.triageKeys
+	case destEvents:
+		return ui.eventsKeys
+	case destCases:
+		return ui.casesKeys
+	case destIndicators:
+		return ui.indicatorKeys
 	}
 	return nil
 }
+
+// Each screen's own key handler.
+//
+// Returning the event passes it on to the global bindings below; returning nil
+// claims it. They start empty and are filled in per screen, which is what makes
+// each screen's repair revertable on its own — a handler that claims nothing
+// leaves that screen behaving exactly as it did before.
+//
+// Reports is deliberately absent: it is a static panel with no keys of its own.
+
+func (ui *UI) triageKeys(ev *tcell.EventKey) *tcell.EventKey { return ev }
+
+func (ui *UI) eventsKeys(ev *tcell.EventKey) *tcell.EventKey { return ev }
+
+func (ui *UI) casesKeys(ev *tcell.EventKey) *tcell.EventKey { return ev }
+
+func (ui *UI) indicatorKeys(ev *tcell.EventKey) *tcell.EventKey { return ev }
 
 // setupKeybindings sets up global keybindings
 func (ui *UI) setupKeybindings() {
@@ -1281,7 +1312,7 @@ func (ui *UI) setupKeybindings() {
 				ui.setStatusDirect("[%s]Ready[-:-:-]", ui.theme.TagAccent)
 				return nil
 			}
-			ui.showAnalystHome()
+			ui.enterScreen(destHome)
 			return nil
 		case tcell.KeyTab:
 			ui.cycleFocus()
@@ -1379,7 +1410,7 @@ func (ui *UI) setupKeybindings() {
 					if s.pageIndex+1 < maxPages {
 						s.pageIndex++
 						ui.setStatusDirect("[%s]Next page (%d/%d)[-:-:-]", ui.theme.TagAccent, s.pageIndex+1, maxPages)
-						go ui.scheduleEventsReload("page:Next")
+						ui.spawnLoad(func() { ui.scheduleEventsReload("page:Next") })
 					} else {
 						ui.setStatusDirect("[%s]Already at last page (%d/%d)[-:-:-]", ui.theme.TagMuted, s.pageIndex+1, maxPages)
 					}
@@ -1405,7 +1436,7 @@ func (ui *UI) setupKeybindings() {
 							}
 						}
 						ui.setStatusDirect("[%s]Prev page (%d/%d)[-:-:-]", ui.theme.TagAccent, s.pageIndex+1, maxPages)
-						go ui.scheduleEventsReload("page:Prev")
+						ui.spawnLoad(func() { ui.scheduleEventsReload("page:Prev") })
 					} else {
 						ui.setStatusDirect("[%s]Already at first page (1/?) [-:-:-]", ui.theme.TagMuted)
 					}
@@ -1480,7 +1511,7 @@ func (ui *UI) setupKeybindings() {
 				return nil
 			case 'D':
 				// Quick-jump to the findings (detections) triage queue.
-				ui.jumpToFindings()
+				ui.enterScreen(destTriage)
 				return nil
 			case 'v':
 				if ui.showFindings {
@@ -1535,16 +1566,16 @@ func (ui *UI) setupKeybindings() {
 				return nil
 			case 'A':
 				// Quick-jump to ALL EVENTS from anywhere (overview panel is non-selectable)
-				ui.switchToAllEvents()
+				ui.enterScreen(destEvents)
 				return nil
 			case 'C':
-				ui.switchToCases()
+				ui.enterScreen(destCases)
 				return nil
 			case 'I':
-				ui.switchToIndicators()
+				ui.enterScreen(destIndicators)
 				return nil
 			case 'R':
-				ui.switchToReports()
+				ui.enterScreen(destReports)
 				return nil
 			case 'd':
 				// Context-sensitive delete:
@@ -2210,10 +2241,31 @@ func (ui *UI) showCaseSummary() {
 		return
 	}
 
+	// The constructor falls back to a local stub, so this is normally set — but
+	// it is also assigned from the provider settings modal, and a summary is
+	// not worth a nil dereference on the one path that could clear it.
+	if ui.llm == nil {
+		ui.setStatus("[%s]No LLM provider configured — press L to set one up[-:-:-]", ui.theme.TagWarning)
+		return
+	}
+
 	ui.setStatus("[%s]Generating case summary...[-:-:-]", ui.theme.TagWarning)
 
+	caseID := selectedCase.ID
 	go func() {
-		summary, err := ui.llm.SummarizeCase(ui.ctx, *selectedCase, ui.events)
+		// The case's own events, not whatever the events screen last loaded.
+		// ui.events belongs to a different screen, is empty on the one this key
+		// is pressed from, and is cleared outright when a screen changes — so
+		// the summary was written from either nothing or the wrong evidence.
+		events, err := ui.store.GetCaseEventMembers(ui.ctx, caseID)
+		if err != nil {
+			ui.queueUpdate(func() {
+				ui.setStatusDirect("[%s]Could not read the case's events: %v[-:-:-]", ui.theme.TagError, err)
+			})
+			return
+		}
+
+		summary, err := ui.llm.SummarizeCase(ui.ctx, *selectedCase, events)
 		if err != nil {
 			ui.queueUpdate(func() {
 				ui.setStatusDirect("[%s]Error generating summary: %v[-:-:-]", ui.theme.TagError, err)
@@ -3380,7 +3432,7 @@ func (ui *UI) createCaseWithEvents(title, description, severity, assignedTo stri
 					ui.sidebar.SetCurrentItem(targetIndex)
 				}
 				// Load events for the new case asynchronously
-				go ui.loadCaseEvents()
+				ui.spawnLoad(ui.loadCaseEvents)
 
 				if errorCount > 0 {
 					ui.setStatusDirect("[%s]Case created with %d events (%d errors)[-:-:-]", ui.theme.TagWarning, successCount, errorCount)
@@ -3454,7 +3506,7 @@ func (ui *UI) addEventsToCase(caseNumberStr string) {
 					ui.sidebar.SetCurrentItem(targetIndex)
 				}
 				// Reload events for the selected case
-				go ui.loadCaseEvents()
+				ui.spawnLoad(ui.loadCaseEvents)
 
 				if errorCount > 0 {
 					ui.setStatusDirect("[%s]Added %d events to case (%d errors)[-:-:-]", ui.theme.TagWarning, successCount, errorCount)
@@ -3719,7 +3771,7 @@ func (ui *UI) showCombinedFilterModal() {
 
 		ui.restoreMainLayout()
 		ui.setStatusDirect("[%s]Applying filters...[-:-:-]", ui.theme.TagAccent)
-		go ui.scheduleEventsReload("filter:ApplyCombinedDropdown")
+		ui.spawnLoad(func() { ui.scheduleEventsReload("filter:ApplyCombinedDropdown") })
 	})
 	form.AddButton("Clear", func() {
 		ui.restoreMainLayout()
@@ -3782,7 +3834,7 @@ func (ui *UI) clearCurrentContextFilters() {
 	ui.filterEnd = time.Time{}
 
 	ui.setStatusDirect("[%s]Filters cleared for current context[-:-:-]", ui.theme.TagAccent)
-	go ui.scheduleEventsReload("filter:ClearCombined")
+	ui.spawnLoad(func() { ui.scheduleEventsReload("filter:ClearCombined") })
 }
 
 // showMultiSelectModal opens a checkbox modal for multi-select and returns to a parent primitive on close.
@@ -3878,12 +3930,12 @@ func (ui *UI) scheduleEventsReload(source string) {
 				if ui.logger != nil {
 					ui.logger.Printf("scheduleEventsReload: dispatching deferred loadCaseEvents")
 				}
-				go ui.loadCaseEvents()
+				ui.spawnLoad(ui.loadCaseEvents)
 			} else {
 				if ui.logger != nil {
 					ui.logger.Printf("scheduleEventsReload: dispatching deferred loadAllEvents")
 				}
-				go ui.loadAllEvents()
+				ui.spawnLoad(ui.loadAllEvents)
 			}
 		}()
 		return
@@ -3894,12 +3946,12 @@ func (ui *UI) scheduleEventsReload(source string) {
 		if ui.logger != nil {
 			ui.logger.Printf("scheduleEventsReload: dispatching immediate loadCaseEvents")
 		}
-		go ui.loadCaseEvents()
+		ui.spawnLoad(ui.loadCaseEvents)
 	} else {
 		if ui.logger != nil {
 			ui.logger.Printf("scheduleEventsReload: dispatching immediate loadAllEvents")
 		}
-		go ui.loadAllEvents()
+		ui.spawnLoad(ui.loadAllEvents)
 	}
 }
 
@@ -4176,7 +4228,7 @@ func (ui *UI) showDeleteCaseConfirm() {
 				ui.selectedCaseID = ""
 				ui.showAll = true
 				ui.app.SetFocus(ui.eventList)
-				go ui.loadAllEvents()
+				ui.spawnLoad(ui.loadAllEvents)
 				ui.setStatusDirect("[%s]Case deleted. Events moved to ALL EVENTS.[-:-:-]", ui.theme.TagSuccess)
 			})
 		}()
@@ -4496,7 +4548,7 @@ func (ui *UI) showDeleteEventsConfirm(ids []string) {
 				ui.restoreMainLayout()
 				ui.selectedEventIDs = make(map[string]bool)
 				// Reload events for current context
-				go ui.scheduleEventsReload("delete:events")
+				ui.spawnLoad(func() { ui.scheduleEventsReload("delete:events") })
 				ui.setStatusDirect("[%s]Deleted %d event(s)[-:-:-]", ui.theme.TagSuccess, len(idsCopy))
 			})
 		}(append([]string(nil), ids...))
@@ -4795,7 +4847,7 @@ func (ui *UI) RefreshAllEventsAsync(source string) {
 		source = "live:auto"
 	}
 	// scheduleEventsReload handles re-entrancy, context, and dispatching the correct loader.
-	go ui.scheduleEventsReload(source)
+	ui.spawnLoad(func() { ui.scheduleEventsReload(source) })
 }
 
 // SetIngestDir records the drop folder being watched, so empty-state hints name
@@ -4865,6 +4917,29 @@ func (ui *UI) applyRailVisibility() {
 // event loop picks the update up. Called before app.Run() has started — or from
 // a test, which never starts it — that is a deadlock, not a slow path. Running
 // fn directly in that case is safe precisely because nothing is drawing yet.
+// spawnLoad runs a load off the UI goroutine, tracked so a caller that needs
+// the result — or that is about to take the database away — can wait for it.
+//
+// Every screen entry starts a load and returns before it has run. Without a
+// handle on those goroutines a test cannot tell "the load has not started yet"
+// from "the load has finished", and the two look identical from outside.
+func (ui *UI) spawnLoad(fn func()) {
+	ui.loads.Add(1)
+	go func() {
+		defer ui.loads.Done()
+		fn()
+	}()
+}
+
+// waitForLoads blocks until no screen load is in flight.
+//
+// It is not called by the application: a load part-way through queueing a
+// repaint is waiting for the UI goroutine, so waiting on one from there would
+// deadlock. Tests call it before they let a store go away.
+func (ui *UI) waitForLoads() {
+	ui.loads.Wait()
+}
+
 func (ui *UI) queueUpdate(fn func()) {
 	if !ui.running.Load() {
 		fn()
@@ -5006,9 +5081,6 @@ func (ui *UI) repaintTriageChrome() {
 }
 
 func (ui *UI) switchToAllEvents() {
-	ui.showFindings = false
-	ui.showAll = true
-	ui.selectedCaseID = ""
 	ui.restoreEventsView()
 
 	s := ui.getOrInitState(contextAll)
@@ -5033,12 +5105,10 @@ func (ui *UI) switchToAllEvents() {
 			atomic.StoreInt64(&ui.lastLoadStart, 0)
 		}
 	}
-	go ui.loadAllEvents()
+	ui.spawnLoad(ui.loadAllEvents)
 }
 
 func (ui *UI) switchToCases() {
-	ui.showFindings = false
-	ui.showAll = false
 	if len(ui.cases) == 0 {
 		// An empty Cases screen, not a bounce to Home. Sending the analyst
 		// somewhere else makes the key look broken — and now that the rail

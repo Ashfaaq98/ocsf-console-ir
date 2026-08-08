@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -151,15 +150,23 @@ func TestScreensAreEnterableWithoutTheEventLoop(t *testing.T) {
 	}
 }
 
-// awaitIdle waits for a screen's load goroutine to finish.
+// awaitIdle waits for a screen's load goroutines to finish.
+//
+// Deterministic, not a poll: entering a screen spawns its load and returns
+// before that goroutine has run, so polling a busy flag cannot tell "not
+// started" from "finished" and lets the goroutine outlive the test.
 func awaitIdle(t *testing.T, ui *UI) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if atomic.LoadInt32(&ui.loadingEvents) == 0 {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
+
+	done := make(chan struct{})
+	go func() {
+		ui.waitForLoads()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("a load goroutine was still running when the screen test ended")
 	}
-	t.Fatal("a load goroutine was still running when the screen test ended")
 }

@@ -163,11 +163,8 @@ func (ui *UI) showAnalystHome() {
 	ui.lastVisit = time.Now()
 	ui.saveUISettings()
 
-	ui.showFindings = false
-	ui.showAll = false
-	ui.selectedCaseID = ""
-	ui.destination = destHome
-	ui.renderNavRail()
+	// The context flags and the rail marker come from beginScreen; showAnalystHome
+	// is reached through enterScreen like every other destination.
 
 	if ui.home != nil {
 		ui.home.close()
@@ -248,7 +245,7 @@ func (h *homeView) openSelected() {
 		return
 	}
 	h.ui.pendingFindingID = f.ID
-	h.ui.jumpToFindings()
+	h.ui.enterScreen(destTriage)
 }
 
 // homeCardTitles names the three metrics across the top.

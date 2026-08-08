@@ -133,10 +133,19 @@ func TestHomeEnterCarriesTheSelection(t *testing.T) {
 	if want == nil {
 		t.Fatal("nothing selected")
 	}
-	h.openSelected()
 
-	if h.ui.pendingFindingID != want.ID {
-		t.Errorf("Enter carried %q, want the selected finding %q", h.ui.pendingFindingID, want.ID)
+	h.openSelected()
+	awaitIdle(t, h.ui)
+
+	// The outcome, not the handoff. pendingFindingID is written here and
+	// consumed by the load; reading it back races the very goroutine that is
+	// supposed to act on it, and what matters is where the cursor ends up.
+	row, _ := h.ui.eventList.GetSelection()
+	if row < 1 || row-1 >= len(h.ui.findings) {
+		t.Fatalf("Triage selected row %d with %d findings loaded", row, len(h.ui.findings))
+	}
+	if got := h.ui.findings[row-1].ID; got != want.ID {
+		t.Errorf("Triage opened on %q, want the finding Home had selected (%q)", got, want.ID)
 	}
 }
 

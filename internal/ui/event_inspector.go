@@ -114,7 +114,7 @@ func (ui *UI) pivotTo(target pivotTarget) {
 	ui.showAll = true
 	ui.selectedCaseID = ""
 	ui.pivot = &target
-	ui.setDestination(destEvents)
+	ui.beginScreen(destEvents)
 
 	go func() {
 		events, err := ui.store.FindEventsByObservable(ui.ctx, target.TypeID, target.Value, pivotLimit)
@@ -146,7 +146,7 @@ func (ui *UI) clearPivot() {
 		return
 	}
 	ui.pivot = nil
-	ui.switchToAllEvents()
+	ui.enterScreen(destEvents)
 }
 
 // rememberPivot records a pivot for the Home screen's recent list.

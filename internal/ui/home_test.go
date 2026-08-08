@@ -47,6 +47,11 @@ func newTestHome(t *testing.T) (*homeView, *store.Store) {
 		}
 		h.close()
 		h.wait()
+		// Anything the test triggered that entered another screen started a
+		// load there too. Left running, it writes through a store and a config
+		// directory that are about to be removed, and lands in whichever test
+		// set one up next.
+		ui.waitForLoads()
 	})
 	return h, st
 }

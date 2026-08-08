@@ -157,5 +157,5 @@ func (ui *UI) clearSearch() {
 		return
 	}
 	ui.searchQuery = ""
-	ui.switchToAllEvents()
+	ui.enterScreen(destEvents)
 }
