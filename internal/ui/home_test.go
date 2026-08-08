@@ -30,6 +30,11 @@ func newTestHome(t *testing.T) (*homeView, *store.Store) {
 
 	ui := NewUI(ctx, st, nil, logging.New(io.Discard, logging.LevelError, "test"), "test")
 	h := newHomeView(ui)
+	// As showAnalystHome does. Without it the application does not know the
+	// dashboard exists, and anything that reaches for the showing screen — the
+	// key router, applyTheme, currentFinding — silently skips it.
+	ui.home = h
+	ui.destination = destHome
 	t.Cleanup(h.close)
 	return h, st
 }
@@ -431,58 +436,66 @@ func TestOpeningHomeAdvancesTheVisitClock(t *testing.T) {
 	}
 }
 
-// The header says nothing about freshness while the data is fresh.
+// Changing the theme must recolour the dashboard, not just the chrome round it.
 //
-// It used to report the age unconditionally, and the dashboard reloads every
-// ten seconds — so the number counted zero to nine and reset, forever. A
-// counter that only ever cycles reads as a fault, not as a health indicator.
-func TestHomeHeaderIsSilentWhileFresh(t *testing.T) {
-	h, _ := newTestHome(t)
+// Home builds its own widgets from the theme it was constructed with, so the
+// application's applyTheme never reached them: pressing the theme key on the
+// dashboard recoloured the navigation rail and the status bar around a
+// dashboard still drawn in the old palette.
+func TestHomeFollowsAThemeChange(t *testing.T) {
+	h, st := newTestHome(t)
+	// Otherwise every theme resolves to themeBasic and the test compares a
+	// palette with itself.
+	h.ui.hasTrueColor = true
+	h.ui.setTheme("gruvbox")
+	seedTestFinding(t, st, "a", 90, ocsf.SeverityCritical, ocsf.FindingStatusNew)
 	h.loadAndRender(t)
 
-	got := stripTags(h.header.GetText(true))
+	before := h.queue.GetBackgroundColor()
 
-	if strings.Contains(got, "⟳") {
-		t.Errorf("the header reports freshness while the data is fresh:\n%q", got)
+	h.ui.setTheme("light")
+
+	if h.queue.GetBackgroundColor() == before {
+		t.Errorf("the queue kept its old background through a theme change: %v", before)
 	}
-	// The clock is the proof the screen is alive, and it stays.
-	if !strings.Contains(got, ":") {
-		t.Errorf("the header lost its clock:\n%q", got)
+	if got := h.inspector.GetBackgroundColor(); got != h.ui.theme.Surface {
+		t.Errorf("the inspector background = %v, want the new theme's %v", got, h.ui.theme.Surface)
 	}
 }
 
-// And speaks up once the data has actually stopped arriving.
-func TestHomeHeaderWarnsWhenStale(t *testing.T) {
-	h, _ := newTestHome(t)
+// And it must not cost the analyst their place. Recolouring is not a reason to
+// lose the cursor, the selected finding, or the record of what was new.
+func TestAThemeChangeKeepsTheSelection(t *testing.T) {
+	h, st := newTestHome(t)
+	for i, uid := range []string{"a", "b", "c"} {
+		seedTestFinding(t, st, uid, 90-i*10, ocsf.SeverityCritical, ocsf.FindingStatusNew)
+	}
 	h.loadAndRender(t)
-	h.set(func(d *homeData) { d.loadedAt = time.Now().Add(-homeStaleAfter - time.Second) })
-	h.renderHeader()
+	h.queue.Select(2, 0)
+	want := h.selectedFinding()
+	h.ui.markSince = time.Now().Add(-time.Hour)
+	h.ui.hasTrueColor = true
 
-	if got := stripTags(h.header.GetText(true)); !strings.Contains(got, "stale") {
-		t.Errorf("the header does not warn that the data has stopped refreshing:\n%q", got)
+	h.ui.setTheme("light")
+
+	if row, _ := h.queue.GetSelection(); row != 2 {
+		t.Errorf("the cursor moved to row %d during a theme change", row)
+	}
+	if got := h.selectedFinding(); got == nil || want == nil || got.ID != want.ID {
+		t.Error("the selected finding was lost to a theme change")
+	}
+	if h.ui.markSince.IsZero() {
+		t.Error("a theme change cleared the record of what was new")
 	}
 }
 
-// One late cycle is not a fault. The threshold is several intervals so a slow
-// query does not put a warning on the screen.
-func TestHomeHeaderToleratesOneSlowRefresh(t *testing.T) {
+// The key has to be on screen. It was bound, it worked, and the only place it
+// was written down was a description inside the command palette.
+func TestStatusBarAdvertisesTheThemeKey(t *testing.T) {
 	h, _ := newTestHome(t)
-	h.loadAndRender(t)
-	h.set(func(d *homeData) { d.loadedAt = time.Now().Add(-homeRefreshInterval - time.Second) })
-	h.renderHeader()
+	h.ui.showAnalystHome()
 
-	if got := stripTags(h.header.GetText(true)); strings.Contains(got, "stale") {
-		t.Errorf("a single late refresh was reported as stale:\n%q", got)
-	}
-}
-
-// Before the first load has landed there is nothing to be stale about, and the
-// header says it is working rather than showing an age of zero.
-func TestHomeHeaderBeforeTheFirstLoad(t *testing.T) {
-	h, _ := newTestHome(t)
-	h.renderHeader()
-
-	if got := stripTags(h.header.GetText(true)); !strings.Contains(got, "loading") {
-		t.Errorf("the header does not say it is still loading:\n%q", got)
+	if got := stripTags(h.ui.composeStatus("Analyst Home")); !strings.Contains(got, "t theme") {
+		t.Errorf("the theme key is not advertised:\n%s", got)
 	}
 }

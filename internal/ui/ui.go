@@ -2875,6 +2875,14 @@ func (ui *UI) applyTheme() {
 		ui.statusBar.SetBackgroundColor(ui.theme.Surface)
 	}
 
+	// The dashboard builds its own widgets from the theme it was constructed
+	// with, so nothing above reaches them. Without this, changing the theme on
+	// Home recoloured the rail and the status bar around a dashboard still
+	// drawn in the old palette.
+	if ui.home != nil {
+		ui.home.applyTheme()
+	}
+
 	// Re-render table and focus ring
 	ui.repaintCurrentList()
 	if ui.app != nil {
@@ -4186,6 +4194,7 @@ func (ui *UI) buildShortcutHints() string {
 			keyHint{"e", "escalate"},
 			keyHint{"v", "verdict"},
 			keyHint{"r", "refresh"},
+			keyHint{"t", "theme"},
 			keyHint{"?", "help"})
 	}
 

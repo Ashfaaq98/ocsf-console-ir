@@ -89,10 +89,6 @@ type homeData struct {
 
 	watcher    WatcherStatus
 	enrichment EnrichmentStatus
-
-	// loadedAt is when this snapshot was taken, so the header can say how old
-	// what you are looking at is.
-	loadedAt time.Time
 }
 
 // WatcherStatus is what the evidence pulse shows about folder ingestion. The
@@ -201,7 +197,7 @@ func newHomeView(ui *UI) *homeView {
 	h.cards.SetBackgroundColor(t.Bg)
 
 	h.queue = tview.NewTable().SetSelectable(true, false)
-	stylePanel(h.queue.Box, "PRIORITY QUEUE  ·  ranked by risk", PanelRolePrimary, t)
+	stylePanel(h.queue.Box, homeQueueTitle, PanelRolePrimary, t)
 	h.queue.SetBackgroundColor(t.Bg)
 	h.queue.SetSelectedStyle(tcell.StyleDefault.
 		Background(t.SelectionBg).Foreground(t.SelectionFg))
@@ -211,7 +207,7 @@ func newHomeView(ui *UI) *homeView {
 	// panel used to reflow onto the next and push the rows below it out. The
 	// narrative wraps deliberately; nothing else may.
 	h.inspector.SetWrap(false)
-	stylePanel(h.inspector.Box, "SELECTED FINDING", PanelRoleInspector, t)
+	stylePanel(h.inspector.Box, homeInspectorTitle, PanelRoleInspector, t)
 	h.inspector.SetBackgroundColor(t.Surface)
 
 	h.root = tview.NewFlex().SetDirection(tview.FlexRow)
@@ -261,6 +257,12 @@ func (h *homeView) openSelected() {
 // on the way in, not something buried under the fold.
 var homeCardTitles = [3]string{"OPEN FINDINGS", "ACTIVE CASES", "EVIDENCE PULSE"}
 
+// Panel titles, named once so a theme change restyles the panel it built.
+const (
+	homeQueueTitle     = "PRIORITY QUEUE  ·  ranked by risk"
+	homeInspectorTitle = "SELECTED FINDING"
+)
+
 func homeText(theme Theme, align int) *tview.TextView {
 	tv := tview.NewTextView().SetDynamicColors(true).SetTextAlign(align)
 	tv.SetBackgroundColor(theme.Bg)
@@ -300,6 +302,40 @@ func (h *homeView) start() {
 	}()
 }
 
+// applyTheme restyles the screen in place.
+//
+// In place, rather than by rebuilding: this screen holds a cursor, a selected
+// finding and the record of what was new when the analyst arrived, and none of
+// that should be lost to changing the colours. Without it, pressing the theme
+// key on the dashboard recoloured the rail and the status bar around a
+// dashboard still drawn in the old palette.
+func (h *homeView) applyTheme() {
+	t := h.ui.theme
+
+	for i, card := range h.cardBox {
+		stylePanel(card.Box, homeCardTitles[i], PanelRolePrimary, t)
+		card.SetBackgroundColor(t.Surface)
+	}
+
+	stylePanel(h.queue.Box, homeQueueTitle, PanelRolePrimary, t)
+	h.queue.SetBackgroundColor(t.Bg)
+	h.queue.SetSelectedStyle(tcell.StyleDefault.
+		Background(t.SelectionBg).Foreground(t.SelectionFg))
+
+	stylePanel(h.inspector.Box, homeInspectorTitle, PanelRoleInspector, t)
+	h.inspector.SetBackgroundColor(t.Surface)
+
+	for _, tv := range []*tview.TextView{h.header, h.inspector} {
+		tv.SetTextColor(t.TextPrimary)
+	}
+	h.header.SetBackgroundColor(t.Bg)
+	h.cards.SetBackgroundColor(t.Bg)
+	h.root.SetBackgroundColor(t.Bg)
+
+	h.renderAll()
+	h.renderInspector()
+}
+
 // close stops the timers. Safe to call more than once.
 func (h *homeView) close() {
 	h.once.Do(func() { close(h.stop) })
@@ -316,8 +352,6 @@ func (h *homeView) load() {
 	if st == nil {
 		return
 	}
-
-	h.set(func(d *homeData) { d.loadedAt = time.Now() })
 
 	var wg sync.WaitGroup
 	run := func(panel homePanel, fn func()) {
@@ -424,15 +458,12 @@ func (h *homeView) renderPanel(p homePanel) {
 	case panelQueue:
 		h.renderQueue()
 		h.renderInspector()
-		// Freshness lives in the header and comes from the same query.
-		h.renderHeader()
 	}
 }
 
-// renderHeader paints the two header rows. Called on every clock tick, so it
-// must not query anything.
+// renderHeader paints the header row. Called on every clock tick, so it must
+// not query anything.
 func (h *homeView) renderHeader() {
-	d, _ := h.snapshot()
 	t := h.ui.theme
 
 	// "connected" on its own answers nothing — connected to what? The only
@@ -444,31 +475,8 @@ func (h *homeView) renderHeader() {
 	}
 
 	// No product name here. It is on the status bar, once.
-	h.header.SetText(fmt.Sprintf(" [%s:-:b]Analyst Home[-:-:-]    %s%s    [%s]%s[-:-:-]",
-		t.TagAccent, db, h.stalenessText(d), t.TagMuted, time.Now().Format("15:04:05")))
-}
-
-// stalenessText warns when the data has stopped arriving, and says nothing when
-// it has not.
-//
-// It used to report the age unconditionally. The dashboard reloads every ten
-// seconds, so that age only ever counted zero to nine and reset — a number that
-// cycles forever without meaning anything, and which reads as a fault rather
-// than as the health indicator it was meant to be.
-//
-// Silence is the healthy state. The clock beside it already ticks every second,
-// which is the proof that the screen is alive; this speaks only when the data
-// behind it has stopped keeping up.
-func (h *homeView) stalenessText(d homeData) string {
-	t := h.ui.theme
-	if d.loadedAt.IsZero() {
-		return fmt.Sprintf("    [%s]⟳ loading[-:-:-]", t.TagMuted)
-	}
-	if age := time.Since(d.loadedAt); age >= homeStaleAfter {
-		return fmt.Sprintf("    [%s]⟳ stale · last updated %s ago[-:-:-]",
-			t.TagWarning, renderRelativeTime(d.loadedAt))
-	}
-	return ""
+	h.header.SetText(fmt.Sprintf(" [%s:-:b]Analyst Home[-:-:-]    %s    [%s]%s[-:-:-]",
+		t.TagAccent, db, t.TagMuted, time.Now().Format("15:04:05")))
 }
 
 // renderCards paints the three metric cards. Each is a shortcut to the work it
@@ -899,11 +907,6 @@ const (
 
 	// Below this height the metric cards go. The queue speaks for itself.
 	homeShortCardsBelow = 20
-
-	// homeStaleAfter is how far behind the data may fall before the header says
-	// so. Three refresh intervals, so a single slow or missed cycle does not cry
-	// wolf — it is a signal that the reload has stopped, not that one was late.
-	homeStaleAfter = 3 * homeRefreshInterval
 
 	// homeVolumeHours is the sparkline's window: a day, so the shape covers a
 	// shift handover as well as the hour just gone.
