@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/buildinfo"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
@@ -63,6 +64,13 @@ type WelcomeOptions struct {
 	// WatchDir pre-fills the watch-folder prompt with the folder the running
 	// configuration would actually watch.
 	WatchDir string
+
+	// Version is the build being run, shown beside the name. This is the first
+	// screen a new install shows and often the only one a bug report can be
+	// written from, so the answer to "what am I running" belongs on it. It is
+	// passed through buildinfo.Display, so it reads the same here as it does in
+	// the main header and in `console-ir version`.
+	Version string
 
 	// Perform carries out the chosen action. It runs off the UI goroutine and
 	// reports each stage through progress, which is safe to call from it.
@@ -126,11 +134,21 @@ const (
 	welcomePromptHintRows  = 3
 )
 
-// Card widths per responsive tier.
+// Card widths per responsive tier. Wide and standard are the same number
+// because the card is sized by its content — two columns of it — rather than by
+// the terminal, and that content does not get narrower on a smaller screen.
 const (
-	welcomeCardWide     = 60
-	welcomeCardStandard = 48
+	welcomeCardWide     = 72
+	welcomeCardStandard = 72
 	welcomeCardMinimum  = 24
+)
+
+// Two-column geometry: the indent before the left column, the gutter between
+// the columns, and the margin kept clear on the right.
+const (
+	welcomeColumnIndent = 2
+	welcomeColumnGutter = 3
+	welcomeColumnMargin = 2
 )
 
 // welcomeLogoUnicode and welcomeLogoASCII are the same mark twice. Terminals
@@ -177,9 +195,6 @@ type welcomeView struct {
 	// privacyOverride lets the layout measure the card with and without the
 	// privacy statement while deciding what fits. Nil outside that measurement.
 	privacyOverride *bool
-
-	// dirty means the tree changed shape and the screen owes a clear.
-	dirty bool
 
 	// Screen state.
 	state   welcomeState
@@ -228,8 +243,10 @@ func newWelcomeView(opts WelcomeOptions) *welcomeView {
 	v.logo.SetText(v.logoText())
 
 	v.title = welcomeText(theme, tview.AlignCenter)
-	v.title.SetText(fmt.Sprintf("[%s:-:b]%s[-:-:-]\n[%s]%s[-:-:-]",
-		theme.TagAccent, welcomeTitleText, theme.TagMuted, welcomeDescription))
+	v.title.SetText(fmt.Sprintf("[%s:-:b]%s[-:-:-] [%s]%s[-:-:-]\n[%s]%s[-:-:-]",
+		theme.TagAccent, welcomeTitleText,
+		theme.TagMuted, buildinfo.Display(opts.Version),
+		theme.TagMuted, welcomeDescription))
 
 	v.body = tview.NewFlex().SetDirection(tview.FlexRow)
 	v.body.SetBackgroundColor(theme.SurfaceRaised)
@@ -255,8 +272,10 @@ func newWelcomeView(opts WelcomeOptions) *welcomeView {
 	v.tip = welcomeText(theme, tview.AlignCenter)
 	v.bar = welcomeText(theme, tview.AlignLeft)
 
+	// No SetBackgroundColor here: tview.NewFlex sets dontClear on its Box, so a
+	// Flex never paints its own background and the call would be a silent no-op.
+	// The canvas is painted in beforeDraw, which says why.
 	v.root = tview.NewFlex().SetDirection(tview.FlexRow)
-	v.root.SetBackgroundColor(theme.Bg)
 
 	// A sensible size until the first draw reports the real one, so the tree is
 	// never empty and tests can drive the view without a screen.
@@ -266,11 +285,15 @@ func newWelcomeView(opts WelcomeOptions) *welcomeView {
 }
 
 // welcomeText builds one of the screen's text widgets.
+//
+// The background is the canvas, not theme.Bg. These widgets are full-width, so
+// any colour of their own reads as a horizontal band across the screen rather
+// than as a background — which is exactly what the screen used to render.
 func welcomeText(theme Theme, align int) *tview.TextView {
 	tv := tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(align)
-	tv.SetBackgroundColor(theme.Bg)
+	tv.SetBackgroundColor(theme.Canvas)
 	return tv
 }
 
@@ -345,6 +368,16 @@ func (v *welcomeView) bodyLines() []string {
 		return lines
 
 	case welcomeStateLoading:
+		// The progress line takes the action list's place in the right column,
+		// which is where the analyst was already looking, and holds the card at
+		// exactly the menu's height.
+		if lines, ok := v.twoColumnCard([]welcomeCell{{
+			text:  loadingState(v.loading, t),
+			width: len([]rune(v.loading)) + 2,
+		}}); ok {
+			return padLines(lines, len(v.menuLines()))
+		}
+
 		lines := v.cardIntro()
 		lines = append(lines, "  "+loadingState(v.loading, t), "")
 		// Hold the card at its menu height so it does not jump while working.
@@ -374,12 +407,136 @@ func (v *welcomeView) cardIntro() []string {
 }
 
 // menuLines is the card in its resting state.
+//
+// Two columns when the card is wide enough to hold them, one when it is not.
+// The check is against the content's own measured width rather than a layout
+// tier, so the fallback happens for the reason it exists — the text would not
+// fit — and stays correct if the copy changes.
 func (v *welcomeView) menuLines() []string {
+	if lines, ok := v.twoColumnCard(v.actionCells()); ok {
+		return lines
+	}
 	lines := v.cardIntro()
 	for _, o := range welcomeOptions {
 		lines = append(lines, welcomeActionLine(o.key, o.label, v.theme))
 	}
 	return append(lines, "")
+}
+
+// actionCells is the action list as the right-hand column.
+func (v *welcomeView) actionCells() []welcomeCell {
+	out := make([]welcomeCell, 0, len(welcomeOptions))
+	for _, o := range welcomeOptions {
+		out = append(out, actionCell(o.key, o.label, v.theme))
+	}
+	return out
+}
+
+// introCells is the left-hand column.
+//
+// The privacy statement is always present here regardless of the short-screen
+// rule. That rule drops it to buy rows, and in this layout it costs none: the
+// intro is four rows against the action list's five, so the card is the same
+// height with it as without.
+func (v *welcomeView) introCells() []welcomeCell {
+	return []welcomeCell{
+		textCell(welcomeMessage, v.theme.TagTextPrimary),
+		{},
+		textCell(welcomePrivacyA, v.theme.TagMuted),
+		textCell(welcomePrivacyB, v.theme.TagMuted),
+	}
+}
+
+// twoColumnFits reports whether the card is wide enough for the layout.
+//
+// It is measured against the resting content — the intro beside the action list
+// — and nothing else, so the answer cannot change part-way through an action. A
+// progress line long enough to fail this check would otherwise drop the card to
+// one column mid-work, which reads as the screen breaking.
+func (v *welcomeView) twoColumnFits() bool {
+	need := welcomeColumnIndent + widestCell(v.introCells()) + welcomeColumnGutter +
+		widestCell(v.actionCells()) + welcomeColumnMargin
+	return need <= v.cardInnerWidth()
+}
+
+// twoColumnCard lays the intro beside right, and reports whether it fits.
+func (v *welcomeView) twoColumnCard(right []welcomeCell) ([]string, bool) {
+	if !v.twoColumnFits() {
+		return nil, false
+	}
+
+	left := v.introCells()
+	leftWidth := widestCell(left)
+
+	rows := len(left)
+	if len(right) > rows {
+		rows = len(right)
+	}
+
+	lines := make([]string, 0, rows+2)
+	lines = append(lines, "")
+	for i := 0; i < rows; i++ {
+		lines = append(lines, columnRow(cellAt(left, i), cellAt(right, i), leftWidth))
+	}
+	return append(lines, ""), true
+}
+
+// welcomeCell is one column's content for one row: the string that reaches the
+// screen, and how many columns it occupies once the markup is gone.
+//
+// The two are tracked separately because they disagree. A tagged string's
+// length counts "[yellow]" and "[-:-:-]", none of which is drawn, so padding
+// computed from it aligns nothing.
+type welcomeCell struct {
+	text  string
+	width int
+}
+
+// textCell is a plain run of text in one colour.
+func textCell(s, tag string) welcomeCell {
+	return welcomeCell{
+		text:  fmt.Sprintf("[%s]%s[-:-:-]", tag, tview.Escape(s)),
+		width: len([]rune(s)),
+	}
+}
+
+// actionCell is one "[k]  Label" row of the action list. It is the same shape
+// as welcomeActionLine without the leading indent, which the column owns.
+func actionCell(key rune, label string, theme Theme) welcomeCell {
+	k := fmt.Sprintf("[%c]", key)
+	return welcomeCell{
+		text: fmt.Sprintf("[%s]%s[-:-:-]  [%s]%s[-:-:-]",
+			theme.TagAccent, tview.Escape(k), theme.TagTextPrimary, label),
+		width: len([]rune(k)) + 2 + len([]rune(label)),
+	}
+}
+
+// columnRow places left and right side by side on one row, padding left out to
+// leftWidth so the right column starts in the same place on every row.
+func columnRow(left, right welcomeCell, leftWidth int) string {
+	row := strings.Repeat(" ", welcomeColumnIndent) + left.text
+	if right.text == "" {
+		return row
+	}
+	return row + strings.Repeat(" ", leftWidth-left.width+welcomeColumnGutter) + right.text
+}
+
+func widestCell(cells []welcomeCell) int {
+	widest := 0
+	for _, c := range cells {
+		if c.width > widest {
+			widest = c.width
+		}
+	}
+	return widest
+}
+
+// cellAt is the cell for a row, or an empty one where that column has run out.
+func cellAt(cells []welcomeCell, i int) welcomeCell {
+	if i < len(cells) {
+		return cells[i]
+	}
+	return welcomeCell{}
 }
 
 // welcomeActionLine renders one "[k]  Label" row of the action list.
@@ -475,20 +632,26 @@ func (v *welcomeView) promptLabel() string {
 // ---------------------------------------------------------------------------
 
 // beforeDraw is the frame preamble, run once per repaint before the root is
-// drawn. It re-tiers the layout for the current terminal size and clears the
-// screen when the tree has changed shape.
+// drawn. It re-tiers the layout for the current terminal size and paints the
+// canvas the whole screen is built on.
 //
-// The clear is not optional. tview does not clear between frames, and the card
-// changes height between states — menu, prompt, error — so without it the rows
-// the previous card occupied keep its border, and the screen accumulates two
-// overlapping cards.
+// The fill is not optional, and it has to be a fill rather than screen.Clear().
+//
+// Clear() fills with tcell.StyleDefault, which is the terminal's own background
+// — so every row not covered by a widget showed the user's terminal colours
+// instead of the theme's, and the screen rendered as horizontal stripes. Nor
+// can the root Flex be asked to do it: tview.NewFlex sets dontClear on its Box,
+// so SetBackgroundColor on a Flex is a permanent no-op.
+//
+// Filling unconditionally also retires the dirty-tracking this function used to
+// do. tview does not clear between frames and the page changes shape between
+// states, so a missed clear left the previous state's rows on screen; repainting
+// the canvas every frame makes that impossible rather than merely accounted for.
+// It costs nothing on the wire — tcell only emits cells that actually changed.
 func (v *welcomeView) beforeDraw(screen tcell.Screen) bool {
 	width, height := screen.Size()
 	v.relayout(width, height)
-	if v.dirty {
-		screen.Clear()
-		v.dirty = false
-	}
+	screen.Fill(' ', tcell.StyleDefault.Background(v.theme.Canvas))
 	return false
 }
 
@@ -548,7 +711,6 @@ func (v *welcomeView) rebuild() {
 	v.root.AddItem(v.bar, welcomeBarRows, 0, false)
 
 	v.built = true
-	v.dirty = true
 }
 
 // setBody fills the card with one single-line widget per row.

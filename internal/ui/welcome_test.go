@@ -425,6 +425,22 @@ func TestWelcomeShowsEachStage(t *testing.T) {
 	}
 }
 
+// Starting an action must not resize the card. The progress line replaces the
+// action list in the right-hand column; a card that grows a row while working
+// redraws its border somewhere else and reads as the screen glitching.
+func TestWelcomeLoadingCardKeepsItsHeight(t *testing.T) {
+	v := newTestWelcome(t, WelcomeOptions{})
+	v.relayout(140, 40)
+	resting := v.cardRows(true)
+
+	v.state, v.loading = welcomeStateLoading, "Loading sample incident…"
+	v.render()
+
+	if got := v.cardRows(true); got != resting {
+		t.Errorf("the card is %d rows while loading, want the menu's %d", got, resting)
+	}
+}
+
 // Compact terminals drop decoration, never the actions. An 80x24 window is a
 // normal size, not an edge case.
 func TestWelcomeResponsiveTiers(t *testing.T) {

@@ -40,6 +40,7 @@ func runWelcome(cmd *cobra.Command, dbPath string) (ui.WelcomeResult, error) {
 	return ui.RunWelcome(ui.WelcomeOptions{
 		DBPath:   dbPath,
 		WatchDir: resolvePathRelativeToBase(getWorkingDir(), ingestDir),
+		Version:  GetVersion(),
 		Logger:   logger,
 		Perform: func(res ui.WelcomeResult, progress func(string)) error {
 			return performWelcome(cmd, dbPath, res, logger, progress)

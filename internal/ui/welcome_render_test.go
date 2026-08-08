@@ -233,6 +233,117 @@ func TestWelcomeRendersTheErrorCardCleanly(t *testing.T) {
 	}
 }
 
+// Every cell on the screen is painted by the theme.
+//
+// This is a regression test for the screen rendering as horizontal stripes.
+// tview.NewFlex sets dontClear on its Box, so the root's SetBackgroundColor was
+// a no-op and only the widgets that set a background of their own painted
+// anything; every other row showed the terminal's colours straight through. The
+// gaps between widgets are the whole canvas, so sampling them is the test.
+func TestWelcomePaintsTheWholeCanvas(t *testing.T) {
+	for _, size := range [][2]int{{140, 40}, {100, 30}, {80, 24}} {
+		v := newTestWelcome(t, WelcomeOptions{})
+		fb := newFrameBuffer(t, size[0], size[1])
+		fb.paint(v)
+
+		cells, w, h := fb.screen.GetContents()
+		for y := 0; y < h; y++ {
+			for x := 0; x < w; x++ {
+				if _, bg, _ := cells[y*w+x].Style.Decompose(); bg == tcell.ColorDefault {
+					t.Fatalf("%dx%d: cell %d,%d is the terminal's background, not the theme's",
+						size[0], size[1], x, y)
+				}
+			}
+		}
+	}
+}
+
+// The card is two columns wherever it fits: the intro on the left, the actions
+// on the right, sharing rows rather than stacking. Stacked, the card runs to
+// twelve rows and pushes the tip off a short terminal.
+//
+// The assertion is that a single rendered row carries both, because that is the
+// only thing that distinguishes two columns from one.
+func TestWelcomeCardIsTwoColumns(t *testing.T) {
+	for _, size := range [][2]int{{140, 40}, {100, 30}, {80, 24}} {
+		v := newTestWelcome(t, WelcomeOptions{})
+		v.relayout(size[0], size[1])
+
+		lines := renderPrimitive(t, v.root, size[0], size[1])
+		row, ok := findLine(lines, welcomeMessage)
+		if !ok {
+			t.Fatalf("%dx%d: the message is not on screen:\n%s", size[0], size[1], strings.Join(lines, "\n"))
+		}
+		if !strings.Contains(row, "[1]  "+welcomeOptions[0].label) {
+			t.Errorf("%dx%d: the card is stacked, not two columns — the message row is %q",
+				size[0], size[1], row)
+		}
+	}
+}
+
+// The right column has to line up. Padding computed from a colour-tagged string
+// counts markup that is never drawn, and the actions come out on a ragged edge.
+func TestWelcomeColumnsAlign(t *testing.T) {
+	v := newTestWelcome(t, WelcomeOptions{})
+	v.relayout(140, 40)
+	lines := renderPrimitive(t, v.root, 140, 40)
+
+	want := -1
+	for _, o := range welcomeOptions {
+		key := string([]rune{'[', o.key, ']'})
+		row, ok := findLine(lines, key+"  "+o.label)
+		if !ok {
+			t.Fatalf("the action %s is not on screen:\n%s", key, strings.Join(lines, "\n"))
+		}
+		at := strings.Index(row, key)
+		if want == -1 {
+			want = at
+			continue
+		}
+		if at != want {
+			t.Errorf("%s starts at column %d, but the first action starts at %d:\n%s",
+				key, at, want, strings.Join(lines, "\n"))
+		}
+	}
+}
+
+// A terminal too narrow for two columns gets one, with every action still on
+// it. Truncating the action list would remove the only way off the screen.
+func TestWelcomeFallsBackToOneColumnWhenNarrow(t *testing.T) {
+	v := newTestWelcome(t, WelcomeOptions{})
+	v.relayout(70, 30)
+
+	if v.twoColumnFits() {
+		t.Fatalf("a %d-column card claims to fit two columns", v.cardInnerWidth())
+	}
+
+	lines := renderPrimitive(t, v.root, 70, 30)
+	for _, o := range welcomeOptions {
+		if _, ok := findLine(lines, "["+string(o.key)+"]  "+o.label); !ok {
+			t.Errorf("the one-column fallback dropped %q:\n%s", o.label, strings.Join(lines, "\n"))
+		}
+	}
+}
+
+// The version belongs on the first screen: it is often the only one a bug
+// report can be written from, and `console-ir version` needs a database this
+// install does not have yet.
+func TestWelcomeShowsTheVersion(t *testing.T) {
+	v := newTestWelcome(t, WelcomeOptions{Version: "0.2.0"})
+	v.relayout(140, 40)
+
+	lines := renderPrimitive(t, v.root, 140, 40)
+	row, ok := findLine(lines, welcomeTitleText)
+	if !ok {
+		t.Fatalf("the title is not on screen:\n%s", strings.Join(lines, "\n"))
+	}
+	// Beside the name, and in buildinfo's spelling, so the answer to "what am I
+	// running" is the same word here as everywhere else it is asked.
+	if !strings.Contains(row, "v0.2.0") {
+		t.Errorf("the version is not beside the name: %q", row)
+	}
+}
+
 // The card must sit on the canvas, not overflow it, at every tier.
 func TestWelcomeRendersWithinItsTerminal(t *testing.T) {
 	for _, size := range [][2]int{{140, 40}, {100, 30}, {100, 24}, {80, 24}, {70, 20}} {
