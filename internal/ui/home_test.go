@@ -280,12 +280,12 @@ func TestHomeResponsiveTiers(t *testing.T) {
 			lines := renderPrimitive(t, h.root, tc.width, tc.height)
 			joined := strings.Join(lines, "\n")
 
-			// The queue and the footer survive every width.
+			// The queue survives every width — without it the screen has
+			// nothing to act on. The keys are no longer Home's to draw: they
+			// live on the one status bar the whole application shares, which
+			// TestStatusBarOnHomeShowsHomesKeys covers.
 			if !strings.Contains(joined, "PRIORITY QUEUE") {
 				t.Errorf("%s dropped the priority queue\n%s", tc.name, joined)
-			}
-			if _, ok := findLine(lines, "Enter Open"); !ok {
-				t.Errorf("%s dropped the action bar\n%s", tc.name, joined)
 			}
 			// All five findings stay readable.
 			for _, uid := range []string{"finding a", "finding e"} {

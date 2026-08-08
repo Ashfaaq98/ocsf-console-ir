@@ -115,7 +115,6 @@ type homeView struct {
 	recent    *tview.TextView
 	pulse     *tview.TextView
 	inspector *tview.TextView
-	footer    *tview.TextView
 
 	// body holds the two responsive arrangements of queue and recent cases.
 	body *tview.Flex
@@ -159,7 +158,6 @@ func newHomeView(ui *UI) *homeView {
 	t := ui.theme
 
 	h.header = homeText(t, tview.AlignLeft)
-	h.footer = homeText(t, tview.AlignLeft)
 
 	for i := range h.cardBox {
 		card := homeText(t, tview.AlignLeft)
@@ -371,7 +369,6 @@ func (h *homeView) renderAll() {
 	for p := homePanel(0); p < homePanelCount; p++ {
 		h.renderPanel(p)
 	}
-	h.renderFooter()
 }
 
 func (h *homeView) renderPanel(p homePanel) {
@@ -416,15 +413,6 @@ func (h *homeView) renderHeader() {
 	h.header.SetText(fmt.Sprintf("[%s:-:b]Console-IR[-:-:-]   [%s]Analyst Home[-:-:-]   %s   %s   [%s]%s[-:-:-]",
 		t.TagAccent, t.TagTextPrimary, connected, freshness,
 		t.TagMuted, time.Now().Format("15:04:05")))
-}
-
-func (h *homeView) renderFooter() {
-	h.footer.SetText(actionBar(h.ui.theme,
-		keyHint{"Enter", "Open"},
-		keyHint{"/", "Filter"},
-		keyHint{":", "Command palette"},
-		keyHint{"?", "Help"},
-	))
 }
 
 // renderCards paints the three metric cards. Each is a shortcut to the work it
@@ -714,8 +702,9 @@ func (h *homeView) relayout(width, height int) {
 // What disappears is specified and is not a judgement call: standard moves
 // recent cases below the queue, compact drops recent cases and the pulse
 // entirely, and a short screen drops the pulse first and then the cards. The
-// priority queue and the footer always survive — without them the screen has
-// nothing to act on.
+// priority queue always survives — without it the screen has nothing to act on.
+// The keys live on the one status bar at the foot of the application, which is
+// shared by every screen; Home used to carry a second bar of its own above it.
 func (h *homeView) rebuild(width, height int) {
 	h.mode, h.short = GetLayoutMode(width, height)
 
@@ -764,7 +753,7 @@ func (h *homeView) rebuild(width, height int) {
 	// more than five rows. If not, the body flexes and there is no spacer at
 	// all — a proportional spacer beside a proportional body would take half the
 	// remaining space and halve the queue.
-	fixed := homeHeaderRows + homeFooterRows
+	fixed := homeHeaderRows
 	if showCards {
 		fixed += h.cardRows()
 	}
@@ -803,7 +792,6 @@ func (h *homeView) rebuild(width, height int) {
 	if showPulse {
 		h.root.AddItem(h.pulse, homePulseRows, 0, false)
 	}
-	h.root.AddItem(h.footer, homeFooterRows, 0, false)
 
 	h.renderCards()
 	h.built = true
@@ -811,8 +799,7 @@ func (h *homeView) rebuild(width, height int) {
 
 // Row budget.
 const (
-	homeHeaderRows = 2
-	homeFooterRows = 1
+	homeHeaderRows = 1
 	homePulseRows  = 4
 	homeCardRows   = 4
 

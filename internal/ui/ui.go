@@ -425,7 +425,6 @@ type UI struct {
 	// Layout components
 	layout       *tview.Flex
 	leftCol      *tview.Flex
-	appTitle     *tview.TextView
 	allCasesInfo *tview.TextView
 	sidebar      *tview.List
 	mainPanel    *tview.Flex
@@ -889,15 +888,6 @@ func (ui *UI) setupLayout() {
 		AddItem(ui.eventList, 0, 2, true).
 		AddItem(ui.eventDetail, 0, 1, false)
 
-	// App title header with owl logo (non-selectable)
-	ui.appTitle = tview.NewTextView().
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignLeft).
-		SetWordWrap(true)
-	ui.appTitle.SetBorder(false)
-	ui.appTitle.SetBackgroundColor(ui.theme.Surface)
-	ui.renderHeader()
-
 	// The navigation rail. Its contents come from the destination table in
 	// nav.go, so the rail cannot advertise a screen the keys do not reach.
 	ui.navRail = ui.buildNavRail()
@@ -922,10 +912,12 @@ func (ui *UI) setupLayout() {
 	// The left column is the rail and nothing else. It used to carry the app
 	// title and the Cases list too, which is why it needed 45 columns and had
 	// to be hidden on Home.
+	// The rail alone. The version block that used to sit under it said
+	// "Console-IR" a second time and spent two of twenty-two columns saying it;
+	// both facts are in the status bar, which every screen has anyway.
 	ui.leftCol = tview.NewFlex().
 		SetDirection(tview.FlexRow).
-		AddItem(ui.navRail, 0, 1, false).
-		AddItem(ui.appTitle, 2, 0, false)
+		AddItem(ui.navRail, 0, 1, false)
 
 	// Create main layout - wider left column for better display
 	ui.layout = tview.NewFlex().
@@ -2700,21 +2692,30 @@ func (ui *UI) isDialogActive() bool {
 	}
 }
 
+// composeStatus builds the one bar at the foot of the screen.
+//
+// It is the only status bar there is. Home used to carry a second row of its
+// own beneath this one — two bars, four hints repeated between them, and the
+// two disagreed about which key opened the filter.
+//
+// The product name lives here and nowhere else. It used to be under the
+// navigation rail as well, and in every screen's header, so a single screen
+// said "Console-IR" three times and the rail spent two of its twenty-two
+// columns on a version string.
+func (ui *UI) composeStatus(message string) string {
+	t := ui.theme
+	brand := fmt.Sprintf("[%s:-:b]Console-IR[-:-:-] [%s]%s · OCSF %s[-:-:-]",
+		t.TagAccent, t.TagMuted, buildinfo.Display(ui.version), ocsf.SchemaVersion())
+
+	return fmt.Sprintf("%s  [%s]│[-:-:-] %s  [%s]│[-:-:-] %s",
+		brand,
+		t.TagMuted, ui.buildStatusMain(message),
+		t.TagMuted, ui.buildShortcutHints())
+}
+
 // setStatus updates the status bar
 func (ui *UI) setStatus(format string, args ...interface{}) {
-	message := fmt.Sprintf(format, args...)
-	timestamp := time.Now().Format("15:04:05")
-
-	// Build main message with badges and dynamic shortcut hints
-	main := ui.buildStatusMain(message)
-	hints := ui.buildShortcutHints()
-
-	statusText := fmt.Sprintf("[%s]%s[-] [%s]|[-] %s [%s]|[-] %s",
-		ui.theme.TagMuted, timestamp,
-		ui.theme.TagTextPrimary,
-		main,
-		ui.theme.TagMuted,
-		hints)
+	statusText := ui.composeStatus(fmt.Sprintf(format, args...))
 
 	if ui.running.Load() {
 		// Use non-blocking QueueUpdate to avoid potential re-entrancy stalls during input handling
@@ -2748,19 +2749,7 @@ func (ui *UI) getSeverityColor(severity string) string {
 // setStatusDirect updates the status bar immediately without QueueUpdate/QueueUpdateDraw.
 // Use this only from the UI goroutine (e.g., within input handlers, selection callbacks, or QueueUpdate closures).
 func (ui *UI) setStatusDirect(format string, args ...interface{}) {
-	message := fmt.Sprintf(format, args...)
-	timestamp := time.Now().Format("15:04:05")
-
-	// Build main message with badges and dynamic shortcut hints
-	main := ui.buildStatusMain(message)
-	hints := ui.buildShortcutHints()
-
-	statusText := fmt.Sprintf("[%s]%s[-] [%s]|[-] %s [%s]|[-] %s",
-		ui.theme.TagMuted, timestamp,
-		ui.theme.TagTextPrimary,
-		main,
-		ui.theme.TagMuted,
-		hints)
+	statusText := ui.composeStatus(fmt.Sprintf(format, args...))
 
 	if ui.statusBar != nil {
 		ui.statusBar.SetText(statusText)
@@ -2830,16 +2819,9 @@ func (ui *UI) applyTheme() {
 	// replaced rewrote the rail's first item to "ALL EVENTS" on every theme
 	// change, advertising a destination that key 1 does not go to.
 	if ui.navRail != nil {
-		stylePanel(ui.navRail.Box, "CONSOLE-IR", PanelRoleRail, ui.theme)
+		stylePanel(ui.navRail.Box, "NAVIGATION", PanelRoleRail, ui.theme)
 		ui.navRail.SetBackgroundColor(ui.theme.Bg)
 		ui.renderNavRail()
-	}
-
-	// App title header
-	if ui.appTitle != nil {
-		ui.appTitle.SetBackgroundColor(ui.theme.Surface)
-		ui.renderHeader()
-		ui.appTitle.SetTextColor(ui.theme.TextPrimary)
 	}
 
 	// OVERVIEW info block
@@ -4187,6 +4169,20 @@ func (ui *UI) showDeleteCaseConfirm() {
 func (ui *UI) buildShortcutHints() string {
 	accent := ui.theme.TagAccent
 
+	// The dashboard's keys, which are its own — see homeView.handleKey. The
+	// hints below are scoped by which events widget has focus, and on Home none
+	// of them does, so it fell through to a list naming panels Home does not
+	// have and a filter key it does not bind.
+	if ui.onHome() {
+		return actionBar(ui.theme,
+			keyHint{"↑↓", "move"},
+			keyHint{"⏎", "open"},
+			keyHint{"e", "escalate"},
+			keyHint{"v", "verdict"},
+			keyHint{"r", "refresh"},
+			keyHint{"?", "help"})
+	}
+
 	// Snapshot focus safely
 	var focused tview.Primitive
 	if ui.app != nil {
@@ -4307,6 +4303,14 @@ func (ui *UI) buildShortcutHints() string {
 func (ui *UI) buildStatusMain(message string) string {
 	accent := ui.theme.TagAccent
 	parts := []string{message}
+
+	// Every badge below describes the events context: which case is open, how
+	// many events are selected, which page of them is showing. None of that
+	// exists on the dashboard, which was nonetheless reporting "Page:1/15
+	// Tot:712" underneath a screen with no pager.
+	if ui.onHome() {
+		return message
+	}
 
 	// Case badge
 	if !ui.showAll && ui.selectedCaseID != "" {
@@ -4757,25 +4761,6 @@ func (ui *UI) RefreshAllEventsAsync(source string) {
 	}
 	// scheduleEventsReload handles re-entrancy, context, and dispatching the correct loader.
 	go ui.scheduleEventsReload(source)
-}
-
-// renderHeader draws the title bar. It is the single implementation: the header
-// used to be written out in full in two places, so a change to one silently
-// reverted the moment a theme was applied.
-func (ui *UI) renderHeader() {
-	if ui.appTitle == nil {
-		return
-	}
-	// The version block sits at the foot of the navigation rail, which is 22
-	// columns wide. Two lines, and the build date is gone: it did not fit beside
-	// the schema version, and of the three it is the one nobody reads. It is
-	// still in `console-ir version`.
-	ui.appTitle.SetText(fmt.Sprintf(
-		" [%s]Console-IR[-] [%s]%s[-]\n [%s]OCSF %s[-]",
-		ui.theme.TagAccent,
-		ui.theme.TagMuted, buildinfo.Display(ui.version),
-		ui.theme.TagMuted, ocsf.SchemaVersion(),
-	))
 }
 
 // SetIngestDir records the drop folder being watched, so empty-state hints name

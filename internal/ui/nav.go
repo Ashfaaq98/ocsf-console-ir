@@ -109,7 +109,10 @@ const navRailWidth = 22
 // buildNavRail creates the rail widget.
 func (ui *UI) buildNavRail() *tview.TextView {
 	rail := tview.NewTextView().SetDynamicColors(true)
-	stylePanel(rail.Box, "CONSOLE-IR", PanelRoleRail, ui.theme)
+	// Named for what it holds. It carried the product name, which the footer
+	// also carried, and so did every screen's header — three of them on one
+	// screen, and none of the three said what this panel was for.
+	stylePanel(rail.Box, "NAVIGATION", PanelRoleRail, ui.theme)
 	rail.SetBackgroundColor(ui.theme.Bg)
 	return rail
 }
@@ -123,30 +126,18 @@ func (ui *UI) renderNavRail() {
 	var b []byte
 
 	b = append(b, '\n')
+
+	// Home leads the list of places rather than sitting under the divider with
+	// the command palette and the help key. It is a destination — the one every
+	// other destination returns to — and grouping it with the utilities made it
+	// read as a shortcut rather than as somewhere you can be.
+	b = append(b, ui.railRow(homeDestination(), "Esc")...)
+
 	for _, d := range destinations() {
-		// The marker is a glyph, not just a colour: which screen you are on has
-		// to survive a 16-colour terminal.
-		marker, colour := " ", t.TagTextPrimary
-		if d.id == ui.destination {
-			marker, colour = "▸", t.TagAccent
-		}
-		// The name only. tview renders the shortcut gutter itself, and the
-		// labels used to embed the number as well, giving "(1) 1. Triage".
-		b = append(b, fmt.Sprintf(" [%s]%s[-:-:-] [%s]%c[-:-:-]  [%s]%s[-:-:-]\n",
-			t.TagAccent, marker, t.TagAccent, d.key, colour, d.name)...)
+		b = append(b, ui.railRow(d, string(d.key))...)
 	}
 
-	b = append(b, fmt.Sprintf("\n [%s]%s[-:-:-]\n", t.TagMuted, "──────────────────")...)
-
-	// Home is marked like any destination even though it has no digit. It is
-	// where the application lands, so "you are here" has to be answerable on
-	// the screen an analyst starts on.
-	homeMarker, homeColour := " ", t.TagMuted
-	if ui.destination == destHome {
-		homeMarker, homeColour = "▸", t.TagAccent
-	}
-	b = append(b, fmt.Sprintf(" [%s]%s[-:-:-] [%s]Esc[-:-:-]  [%s]Home[-:-:-]\n",
-		t.TagAccent, homeMarker, t.TagAccent, homeColour)...)
+	b = append(b, fmt.Sprintf("\n [%s]%s[-:-:-]\n", t.TagMuted, strings.Repeat("─", navRailWidth-4))...)
 
 	for _, hint := range []struct{ key, label string }{
 		{":", "Command"},
@@ -157,6 +148,22 @@ func (ui *UI) renderNavRail() {
 	}
 
 	ui.navRail.SetText(string(b))
+}
+
+// railRow is one destination on the rail.
+//
+// The marker is a glyph, not just a colour: which screen you are on has to
+// survive a 16-colour terminal. The name carries no number of its own — tview
+// renders the shortcut gutter, and the labels used to embed the digit as well,
+// giving "(1) 1. Triage".
+func (ui *UI) railRow(d destination, key string) []byte {
+	t := ui.theme
+	marker, colour := " ", t.TagTextPrimary
+	if d.id == ui.destination {
+		marker, colour = "▸", t.TagAccent
+	}
+	return []byte(fmt.Sprintf(" [%s]%s[-:-:-] [%s]%-3s[-:-:-] [%s]%s[-:-:-]\n",
+		t.TagAccent, marker, t.TagAccent, key, colour, d.name))
 }
 
 // navRailVisible reports whether the rail should be drawn.
