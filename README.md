@@ -145,8 +145,9 @@ Full detail in [docs/architecture.md](docs/architecture.md).
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Quick version: fork, branch, add tests, run `make check`,
-open a PR.
+See [CONTRIBUTING.md](CONTRIBUTING.md) before writing code — Console-IR is single-author for now.
+**Bug reports and feature requests are very welcome** and carry none of that overhead:
+[open an issue](https://github.com/Ashfaaq98/ocsf-console-ir/issues/new).
 
 Do **not** commit API keys or secrets. Real settings live in your per-user config directory, not in
 the repo. See [SECURITY.md](SECURITY.md) to report a vulnerability.

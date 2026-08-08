@@ -136,8 +136,32 @@ cd plugins/<name> && go build
 
 ## Communication
 
-Open a GitHub Issue for bugs/requests and a PR for proposed changes. Be respectful and follow our [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+Open a GitHub Issue for bugs, questions and feature requests. Be respectful and follow our
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
-## License
+For code, please read the next section first — it will save you writing a patch that cannot be
+merged yet.
 
-By contributing, you agree your contributions will be licensed under AGPLv3 (see [LICENSE](LICENSE)).
+## Licensing and contributions
+
+Console-IR is [AGPLv3](LICENSE), and every line of it is currently written by one person. That is
+deliberate while the project is young: holding the copyright in one place keeps its licensing
+options open.
+
+**Bug reports, feature requests, questions and design feedback are very welcome.** Open an issue.
+A reproduction, the relevant log lines and the output of `console-ir version` are the most useful
+things you can send, and none of it raises a licensing question.
+
+**Trivial fixes are welcome as pull requests** — typos, broken links, an obviously wrong constant.
+Changes at that size do not meaningfully carry copyright.
+
+**For anything larger, please open an issue before writing code.** If we agree the change is right,
+one of two things will happen: either you will be asked to sign a short Contributor License
+Agreement, or the change will be implemented from your description with credit to you.
+
+This is not a judgement on your patch. Merging substantial code without a CLA would permanently
+remove the option to offer Console-IR under any licence other than AGPLv3 — there is no way to undo
+it later without tracking down every contributor — and that is not a decision worth making by
+accident in a pull request.
+
+If that position changes, this file changes with it.

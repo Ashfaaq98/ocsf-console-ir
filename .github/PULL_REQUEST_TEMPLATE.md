@@ -6,6 +6,12 @@ labels: ""
 assignees: ""
 ---
 
+> **Before you spend time on this:** Console-IR is single-author for now, and substantial code
+> cannot be merged without a Contributor License Agreement — see
+> [CONTRIBUTING.md](../CONTRIBUTING.md#licensing-and-contributions). Trivial fixes (typos, broken
+> links) are fine as-is. For anything larger, an issue first will get you an answer faster than a
+> patch will.
+
 ## Summary
 Briefly describe what this PR changes and why.
 
