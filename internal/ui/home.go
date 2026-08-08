@@ -180,6 +180,12 @@ func newHomeView(ui *UI) *homeView {
 
 	for i := range h.cardBox {
 		card := homeText(t, tview.AlignLeft)
+		// A card is two rows and no more. Wrapped, an over-long first row
+		// reflows onto the second and pushes it out of the panel — which is how
+		// the pipeline line disappeared the moment a sparkline was added to the
+		// row above it. Clipping loses the tail of one line; wrapping loses a
+		// whole line, silently.
+		card.SetWrap(false)
 		stylePanel(card.Box, homeCardTitles[i], PanelRolePrimary, t)
 		card.SetBackgroundColor(t.Surface)
 		h.cardBox[i] = card
@@ -507,14 +513,35 @@ func (h *homeView) renderCards() {
 // spending a third of the card to report that nothing is happening.
 func (h *homeView) pulseTop(d homeData) string {
 	t := h.ui.theme
-	line := fmt.Sprintf("[%s:-:b]%s[-:-:-] [%s]events[-:-:-] [%s]%s[-:-:-]  [%s]%s indicators[-:-:-]",
-		t.TagTextPrimary, humanCount(d.eventsToday), t.TagMuted,
-		t.TagAccent, sparkline(d.volume, homeSparkWidth),
+	spark := ""
+	if w := h.sparkWidth(); w > 0 {
+		spark = fmt.Sprintf(" [%s]%s[-:-:-] ", t.TagAccent, sparkline(d.volume, w))
+	}
+	line := fmt.Sprintf("[%s:-:b]%s[-:-:-] [%s]events[-:-:-]%s  [%s]%s indicators[-:-:-]",
+		t.TagTextPrimary, humanCount(d.eventsToday), t.TagMuted, spark,
 		t.TagMuted, humanCount(d.observables))
 	if !d.enrichment.Idle() {
 		line += "   " + h.enrichmentText(d)
 	}
 	return line
+}
+
+// sparkWidth is how much of the card the chart may have.
+//
+// Three sizes rather than a continuous fit: a chart that changes resolution
+// with every column of window width cannot be compared against the one that was
+// there a moment ago. Below the smallest it is dropped — the counts beside it
+// are the part that must survive.
+func (h *homeView) sparkWidth() int {
+	card := h.width/len(h.cardBox) - 2
+	switch {
+	case card >= 46:
+		return homeSparkWidth
+	case card >= 34:
+		return homeSparkWidth / 2
+	default:
+		return 0
+	}
 }
 
 // pulseBottom is the state of the pipeline that produced it.
