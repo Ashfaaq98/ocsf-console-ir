@@ -158,9 +158,11 @@ type welcomeView struct {
 	// density is how much optional content the current page is carrying. It is
 	// settled by pageRows, which composes the page at each level until one fits.
 	density welcomeDensity
-	pending WelcomeResult
-	loading string
-	err     error
+	// truecolor is whether this terminal can draw the wordmark's gradient.
+	truecolor bool
+	pending   WelcomeResult
+	loading   string
+	err       error
 
 	// Outcome, read by RunWelcome once the application stops.
 	result  WelcomeResult
@@ -200,7 +202,12 @@ func RunWelcome(opts WelcomeOptions) (WelcomeResult, error) {
 func newWelcomeView(opts WelcomeOptions) *welcomeView {
 	theme := themeBuilders[loadThemeName()]()
 
-	v := &welcomeView{opts: opts, theme: theme, cursor: welcomeDefaultCursor}
+	v := &welcomeView{
+		opts:      opts,
+		theme:     theme,
+		cursor:    welcomeDefaultCursor,
+		truecolor: supportsTrueColor(),
+	}
 	v.probe()
 
 	v.page = tview.NewFlex().SetDirection(tview.FlexRow)
@@ -490,6 +497,9 @@ func (v *welcomeView) statusText() string {
 		parts = append(parts, "UTF-8")
 	} else {
 		parts = append(parts, "ASCII")
+	}
+	if v.truecolor {
+		parts = append(parts, "truecolor")
 	}
 	return strings.Join(parts, " · ")
 }
