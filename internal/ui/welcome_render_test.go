@@ -268,7 +268,9 @@ func TestWelcomePaintsTheWholeCanvas(t *testing.T) {
 // The assertion is that a single rendered row carries both, because that is the
 // only thing that distinguishes two columns from one.
 func TestWelcomePageIsTwoColumns(t *testing.T) {
-	for _, size := range [][2]int{{140, 40}, {100, 30}, {80, 24}} {
+	// 90 columns is where the split stops fitting once each action carries its
+	// consequence line; below that the page stacks, which is its own test.
+	for _, size := range [][2]int{{140, 40}, {120, 34}, {100, 30}} {
 		v := newTestWelcome(t, WelcomeOptions{})
 		v.relayout(size[0], size[1])
 

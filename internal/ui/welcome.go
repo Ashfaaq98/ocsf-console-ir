@@ -68,6 +68,13 @@ type WelcomeOptions struct {
 	// configuration would actually watch.
 	WatchDir string
 
+	// DemoSummary says what the demo investigation actually contains, in one
+	// line. The caller supplies it because the counts live in two places this
+	// package has no business reaching into — the embedded dataset and the
+	// seeded cases — and because a literal here would rot the first time either
+	// changed. Empty is fine; the action simply loses its detail line.
+	DemoSummary string
+
 	// Version is the build being run, shown beside the name. This is the first
 	// screen a new install shows and often the only one a bug report can be
 	// written from, so the answer to "what am I running" belongs on it. It is
@@ -92,6 +99,13 @@ const (
 	welcomeDescription = "Terminal-native incident response."
 	welcomePrivacyA    = "Everything stays on this machine"
 	welcomePrivacyB    = "No cloud, no account, no telemetry"
+
+	// welcomeDatabaseLead* introduce the path the first action will write to.
+	// Two short lines rather than one long one: the block's width is already
+	// set by the path itself, and there is no reason for the prose to widen the
+	// brand column past it.
+	welcomeDatabaseLeadA = "No database yet."
+	welcomeDatabaseLeadB = "One will be created at"
 )
 
 // welcomeState is which face the right-hand column is showing. The page is one
@@ -138,7 +152,12 @@ type welcomeView struct {
 	// Screen state.
 	state welcomeState
 	// cursor is the action the arrow keys are resting on.
-	cursor  int
+	cursor int
+	// watchStatus is what the drop folder looked like when the screen opened.
+	watchStatus string
+	// density is how much optional content the current page is carrying. It is
+	// settled by pageRows, which composes the page at each level until one fits.
+	density welcomeDensity
 	pending WelcomeResult
 	loading string
 	err     error
@@ -173,12 +192,16 @@ func RunWelcome(opts WelcomeOptions) (WelcomeResult, error) {
 	return v.result, v.outcome
 }
 
-// newWelcomeView builds the widget tree. It performs no I/O beyond reading the
-// persisted theme, so the first paint does not wait on anything.
+// newWelcomeView builds the widget tree.
+//
+// Its only I/O is reading the persisted theme and probing the drop folder, both
+// of which are a single local read, so the first paint does not wait on
+// anything. Nothing here opens a database or touches the network.
 func newWelcomeView(opts WelcomeOptions) *welcomeView {
 	theme := themeBuilders[loadThemeName()]()
 
 	v := &welcomeView{opts: opts, theme: theme, cursor: welcomeDefaultCursor}
+	v.probe()
 
 	v.page = tview.NewFlex().SetDirection(tview.FlexRow)
 

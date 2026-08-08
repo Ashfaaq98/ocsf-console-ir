@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/bus"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/demo"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ingest"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
@@ -38,14 +39,27 @@ func runWelcome(cmd *cobra.Command, dbPath string) (ui.WelcomeResult, error) {
 	logger := runtimeLogger("welcome")
 
 	return ui.RunWelcome(ui.WelcomeOptions{
-		DBPath:   dbPath,
-		WatchDir: resolvePathRelativeToBase(getWorkingDir(), ingestDir),
-		Version:  GetVersion(),
-		Logger:   logger,
+		DBPath:      dbPath,
+		WatchDir:    resolvePathRelativeToBase(getWorkingDir(), ingestDir),
+		Version:     GetVersion(),
+		DemoSummary: demoSummary(),
+		Logger:      logger,
 		Perform: func(res ui.WelcomeResult, progress func(string)) error {
 			return performWelcome(cmd, dbPath, res, logger, progress)
 		},
 	})
+}
+
+// demoSummary describes the demo investigation in one line, for the Welcome
+// Screen to show beside the action that loads it.
+//
+// Both numbers are counted from what will actually be seeded rather than
+// written down here. A literal would be right once and then quietly wrong the
+// next time the dataset or the cases changed, and this screen is the first
+// thing a new install shows.
+func demoSummary() string {
+	return fmt.Sprintf("%s · %s",
+		plural(demo.RecordCount(), "event"), plural(len(demoCases()), "case"))
 }
 
 // performWelcome does the work behind a Welcome Screen choice. It runs off the

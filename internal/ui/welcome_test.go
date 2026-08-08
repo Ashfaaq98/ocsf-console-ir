@@ -469,39 +469,62 @@ func TestWelcomePageDoesNotReflowBetweenStates(t *testing.T) {
 
 // Compact terminals drop decoration, never the actions. An 80x24 window is a
 // normal size, not an edge case.
-func TestWelcomeResponsiveTiers(t *testing.T) {
+//
+// The page reduces by measurement rather than by tier, so this pins the ladder
+// itself: as the terminal shrinks the page gives up more, never less, and the
+// actions survive every rung. They used to be pinned to specific sizes, which
+// asserted the arithmetic of the day rather than the rule.
+func TestWelcomeDropsDecorationBeforeActions(t *testing.T) {
+	heights := []int{40, 30, 24, 18, 14, 12, 10, 8}
+	last := densityFull
+
+	for _, h := range heights {
+		v := newTestWelcome(t, WelcomeOptions{DBPath: "/tmp/console-ir.db"})
+		v.relayout(120, h)
+
+		if v.density < last {
+			t.Errorf("120x%d carries more than a taller terminal did (%v after %v)",
+				h, v.density, last)
+		}
+		last = v.density
+
+		text := pageText(v)
+		for _, o := range welcomeOptions {
+			if !strings.Contains(text, o.label) {
+				t.Errorf("120x%d dropped the action %q\n%s", h, o.label, text)
+			}
+		}
+		// The name goes last of all: a screen that cannot say what it is has
+		// nothing left worth showing.
+		if !strings.Contains(text, wordmarkLines()[0]) {
+			t.Errorf("120x%d dropped the wordmark\n%s", h, text)
+		}
+	}
+
+	if last == densityFull {
+		t.Error("the page never reduced, so the ladder was never exercised")
+	}
+}
+
+// Two columns where they fit, one where they do not.
+func TestWelcomeSplitsOnlyWhenItFits(t *testing.T) {
 	for _, tc := range []struct {
-		name          string
 		width, height int
 		wantSplit     bool
-		wantPrivacy   bool
 	}{
-		{"wide", 140, 40, true, true},
-		{"standard", 100, 30, true, true},
-		{"compact", 70, 30, false, true},
-		{"short", 100, 20, true, false},
+		{140, 40, true},
+		{120, 34, true},
+		{100, 30, true},
+		{70, 30, false},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			v := newTestWelcome(t, WelcomeOptions{})
-			v.relayout(tc.width, tc.height)
+		v := newTestWelcome(t, WelcomeOptions{})
+		v.relayout(tc.width, tc.height)
 
-			if got := v.splitFits(v.leftColumn(), v.rightColumn()); got != tc.wantSplit {
-				t.Errorf("two columns = %v, want %v", got, tc.wantSplit)
-			}
-
-			text := pageText(v)
-			if got := strings.Contains(text, welcomePrivacyA); got != tc.wantPrivacy {
-				t.Errorf("privacy statement shown = %v, want %v", got, tc.wantPrivacy)
-			}
-
-			// Whatever else is dropped, every action stays on screen. Without
-			// them the screen does nothing at all.
-			for _, o := range welcomeOptions {
-				if !strings.Contains(text, o.label) {
-					t.Errorf("%dx%d dropped the action %q\n%s", tc.width, tc.height, o.label, text)
-				}
-			}
-		})
+		left, right := v.leftColumn(), v.rightColumn()
+		if got := v.splitFits(left, right); got != tc.wantSplit {
+			t.Errorf("%dx%d: two columns = %v, want %v (needs %d columns)",
+				tc.width, tc.height, got, tc.wantSplit, v.splitWidth(left, right))
+		}
 	}
 }
 
@@ -642,6 +665,7 @@ func TestWelcomeCursorOpensOnTheDemo(t *testing.T) {
 // edge of the labels.
 func TestWelcomeSelectionIsOneFullWidthRow(t *testing.T) {
 	v := newTestWelcome(t, WelcomeOptions{})
+	v.density = densityNoDetails // one cell per action, so the rows line up with the options
 	cells := v.actionCells()
 
 	if len(cells) != len(welcomeOptions) {
@@ -659,5 +683,25 @@ func TestWelcomeSelectionIsOneFullWidthRow(t *testing.T) {
 			t.Errorf("row %d is %d columns, wider than the band's %d",
 				i, c.width, welcomeActionWidth())
 		}
+	}
+}
+
+// A selected action and its consequence line are one band, not a highlighted
+// row with a loose line under it.
+func TestWelcomeSelectionCoversTheDetailLine(t *testing.T) {
+	v := newTestWelcome(t, WelcomeOptions{DemoSummary: "727 events · 4 cases"})
+	v.density = densityFull
+	cells := v.actionCells()
+
+	band := tagColor(v.theme.SelectionBg)
+	var banded int
+	for _, c := range cells {
+		if strings.Contains(c.text, band) {
+			banded++
+		}
+	}
+	if banded != 2 {
+		t.Errorf("%d rows carry the selection band, want the label and its detail\n%v",
+			banded, cells)
 	}
 }

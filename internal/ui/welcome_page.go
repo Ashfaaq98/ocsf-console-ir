@@ -104,14 +104,59 @@ func tagColor(c tcell.Color) string {
 // Composition
 // ---------------------------------------------------------------------------
 
+// welcomeDensity is how much of the optional content the page is carrying.
+//
+// The screen has to survive an 80x24 terminal, so the order in which things are
+// given up is stated here rather than discovered at runtime. Each level drops
+// exactly one thing, and the actions are in none of them: without the actions
+// the screen does nothing at all.
+type welcomeDensity int
+
+const (
+	// densityFull is everything: consequence lines, the privacy statement and
+	// the database path.
+	densityFull welcomeDensity = iota
+	// densityNoDetails drops the consequence line under each action. They cost
+	// more rows than anything else on the page — one per action plus a spacer —
+	// so they are the first thing to go.
+	densityNoDetails
+	// densityNoDatabase also drops the "it will be created at" block.
+	densityNoDatabase
+	// densityMinimal is the name, the version, the description and the choices.
+	densityMinimal
+)
+
+var welcomeDensities = []welcomeDensity{
+	densityFull, densityNoDetails, densityNoDatabase, densityMinimal,
+}
+
 // pageRows is the whole page, one string per row.
 //
-// Every row is composed here into a single string rather than laid out from
-// several widgets, because tview's escaped-tag state leaks between the lines of
-// one TextView: a block written as a single multi-line widget renders with a
+// Every row is composed into a single string rather than laid out from several
+// widgets, because tview's escaped-tag state leaks between the lines of one
+// TextView: a block written as a single multi-line widget renders with a
 // character of the previous line's colour tag bleeding onto each row after it.
 // One string per row, one single-line widget per string, and the state resets.
+//
+// The page is composed at the fullest density that fits the terminal it has.
+// Composing it is cheap — string building, no I/O — so trying and measuring
+// beats predicting, and the answer cannot drift from what is drawn.
 func (v *welcomeView) pageRows() []string {
+	var rows []string
+	for _, d := range welcomeDensities {
+		v.density = d
+		rows = v.composeRows()
+		if len(rows)+welcomeFooterRows <= v.height {
+			return rows
+		}
+	}
+	// Nothing fits: keep the last, smallest attempt and let trimToHeight say
+	// where the terminal ran out.
+	return rows
+}
+
+// composeRows lays the two columns out at the current density.
+func (v *welcomeView) composeRows() []string {
 	left, right := v.leftColumn(), v.rightColumn()
 	if v.splitFits(left, right) {
 		return v.splitRows(left, right)
@@ -239,14 +284,29 @@ func (v *welcomeView) leftColumn() []welcomeCell {
 		textCell(welcomeDescription, t.TagTextPrimary),
 	)
 
-	if !v.short {
-		// The privacy statement is the product's main claim about itself, so it
-		// is dropped only when there is genuinely no room for it.
+	// The privacy statement is the product's main claim about itself, so it is
+	// dropped only when there is genuinely no room left for it.
+	if v.density < densityMinimal {
 		cells = append(cells,
 			welcomeCell{},
 			bulletCell(welcomePrivacyA, t.TagMuted),
 			bulletCell(welcomePrivacyB, t.TagMuted),
 		)
+	}
+
+	// Where the database will go. This used to appear only after creating it
+	// had failed, which is the one moment it is too late to be useful: the
+	// analyst is about to have a file written to their disk, and the screen has
+	// known exactly where all along.
+	if v.density < densityNoDatabase {
+		if path := shortenPath(v.opts.DBPath, welcomePathWidth); path != "" {
+			cells = append(cells,
+				welcomeCell{},
+				textCell(welcomeDatabaseLeadA, t.TagMuted),
+				textCell(welcomeDatabaseLeadB, t.TagMuted),
+				textCell(path, t.TagAccent),
+			)
+		}
 	}
 	return cells
 }

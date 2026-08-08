@@ -592,7 +592,7 @@ func (h *homeView) renderPulse() {
 			glyph, colour = "▲", t.TagWarning
 		}
 		watcher = fmt.Sprintf("[%s]%s[-:-:-] [%s]%s[-:-:-]",
-			colour, glyph, t.TagMuted, tview.Escape(shortenPath(d.watcher.Dir)))
+			colour, glyph, t.TagMuted, tview.Escape(shortenPath(d.watcher.Dir, homeWatcherPathWidth)))
 	}
 
 	// A bare clock time on a 929-day-old event reads as "just now". Show the
@@ -913,22 +913,15 @@ func humanCount(n int) string {
 	return string(out)
 }
 
-// shortenPath keeps the tail of a path, which is the part that identifies it.
-func shortenPath(p string) string {
-	const max = 24
-	if len([]rune(p)) <= max {
-		return p
-	}
-	r := []rune(p)
-	return "…" + string(r[len(r)-max+1:])
-}
-
 func plural(n int, noun string) string {
 	if n == 1 {
 		return fmt.Sprintf("%d %s", n, noun)
 	}
 	return fmt.Sprintf("%d %ss", n, noun)
 }
+
+// homeWatcherPathWidth is how much of the drop folder the evidence pulse shows.
+const homeWatcherPathWidth = 24
 
 // riskTag picks the colour band for a risk score.
 func riskTag(score int, theme Theme) string {

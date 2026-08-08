@@ -15,15 +15,37 @@ type welcomeOption struct {
 	key    rune
 	label  string
 	action WelcomeAction
+
+	// detail says what this choice will actually cause, in one line beneath the
+	// label. A bare list of four verbs makes an analyst guess how big the demo
+	// is, which folder is being watched, and where the database will land; the
+	// screen already knows all three.
+	//
+	// It is a function rather than a string because two of the four answers are
+	// read off this machine, and because that keeps them out of the tests'
+	// reach as constants that could drift from what is really there.
+	detail func(v *welcomeView) string
 }
 
-var welcomeOptions = []welcomeOption{
-	{'1', "Create a database", WelcomeCreate},
-	{'2', "Load the demo investigation", WelcomeDemo},
-	{'3', "Import a file", WelcomeImport},
-	{'4', "Watch a folder", WelcomeWatch},
-	{'q', "Quit", WelcomeQuit},
+func welcomeActions() []welcomeOption {
+	return []welcomeOption{
+		{'1', "Create a database", WelcomeCreate, func(*welcomeView) string {
+			return "empty, ready for your own OCSF"
+		}},
+		{'2', "Load the demo investigation", WelcomeDemo, func(v *welcomeView) string {
+			return v.opts.DemoSummary
+		}},
+		{'3', "Import a file", WelcomeImport, func(*welcomeView) string {
+			return "one .json or .jsonl, read as OCSF"
+		}},
+		{'4', "Watch a folder", WelcomeWatch, func(v *welcomeView) string {
+			return v.watchStatus
+		}},
+		{'q', "Quit", WelcomeQuit, nil},
+	}
 }
+
+var welcomeOptions = welcomeActions()
 
 // welcomeDefaultCursor is where the cursor rests when the screen opens.
 //
@@ -35,12 +57,57 @@ var welcomeOptions = []welcomeOption{
 const welcomeDefaultCursor = 1
 
 // actionCells is the action list as the right-hand column.
+//
+// Each action is a label and, where there is room, the consequence beneath it,
+// with a blank row between actions so the pairs read as pairs. The details go
+// before the actions do: a screen with no actions does nothing at all.
 func (v *welcomeView) actionCells() []welcomeCell {
-	out := make([]welcomeCell, 0, len(welcomeOptions))
+	details := v.density == densityFull
+	out := make([]welcomeCell, 0, len(welcomeOptions)*3)
+
 	for i, o := range welcomeOptions {
-		out = append(out, actionCell(o.key, o.label, v.theme, i == v.cursor))
+		selected := i == v.cursor
+		out = append(out, actionCell(o.key, o.label, v.theme, selected))
+
+		if !details || o.detail == nil {
+			continue
+		}
+		text := o.detail(v)
+		if text == "" {
+			continue
+		}
+		out = append(out, detailCell(text, v.theme, selected))
+		if i < len(welcomeOptions)-1 {
+			out = append(out, welcomeCell{})
+		}
 	}
 	return out
+}
+
+// detailCell is the consequence line beneath an action, indented to sit under
+// the label rather than under the key cap.
+func detailCell(text string, theme Theme, selected bool) welcomeCell {
+	indent := strings.Repeat(" ", welcomeKeycapWidth+welcomeKeycapGap)
+	if !selected {
+		return welcomeCell{
+			text:  fmt.Sprintf("%s[%s]%s[-:-:-]", indent, theme.TagMuted, tview.Escape(text)),
+			width: welcomeKeycapWidth + welcomeKeycapGap + len([]rune(text)),
+		}
+	}
+
+	// Selected, the detail is part of the same band as its label, so the two
+	// read as one selected thing rather than as a highlighted row with a loose
+	// line under it.
+	width := welcomeActionWidth()
+	if n := welcomeKeycapWidth + welcomeKeycapGap + len([]rune(text)); n > width {
+		width = n
+	}
+	pad := strings.Repeat(" ", width-welcomeKeycapWidth-welcomeKeycapGap-len([]rune(text)))
+	return welcomeCell{
+		text: fmt.Sprintf("%s[%s:%s]%s%s[-:-:-]", indent,
+			tagColor(theme.TextMuted), tagColor(theme.SelectionBg), tview.Escape(text), pad),
+		width: width,
+	}
 }
 
 // moveCursor steps the cursor by delta, wrapping at both ends. Wrapping matters
