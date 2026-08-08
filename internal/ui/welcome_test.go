@@ -569,3 +569,95 @@ func TestWrapText(t *testing.T) {
 
 // errPermission is the failure the error-state tests provoke.
 var errPermission = errors.New("permission denied")
+
+// The cursor is the second way into the action list, and it has to wrap: on a
+// five-item list, pressing up from the top is how people reach Quit.
+func TestWelcomeCursorWraps(t *testing.T) {
+	v := newTestWelcome(t, WelcomeOptions{})
+	last := len(welcomeOptions) - 1
+
+	v.cursor = 0
+	press(v, 'k')
+	if v.cursor != last {
+		t.Errorf("up from the top landed on %d, want %d", v.cursor, last)
+	}
+
+	v.cursor = last
+	v.handleKey(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+	if v.cursor != 0 {
+		t.Errorf("down from the bottom landed on %d, want 0", v.cursor)
+	}
+}
+
+// Enter runs whatever the cursor is resting on.
+func TestWelcomeEnterActivatesTheCursor(t *testing.T) {
+	var got WelcomeResult
+	v := newTestWelcome(t, WelcomeOptions{
+		Perform: func(res WelcomeResult, _ func(string)) error {
+			got = res
+			return nil
+		},
+	})
+
+	v.cursor = 0 // Create a database
+	v.handleKey(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+
+	if got.Action != WelcomeCreate {
+		t.Errorf("Enter ran %v, want the action under the cursor", got.Action)
+	}
+}
+
+// The digits still act on their own. The cursor was added beside them, not in
+// place of them: making everyone press a key twice would be a regression for
+// anybody who already knows this screen.
+func TestWelcomeDigitsStillActImmediately(t *testing.T) {
+	var got WelcomeResult
+	v := newTestWelcome(t, WelcomeOptions{
+		Perform: func(res WelcomeResult, _ func(string)) error {
+			got = res
+			return nil
+		},
+	})
+
+	v.cursor = 0 // deliberately not the demo
+	press(v, '2')
+
+	if got.Action != WelcomeDemo {
+		t.Errorf("pressing 2 ran %v, want the demo regardless of the cursor", got.Action)
+	}
+}
+
+// The cursor opens on the demo. That is the recommendation, and it replaced a
+// line of copy under the card that said the same thing in a sentence.
+func TestWelcomeCursorOpensOnTheDemo(t *testing.T) {
+	v := newTestWelcome(t, WelcomeOptions{})
+
+	if got := v.cursorOption().action; got != WelcomeDemo {
+		t.Errorf("the cursor opens on %v, want the demo", got)
+	}
+}
+
+// Exactly one row is selected, and the band is a rectangle: every action row
+// has to be the same drawn width, or the highlight follows the ragged right
+// edge of the labels.
+func TestWelcomeSelectionIsOneFullWidthRow(t *testing.T) {
+	v := newTestWelcome(t, WelcomeOptions{})
+	cells := v.actionCells()
+
+	if len(cells) != len(welcomeOptions) {
+		t.Fatalf("got %d action rows, want %d", len(cells), len(welcomeOptions))
+	}
+	if cells[v.cursor].width != welcomeActionWidth() {
+		t.Errorf("the selected row is %d columns wide, want the full %d",
+			cells[v.cursor].width, welcomeActionWidth())
+	}
+	for i, c := range cells {
+		if i == v.cursor {
+			continue
+		}
+		if c.width > welcomeActionWidth() {
+			t.Errorf("row %d is %d columns, wider than the band's %d",
+				i, c.width, welcomeActionWidth())
+		}
+	}
+}

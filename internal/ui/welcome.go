@@ -136,7 +136,9 @@ type welcomeView struct {
 	built  bool
 
 	// Screen state.
-	state   welcomeState
+	state welcomeState
+	// cursor is the action the arrow keys are resting on.
+	cursor  int
 	pending WelcomeResult
 	loading string
 	err     error
@@ -176,7 +178,7 @@ func RunWelcome(opts WelcomeOptions) (WelcomeResult, error) {
 func newWelcomeView(opts WelcomeOptions) *welcomeView {
 	theme := themeBuilders[loadThemeName()]()
 
-	v := &welcomeView{opts: opts, theme: theme}
+	v := &welcomeView{opts: opts, theme: theme, cursor: welcomeDefaultCursor}
 
 	v.page = tview.NewFlex().SetDirection(tview.FlexRow)
 
@@ -424,7 +426,11 @@ func (v *welcomeView) footerText() string {
 	case welcomeStateError:
 		hints = actionBar(t, keyHint{"r", "Retry"}, keyHint{"q", "Quit"})
 	default:
-		hints = actionBar(t, keyHint{"1-4", "Choose"}, keyHint{"q", "Quit"})
+		hints = actionBar(t,
+			keyHint{welcomeArrows(), "Move"},
+			keyHint{welcomeEnter(), "Select"},
+			keyHint{"1-4", "Jump"},
+			keyHint{"q", "Quit"})
 	}
 
 	status := v.statusText()
@@ -433,6 +439,23 @@ func (v *welcomeView) footerText() string {
 		return " " + hints
 	}
 	return " " + hints + strings.Repeat(" ", pad) + fmt.Sprintf("[%s]%s[-:-:-]", t.TagMuted, status)
+}
+
+// welcomeArrows and welcomeEnter name the movement keys in whichever alphabet
+// this terminal can draw. A footer that teaches the keys in glyphs the screen
+// cannot render teaches nothing.
+func welcomeArrows() string {
+	if supportsUnicode() {
+		return "↑↓"
+	}
+	return "up/dn"
+}
+
+func welcomeEnter() string {
+	if supportsUnicode() {
+		return "⏎"
+	}
+	return "Enter"
 }
 
 // statusText is what the screen worked out about this terminal. It is a small
@@ -528,8 +551,25 @@ func (v *welcomeView) handleKey(ev *tcell.EventKey) *tcell.EventKey {
 		switch ev.Key() {
 		case tcell.KeyCtrlC:
 			return ev
+		case tcell.KeyUp:
+			v.moveCursor(-1)
+		case tcell.KeyDown:
+			v.moveCursor(1)
+		case tcell.KeyEnter:
+			v.activate(v.cursorOption())
 		case tcell.KeyRune:
-			v.choose(ev.Rune())
+			switch ev.Rune() {
+			case 'k':
+				v.moveCursor(-1)
+			case 'j':
+				v.moveCursor(1)
+			default:
+				// The digits still act immediately rather than moving the
+				// cursor. That is what the screen has always done and what the
+				// footer advertises; the cursor is a second way in, not a
+				// replacement that makes everyone press a key twice.
+				v.choose(ev.Rune())
+			}
 		}
 		return nil
 	}
