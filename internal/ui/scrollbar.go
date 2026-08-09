@@ -31,14 +31,7 @@ const (
 // text instead would be overwritten the moment the text was drawn.
 func attachScrollbar(tv *tview.TextView, theme *Theme) {
 	tv.SetDrawFunc(func(screen tcell.Screen, x, y, width, height int) (int, int, int, int) {
-		inner := func() (int, int, int, int) {
-			// What Box would have returned: inside the border, if there is one.
-			if width >= 2 && height >= 2 {
-				return x + 1, y + 1, width - 2, height - 2
-			}
-			return x, y, width, height
-		}
-		ix, iy, iw, ih := inner()
+		ix, iy, iw, ih := boxInnerRect(x, y, width, height)
 		if iw < 4 || ih < 2 {
 			return ix, iy, iw, ih
 		}
@@ -66,6 +59,68 @@ func attachScrollbar(tv *tview.TextView, theme *Theme) {
 		drawScrollbar(screen, ix+iw-1, iy, ih, offset, total, theme)
 		return ix, iy, textWidth, ih
 	})
+}
+
+// boxInnerRect is what Box would have returned: inside the border, if there is
+// one. A draw function replaces that calculation, so it has to redo it.
+func boxInnerRect(x, y, width, height int) (int, int, int, int) {
+	if width >= 2 && height >= 2 {
+		return x + 1, y + 1, width - 2, height - 2
+	}
+	return x, y, width, height
+}
+
+// attachTableScrollbar does the same for a table, below its fixed header rows.
+//
+// The findings queue holds up to triagePageSize rows in a pane around fifteen
+// deep and a tview.Table draws no position indicator at all — so there was no
+// way to tell how far down a queue of two hundred you were, or how much was
+// left, while the detail pane directly below it had a bar.
+func attachTableScrollbar(t *tview.Table, fixedRows int, theme *Theme) {
+	t.SetDrawFunc(func(screen tcell.Screen, x, y, width, height int) (int, int, int, int) {
+		ix, iy, iw, ih := boxInnerRect(x, y, width, height)
+		if iw < 4 || ih <= fixedRows+1 {
+			return ix, iy, iw, ih
+		}
+
+		// The header rows are not scrollable, so the track starts below them
+		// and measures the rows that are.
+		drawScrollbar(screen, ix+iw-1, iy+fixedRows, ih-fixedRows,
+			tableRowOffset(t, fixedRows, ih), t.GetRowCount()-fixedRows, theme)
+		return ix, iy, iw - 2, ih
+	})
+}
+
+// tableRowOffset is the offset the table is about to draw at.
+//
+// Not the offset it reports. A Table settles its own offset partway through
+// Draw, after the draw function has run, so GetOffset returns the previous
+// frame's — and a bar built on that trails the cursor by one row for as long as
+// the analyst holds the key down, which at the foot of the queue means a thumb
+// that stops one row short of the bottom. This mirrors the clamp in tview's
+// Table.Draw so the bar lands where the rows will.
+//
+// The exception is the mouse wheel, which moves the offset without moving the
+// cursor: until the next keypress the bar marks the cursor rather than the
+// viewport.
+func tableRowOffset(t *tview.Table, fixedRows, innerHeight int) int {
+	offset, _ := t.GetOffset()
+	row, _ := t.GetSelection()
+	rows := t.GetRowCount()
+
+	if row >= fixedRows && row < fixedRows+offset {
+		offset = row - fixedRows
+	}
+	if row+1-offset >= innerHeight {
+		offset = row + 1 - innerHeight
+	}
+	if rows-offset < innerHeight {
+		offset = rows - innerHeight
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return offset
 }
 
 // drawScrollbar paints the track and the thumb.

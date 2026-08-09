@@ -473,6 +473,9 @@ type UI struct {
 	// findingAsset is the host or user each loaded finding fired on, keyed by
 	// finding id and filled once per page rather than once per row.
 	findingAsset map[string]string
+	// findingCase is the title of each case the loaded findings belong to,
+	// keyed by case id.
+	findingCase map[string]string
 
 	// findingInspect holds the selected finding's context — its indicators and
 	// their prevalence, and the name of the case it belongs to — loaded off the
@@ -927,6 +930,7 @@ func (ui *UI) setupLayout() {
 	ui.eventList.SetSelectable(true, false)
 	// Pin header row so it stays visible when selecting/scrolling.
 	ui.eventList.SetFixed(1, 0)
+	attachTableScrollbar(ui.eventList, 1, &ui.theme)
 
 	ui.eventDetail = tview.NewTextView()
 	ui.eventDetail.SetTitle(" Event Details ")

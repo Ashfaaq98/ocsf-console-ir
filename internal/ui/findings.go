@@ -35,34 +35,146 @@ func (ui *UI) jumpToFindings() {
 	ui.spawnLoad(ui.loadFindings)
 }
 
-// triageColumns returns the visible columns for the current width.
+// triageColumn is one column of the queue and the width at which it earns its
+// space.
+type triageColumn struct {
+	title string
+	// minWidth is the pane width from which this column is drawn. Zero means
+	// always: the first four say what the finding is and how urgent, and Title
+	// says what happened, so a queue without them is not a queue.
+	minWidth int
+	// expand gives the column the pane's slack.
+	expand bool
+}
+
+// triageColumnSet is every column, in display order.
 //
-// §7 drops source first, then technique, then asset. The title never truncates
-// below 30 columns, which is why it is never a candidate: a queue of unreadable
-// titles is not a queue.
-func (ui *UI) triageColumns() []string {
-	all := []string{"!", "Risk", "Age", "Status", "Title", "Asset", "Tactic", "Source"}
-	_, _, width, _ := ui.eventList.GetInnerRect()
-	switch {
-	case width >= 120:
-		return all
-	case width >= 100:
-		return all[:7] // drop Source
-	case width >= 84:
-		return all[:6] // drop Tactic
-	default:
-		return all[:5] // drop Asset
+// Display order and drop order used to be the same thing — the ladder returned
+// a prefix of one slice — which meant a column could only be added at the end,
+// where it is also the first to go. Case belongs beside Status and is worth
+// more than Asset or Tactic, so the two orders are now separate: this slice is
+// what the analyst reads left to right, and minWidth is what survives a narrow
+// terminal.
+func triageColumnSet() []triageColumn {
+	return []triageColumn{
+		{title: "!"},
+		{title: "Risk"},
+		{title: "Age"},
+		{title: "Status"},
+		{title: "Case", minWidth: 96},
+		{title: "Title", expand: true},
+		{title: "Asset", minWidth: 84},
+		{title: "Tactic", minWidth: 108},
+		{title: "Source", minWidth: 124},
 	}
 }
 
+// triageColumns returns the visible columns for the current width.
+func (ui *UI) triageColumns() []triageColumn {
+	_, _, width, _ := ui.eventList.GetInnerRect()
+	out := make([]triageColumn, 0, len(triageColumnSet()))
+	for _, c := range triageColumnSet() {
+		if width >= c.minWidth {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 func (ui *UI) setFindingsHeaders() {
-	headers := ui.triageColumns()
-	for col, header := range headers {
-		ui.eventList.SetCell(0, col, tview.NewTableCell(header).
+	for col, c := range ui.triageColumns() {
+		ui.eventList.SetCell(0, col, tview.NewTableCell(c.title).
 			SetTextColor(ui.theme.TableHeader).
 			SetBackgroundColor(ui.theme.TableHeaderBg).
 			SetAttributes(tcell.AttrBold))
 	}
+}
+
+// triageCell is one rendered value.
+type triageCell struct {
+	text  string
+	color tcell.Color
+}
+
+// triageRow renders one finding's cells, by column title.
+//
+// By title rather than by position: the cells were a slice indexed against the
+// column list, with the title's expansion applied to "col == 4" — so inserting
+// a column silently moved the expansion onto whatever landed there.
+func (ui *UI) triageRow(f store.Finding) map[string]triageCell {
+	t := ui.theme
+
+	sel := " "
+	if ui.triageSelection().has(f.FindingUID) {
+		sel = "✓"
+	}
+	risk := "—"
+	if f.RiskScore > 0 {
+		risk = fmt.Sprintf("%d", f.RiskScore)
+	}
+
+	return map[string]triageCell{
+		"!":      {sel + " " + formatSeverityBadge(f.Severity, t), ui.getSeverityTcellColor(f.Severity)},
+		"Risk":   {risk, t.TextPrimary},
+		"Age":    {renderRelativeTime(f.LastSeen), t.TextMuted},
+		"Status": {f.StatusName(), ui.findingStatusColor(f)},
+		"Case":   ui.triageCaseCell(f),
+		"Title":  {f.Title, t.TextPrimary},
+		"Asset":  {orDash(ui.findingAsset[f.ID]), t.TextMuted},
+		"Tactic": {orDash(strings.Join(f.AttackTechniques(), ", ")), t.TextMuted},
+		"Source": {orDash(f.AnalyticName), t.TextMuted},
+	}
+}
+
+// triageCaseCell says whether a finding is already someone's work.
+//
+// The queue could not answer that without opening each finding in turn, and it
+// is the first thing worth knowing about a detection: an escalated finding is
+// being handled, and triaging it again is duplicated work. The case's title
+// comes from the page's own lookup; the identifier alone would be no answer.
+func (ui *UI) triageCaseCell(f store.Finding) triageCell {
+	if strings.TrimSpace(f.CaseID) == "" {
+		return triageCell{"—", ui.theme.TextMuted}
+	}
+	if title := ui.findingCase[f.CaseID]; title != "" {
+		return triageCell{truncate(title, triageCaseWidth), ui.theme.Accent}
+	}
+	// The case exists but its title has not been read. Say that it is in one
+	// rather than showing a UUID no one recognises.
+	return triageCell{"in a case", ui.theme.Accent}
+}
+
+// triageCaseWidth bounds the Case column. Long enough to tell two cases apart,
+// short enough that it never competes with the title.
+const triageCaseWidth = 16
+
+// findingCases is the title of each case the loaded page belongs to.
+//
+// One query per distinct case on the page, which for a triage queue is a
+// handful — most findings are in no case at all, which is the point of the
+// column.
+func (ui *UI) findingCases(findings []store.Finding) map[string]string {
+	out := map[string]string{}
+	if ui.store == nil {
+		return out
+	}
+	for _, f := range findings {
+		id := strings.TrimSpace(f.CaseID)
+		if id == "" {
+			continue
+		}
+		if _, done := out[id]; done {
+			continue
+		}
+		c, err := ui.store.GetCase(ui.ctx, id)
+		if err != nil || c == nil {
+			// Recorded as seen so a missing case is not looked up once per row.
+			out[id] = ""
+			continue
+		}
+		out[id] = c.Title
+	}
+	return out
 }
 
 // loadFindings fetches the triage queue and renders it.
@@ -115,10 +227,12 @@ func (ui *UI) loadFindings() {
 	// any — the demo dataset supplies none at all — so it was a dash on every
 	// row while the inspector beside it listed the host from the observables.
 	assets := ui.findingAssets(findings)
+	cases := ui.findingCases(findings)
 
 	ui.queueUpdate(func() {
 		ui.findings = findings
 		ui.findingAsset = assets
+		ui.findingCase = cases
 		ui.findingsTotal = total
 		ui.findingsUnfiltered = unfiltered
 		ui.findingsErr = nil
@@ -135,11 +249,35 @@ func (ui *UI) loadFindings() {
 // Open filter, in a database of fifteen, looked like page one of two with five
 // findings unaccounted for. They are not on another page; they are filtered out.
 func (ui *UI) findingsTitle(shown int) string {
-	hidden := ui.findingsUnfiltered - shown
-	if hidden <= 0 {
-		return fmt.Sprintf("FINDINGS  ·  %d", shown)
+	title := fmt.Sprintf("FINDINGS  ·  %d", shown)
+	if hidden := ui.findingsUnfiltered - shown; hidden > 0 {
+		title = fmt.Sprintf("FINDINGS  ·  %d shown  ·  %d hidden by filters", shown, hidden)
 	}
-	return fmt.Sprintf("FINDINGS  ·  %d shown  ·  %d hidden by filters", shown, hidden)
+	return title + ui.droppedColumnSuffix()
+}
+
+// droppedColumnSuffix says how many columns the terminal is too narrow for.
+//
+// The queue drops columns rather than scrolling sideways — there is nothing off
+// to the right to scroll to — and until now it dropped them silently, so a
+// narrow terminal was indistinguishable from a build without those columns.
+// Worded to stay apart from the filter count beside it: rows are hidden, and
+// columns do not fit.
+func (ui *UI) droppedColumnSuffix() string {
+	_, _, width, _ := ui.eventList.GetInnerRect()
+	if width <= 0 {
+		// Never drawn. The column set is a guess at this point, so it is not
+		// something to report.
+		return ""
+	}
+	dropped := len(triageColumnSet()) - len(ui.triageColumns())
+	if dropped <= 0 {
+		return ""
+	}
+	if dropped == 1 {
+		return "  ·  1 column dropped to fit"
+	}
+	return fmt.Sprintf("  ·  %d columns dropped to fit", dropped)
 }
 
 // triagePageSize bounds one query. §7: paginate, never load an unbounded set.
@@ -224,50 +362,15 @@ func (ui *UI) updateFindingsList(total int) {
 	// only the page that happens to be loaded, which is right until the result
 	// exceeds one page and then silently wrong.
 
-	visible := len(ui.triageColumns())
+	columns := ui.triageColumns()
 
 	for i, f := range ui.findings {
 		row := i + 1
-		attack := strings.Join(f.AttackTechniques(), ", ")
-
-		risk := "—"
-		if f.RiskScore > 0 {
-			risk = fmt.Sprintf("%d", f.RiskScore)
-		}
-
-		source := f.AnalyticName
-		if source == "" {
-			source = "—"
-		}
-		asset := ui.findingAsset[f.ID]
-		if asset == "" {
-			asset = "—"
-		}
-
-		selPrefix := " "
-		if ui.triageSelection().has(f.FindingUID) {
-			selPrefix = "✓"
-		}
-
-		cells := []struct {
-			text  string
-			color tcell.Color
-		}{
-			{selPrefix + " " + formatSeverityBadge(f.Severity, ui.theme), ui.getSeverityTcellColor(f.Severity)},
-			{risk, ui.theme.TextPrimary},
-			{renderRelativeTime(f.LastSeen), ui.theme.TextMuted},
-			{f.StatusName(), ui.findingStatusColor(f)},
-			{f.Title, ui.theme.TextPrimary},
-			{asset, ui.theme.TextMuted},
-			{attack, ui.theme.TextMuted},
-			{source, ui.theme.TextMuted},
-		}
-		for col, c := range cells {
-			if col >= visible {
-				break
-			}
-			cell := tview.NewTableCell(c.text).SetTextColor(c.color)
-			if col == 4 { // Title is col 4
+		values := ui.triageRow(f)
+		for col, c := range columns {
+			v := values[c.title]
+			cell := tview.NewTableCell(v.text).SetTextColor(v.color)
+			if c.expand {
 				cell.SetExpansion(1)
 			}
 			ui.eventList.SetCell(row, col, cell)

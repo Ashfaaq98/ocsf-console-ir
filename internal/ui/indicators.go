@@ -54,6 +54,9 @@ func (ui *UI) buildIndicatorsView() *indicatorsView {
 	v := &indicatorsView{}
 
 	v.table = tview.NewTable().SetSelectable(true, false).SetFixed(1, 0)
+	// The same bar as the findings queue: this table holds up to
+	// indicatorPageSize rows and had no position indicator either.
+	attachTableScrollbar(v.table, 1, &ui.theme)
 	stylePanel(v.table.Box, "INDICATORS", PanelRolePrimary, t)
 	v.table.SetBackgroundColor(t.Bg)
 	v.table.SetSelectedStyle(tcell.StyleDefault.

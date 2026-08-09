@@ -136,3 +136,99 @@ func TestScrollStopsAtTheEnd(t *testing.T) {
 		t.Errorf("scrolling to the end emptied the pane:\n%s", joined)
 	}
 }
+
+// thumbRows is which screen rows carry the scrollbar thumb.
+func thumbRows(lines []string) []int {
+	var out []int
+	for i, l := range lines {
+		if strings.Contains(l, scrollThumb) {
+			out = append(out, i)
+		}
+	}
+	return out
+}
+
+// A table holding more rows than it can show gets a bar too.
+//
+// The findings queue holds up to 200 rows in a pane around fifteen deep, and
+// tview.Table draws no position indicator — so there was no way to tell how far
+// down a queue you were, while the detail pane below it had a bar.
+func TestTableScrollbarMarksThePosition(t *testing.T) {
+	tbl := tview.NewTable().SetSelectable(true, false).SetFixed(1, 0)
+	tbl.SetBorder(true)
+	attachTableScrollbar(tbl, 1, ptrTheme(themeDark()))
+	for row := 0; row < 40; row++ {
+		tbl.SetCell(row, 0, tview.NewTableCell("finding"))
+	}
+
+	tbl.Select(1, 0)
+	top := thumbRows(renderPrimitive(t, tbl, 40, 12))
+	if len(top) == 0 {
+		t.Fatal("no scrollbar on a table of forty rows in twelve")
+	}
+	if top[0] != 2 {
+		t.Errorf("at the top of the queue the thumb starts at row %d, want row 2 (under the header)", top[0])
+	}
+}
+
+// And it reaches the bottom when the cursor does.
+//
+// A Table settles its offset partway through Draw, after the draw function has
+// run, so GetOffset returns the previous frame's — a bar built on that trails
+// by a row for as long as the key is held, and stops short of the end.
+func TestTableScrollbarReachesTheEnd(t *testing.T) {
+	tbl := tview.NewTable().SetSelectable(true, false).SetFixed(1, 0)
+	tbl.SetBorder(true)
+	attachTableScrollbar(tbl, 1, ptrTheme(themeDark()))
+	for row := 0; row < 40; row++ {
+		tbl.SetCell(row, 0, tview.NewTableCell("finding"))
+	}
+
+	tbl.Select(39, 0) // the last row, as End would
+	rows := thumbRows(renderPrimitive(t, tbl, 40, 12))
+	if len(rows) == 0 {
+		t.Fatal("no scrollbar drawn")
+	}
+	// Inner rect is rows 1..10 of a 12-row box; the track sits below the
+	// header, so the last track row is 10.
+	if last := rows[len(rows)-1]; last != 10 {
+		t.Errorf("with the cursor on the last finding the thumb ends at row %d, want row 10", last)
+	}
+}
+
+// A table that fits shows no bar, for the same reason a TextView does not.
+func TestTableScrollbarIsAbsentWhenEverythingFits(t *testing.T) {
+	tbl := tview.NewTable().SetSelectable(true, false).SetFixed(1, 0)
+	tbl.SetBorder(true)
+	attachTableScrollbar(tbl, 1, ptrTheme(themeDark()))
+	for row := 0; row < 4; row++ {
+		tbl.SetCell(row, 0, tview.NewTableCell("finding"))
+	}
+
+	lines := renderPrimitive(t, tbl, 40, 12)
+	if rows := thumbRows(lines); len(rows) > 0 {
+		t.Errorf("a scrollbar was drawn on a table of four rows in twelve:\n%s",
+			strings.Join(lines, "\n"))
+	}
+}
+
+// The bar's column is reserved, not painted over the rows.
+func TestTableScrollbarDoesNotOverwriteACell(t *testing.T) {
+	tbl := tview.NewTable().SetSelectable(true, false).SetFixed(1, 0)
+	tbl.SetBorder(true)
+	attachTableScrollbar(tbl, 1, ptrTheme(themeDark()))
+	for row := 0; row < 40; row++ {
+		cell := tview.NewTableCell(strings.Repeat("wide", 20))
+		cell.SetExpansion(1)
+		tbl.SetCell(row, 0, cell)
+	}
+
+	lines := renderPrimitive(t, tbl, 40, 12)
+	for _, i := range thumbRows(lines) {
+		col := screenColumnOf(lines[i], scrollThumb)
+		if col != 38 {
+			t.Errorf("the thumb landed at column %d of row %d, want the reserved column 38:\n%s",
+				col, i, lines[i])
+		}
+	}
+}
