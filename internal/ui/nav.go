@@ -71,15 +71,15 @@ type destination struct {
 func destinations() []destination {
 	return []destination{
 		{destTriage, '1', "Triage", "Ranked queue of open findings",
-			[]keyHint{{"⏎", "open"}, {"Space", "select"}, {"e", "escalate"},
-				{"v", "verdict"}, {"s", "status"}, {"f", "filter"}, {"/", "search"}},
+			[]keyHint{{"Space", "select"}, {"e", "escalate"}, {"v", "verdict"},
+				{"s", "status"}, {"f", "filter"}, {"/", "search"}, {"Tab", "detail"}},
 			true, false, (*UI).jumpToFindings},
 		{destCases, '2', "Cases", "Investigations and briefings",
 			[]keyHint{{"⏎", "open"}, {"c", "new case"}, {"r", "refresh"}},
 			false, false, (*UI).switchToCases},
 		{destEvents, '3', "Events", "Corroborating OCSF events",
 			[]keyHint{{"⏎", "expand"}, {"p", "pivot"}, {"z", "group"},
-				{"N", "next"}, {"P", "prev"}},
+				{"N", "next"}, {"P", "prev"}, {"Tab", "detail"}},
 			false, true, (*UI).switchToAllEvents},
 		{destIndicators, '4', "Indicators", "Every observable in the database",
 			[]keyHint{{"⏎", "pivot"}, {"/", "search"}, {"r", "refresh"}},

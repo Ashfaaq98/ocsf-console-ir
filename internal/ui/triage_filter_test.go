@@ -194,11 +194,45 @@ func TestDescribeNamesTheActiveFilters(t *testing.T) {
 	f.toggle(chipSeverityHigh)
 	f.search = "lsass"
 
+	// Toggling a chip by hand leaves the saved view: the set on screen is no
+	// longer the one the view describes, and pretending otherwise is what made
+	// clearing the filters put Open back.
 	got := f.describe()
-	for _, want := range []string{"My queue", "Open", "Sev ≥ High", "lsass"} {
+	for _, want := range []string{"All findings", "Open", "Sev ≥ High", "lsass"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("describe() = %q, missing %q", got, want)
 		}
+	}
+
+	// On a saved view it names the view.
+	f.applyView(0)
+	if got := f.describe(); !strings.Contains(got, "My queue") {
+		t.Errorf("describe() = %q, want the saved view named", got)
+	}
+}
+
+// Clearing clears. It used to mean "back to My queue", whose chips include
+// Open — so the one filter an analyst most wants to drop came straight back.
+func TestClearDropsEveryFilter(t *testing.T) {
+	f := newTriageFilter()
+	f.toggle(chipSeverityHigh)
+	f.search = "lsass"
+
+	f.clear()
+
+	if len(f.active) != 0 {
+		t.Errorf("chips survived a clear: %v", f.active)
+	}
+	if f.search != "" {
+		t.Errorf("the search survived a clear: %q", f.search)
+	}
+	// And nothing puts a chip back on the next query.
+	got := f.storeFilter(time.Now(), 10, 0)
+	if got.OpenOnly {
+		t.Error("clearing the filters left the Open chip applied")
+	}
+	if got.MinSeverityID != 0 || !got.SeenAfter.IsZero() || got.HasObservables {
+		t.Errorf("a filter survived a clear: %+v", got)
 	}
 }
 
@@ -270,7 +304,7 @@ func TestSelectionIgnoresEmptyIDs(t *testing.T) {
 // The chip row shows what is applied and what is available.
 func TestRenderChips(t *testing.T) {
 	f := newTriageFilter()
-	f.toggle(chipLast24h)
+	f.applyView(0)
 
 	got := f.renderChips(themeDark())
 	for _, want := range []string{"Open", "Last 24h", "Sev ≥ High", "saved:", "My queue"} {

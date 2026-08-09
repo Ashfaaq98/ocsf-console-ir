@@ -470,6 +470,10 @@ type UI struct {
 	// corrected itself one repaint later.
 	termWidth int
 
+	// findingAsset is the host or user each loaded finding fired on, keyed by
+	// finding id and filled once per page rather than once per row.
+	findingAsset map[string]string
+
 	// findingInspect holds the selected finding's context — its indicators and
 	// their prevalence, and the name of the case it belongs to — loaded off the
 	// UI goroutine behind a debounce.
@@ -931,6 +935,10 @@ func (ui *UI) setupLayout() {
 	ui.eventDetail.SetDynamicColors(true)
 	ui.eventDetail.SetWordWrap(true)
 	ui.eventDetail.SetScrollable(true)
+	// A pane that scrolls with no mark on it gives no way to know there is
+	// anything below the fold. The theme is passed by pointer so the bar
+	// follows a theme change without rebuilding the widget.
+	attachScrollbar(ui.eventDetail, &ui.theme)
 
 	ui.statusBar = tview.NewTextView()
 	ui.statusBar.SetDynamicColors(true)
@@ -1196,6 +1204,22 @@ func (ui *UI) screenKeys() func(*tcell.EventKey) *tcell.EventKey {
 // while the strip above them advertised them as bulk actions.
 func (ui *UI) triageKeys(ev *tcell.EventKey) *tcell.EventKey {
 	switch ev.Key() {
+	case tcell.KeyTab, tcell.KeyBacktab:
+		// Between the two panels this screen has.
+		//
+		// Unclaimed it reached cycleFocus, which cycles the case sidebar, the
+		// events list and the event detail — and the sidebar is not in Triage's
+		// tree, so one of the three stops was invisible and the status line
+		// announced "Focus: Cases" on the findings queue.
+		ui.cycleTriageFocus()
+		return nil
+
+	case tcell.KeyEnter:
+		// Nothing. It called showFindingDetails, which repaints what moving the
+		// cursor has already painted — so Enter looked bound and did nothing.
+		// Reading the detail is Tab; escalating is e.
+		return nil
+
 	case tcell.KeyCtrlA:
 		ui.selectAllFindings()
 		return nil
@@ -1206,13 +1230,10 @@ func (ui *UI) triageKeys(ev *tcell.EventKey) *tcell.EventKey {
 		return nil
 	case tcell.KeyRune:
 		switch ev.Rune() {
-		case 'c', 'a':
-			// One flow, not two. Escalation already offers "create a new case"
-			// beside every existing one, so a separate add-to-case key would be
-			// the same form with one option removed.
-			ui.escalateFindings(ui.triageTargets())
-			return nil
 		case 'e':
+			// One key. Escalation already offers "create a new case" beside
+			// every existing one, so c and a were the same form under two more
+			// names — three keys for one action.
 			ui.escalateFindings(ui.triageTargets())
 			return nil
 		case 's', 'S':
@@ -1236,6 +1257,22 @@ func (ui *UI) triageKeys(ev *tcell.EventKey) *tcell.EventKey {
 	return ev
 }
 
+// cycleTriageFocus moves between the queue and the detail pane.
+func (ui *UI) cycleTriageFocus() {
+	if ui.app == nil || ui.eventList == nil || ui.eventDetail == nil {
+		return
+	}
+	if ui.app.GetFocus() == ui.eventDetail {
+		ui.app.SetFocus(ui.eventList)
+		ui.highlightFocus(ui.eventList)
+		ui.setStatusDirect("[%s]Queue[-:-:-]", ui.theme.TagAccent)
+		return
+	}
+	ui.app.SetFocus(ui.eventDetail)
+	ui.highlightFocus(ui.eventDetail)
+	ui.setStatusDirect("[%s]Selected finding[-:-:-] · ↑↓ scrolls", ui.theme.TagAccent)
+}
+
 // selectAllFindings marks every finding currently loaded.
 func (ui *UI) selectAllFindings() {
 	sel := ui.triageSelection()
@@ -1251,6 +1288,9 @@ func (ui *UI) selectAllFindings() {
 // is the same table over a narrower query.
 func (ui *UI) eventsKeys(ev *tcell.EventKey) *tcell.EventKey {
 	switch ev.Key() {
+	case tcell.KeyTab, tcell.KeyBacktab:
+		ui.cycleTriageFocus()
+		return nil
 	case tcell.KeyEnter:
 		// Expand or collapse the cluster under the cursor.
 		if c := ui.clusterAtRow(rowOf(ui.eventList)); c != nil {

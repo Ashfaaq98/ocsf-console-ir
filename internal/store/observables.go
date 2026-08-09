@@ -387,6 +387,52 @@ func (s *Store) GetObservablesForEvents(ctx context.Context, eventIDs []string) 
 	return out, nil
 }
 
+// GetObservablesForFindings is GetObservablesForEvents for findings: one query
+// per chunk rather than one per row.
+//
+// A queue that wants an indicator per row — the host a detection fired on, say
+// — must not issue a query per row to get it.
+func (s *Store) GetObservablesForFindings(ctx context.Context, findingIDs []string) (map[string][]Observable, error) {
+	out := make(map[string][]Observable, len(findingIDs))
+	if len(findingIDs) == 0 {
+		return out, nil
+	}
+
+	const chunkSize = 500
+	for start := 0; start < len(findingIDs); start += chunkSize {
+		end := start + chunkSize
+		if end > len(findingIDs) {
+			end = len(findingIDs)
+		}
+		chunk := findingIDs[start:end]
+
+		placeholders := make([]string, len(chunk))
+		args := make([]interface{}, len(chunk))
+		for i, id := range chunk {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+
+		rows, err := s.db.QueryContext(ctx,
+			`SELECT `+observableColumns+` FROM observables
+			 WHERE finding_id IN (`+strings.Join(placeholders, ",")+`)
+			 ORDER BY type_id, value`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query finding observables: %w", err)
+		}
+		obs, err := scanObservables(rows)
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+		for _, o := range obs {
+			out[o.FindingID] = append(out[o.FindingID], o)
+		}
+	}
+
+	return out, nil
+}
+
 // observablesForFinding builds the rows to persist for a finding. Its
 // observables are the highest-value indicators in the system, so they must be
 // pivotable alongside event-derived ones.

@@ -109,8 +109,16 @@ func (ui *UI) loadFindings() {
 		unfiltered = total
 	}
 
+	// The host or user each detection fired on, one query for the page.
+	//
+	// The column read the evidence artifacts, and a producer need not supply
+	// any — the demo dataset supplies none at all — so it was a dash on every
+	// row while the inspector beside it listed the host from the observables.
+	assets := ui.findingAssets(findings)
+
 	ui.queueUpdate(func() {
 		ui.findings = findings
+		ui.findingAsset = assets
 		ui.findingsTotal = total
 		ui.findingsUnfiltered = unfiltered
 		ui.findingsErr = nil
@@ -119,6 +127,19 @@ func (ui *UI) loadFindings() {
 		ui.setStatusDirect("[%s]%d of %d findings • %s[-:-:-]",
 			ui.theme.TagSuccess, len(findings), unfiltered, ui.triageFilterState().describe())
 	})
+}
+
+// findingsTitle says how many findings are shown and why the rest are not.
+//
+// It read "%d of %d", which is how a pager reads — so a queue of ten under an
+// Open filter, in a database of fifteen, looked like page one of two with five
+// findings unaccounted for. They are not on another page; they are filtered out.
+func (ui *UI) findingsTitle(shown int) string {
+	hidden := ui.findingsUnfiltered - shown
+	if hidden <= 0 {
+		return fmt.Sprintf("FINDINGS  ·  %d", shown)
+	}
+	return fmt.Sprintf("FINDINGS  ·  %d shown  ·  %d hidden by filters", shown, hidden)
 }
 
 // triagePageSize bounds one query. §7: paginate, never load an unbounded set.
@@ -131,7 +152,7 @@ func (ui *UI) updateFindingsList(total int) {
 		Background(ui.theme.SelectionBg).Foreground(ui.theme.SelectionFg))
 	ui.eventList.SetBorderColor(ui.theme.Border)
 
-	ui.eventList.SetTitle(fmt.Sprintf(" FINDINGS  ·  %d of %d ", total, ui.findingsUnfiltered))
+	ui.eventList.SetTitle(" " + ui.findingsTitle(total) + " ")
 	ui.setFindingsHeaders()
 
 	// One panel failing does not replace the screen, and the filters stay
@@ -207,7 +228,10 @@ func (ui *UI) updateFindingsList(total int) {
 		if source == "" {
 			source = "—"
 		}
-		asset := findingAsset(f)
+		asset := ui.findingAsset[f.ID]
+		if asset == "" {
+			asset = "—"
+		}
 
 		selPrefix := " "
 		if ui.triageSelection().has(f.FindingUID) {
@@ -265,31 +289,54 @@ func (ui *UI) selectLoadedFinding() {
 	ui.eventList.Select(1, 0)
 }
 
-// findingAsset is the host, user or process the detection fired on.
+// findingAssets is the host or user each finding fired on, by finding id.
 //
-// From the parsed evidence artifacts, which already carry the endpoints, the
-// process and the user. The column used to hold the literal string "Endpoint"
-// whenever the raw JSON happened to contain the substring "hostname" — the same
-// word for every finding, and a word for findings that had no host at all.
-func findingAsset(f store.Finding) string {
-	for _, e := range f.Evidences() {
-		if e.Device != nil && e.Device.Hostname != "" {
-			return e.Device.Hostname
-		}
-		if e.SrcEndpoint != nil && e.SrcEndpoint.Hostname != "" {
-			return e.SrcEndpoint.Hostname
-		}
-		if e.SrcEndpoint != nil && e.SrcEndpoint.IP != "" {
-			return e.SrcEndpoint.IP
-		}
-		if e.User != nil && e.User.Name != "" {
-			return e.User.Name
-		}
-		if e.Process != nil && e.Process.Name != "" {
-			return e.Process.Name
+// From the observables, in one query for the whole page. The column used to
+// read the evidence artifacts, which a producer need not supply — the demo
+// dataset supplies none — so it was a dash on every row while the inspector
+// beside it listed the host. Before that it held the literal string "Endpoint"
+// whenever the raw JSON happened to contain the substring "hostname".
+func (ui *UI) findingAssets(findings []store.Finding) map[string]string {
+	out := map[string]string{}
+	if ui.store == nil || len(findings) == 0 {
+		return out
+	}
+
+	ids := make([]string, 0, len(findings))
+	for _, f := range findings {
+		ids = append(ids, f.ID)
+	}
+	byFinding, err := ui.store.GetObservablesForFindings(ui.ctx, ids)
+	if err != nil {
+		ui.logger.Warn("triage: could not read finding observables: %v", err)
+		return out
+	}
+
+	for id, obs := range byFinding {
+		if v := preferredAsset(obs); v != "" {
+			out[id] = v
 		}
 	}
-	return "—"
+	return out
+}
+
+// preferredAsset picks the one observable worth a column.
+//
+// A host first: "which machine" is the question after "what happened". Then the
+// user, then an address — in the order an analyst would ask.
+func preferredAsset(obs []store.Observable) string {
+	for _, want := range []int{
+		ocsf.ObservableTypeHostname,
+		ocsf.ObservableTypeUserName,
+		ocsf.ObservableTypeIPAddress,
+	} {
+		for _, o := range obs {
+			if o.TypeID == want && strings.TrimSpace(o.Value) != "" {
+				return o.Value
+			}
+		}
+	}
+	return ""
 }
 
 // findingStatusColor encodes triage state in colour so the queue reads at a
@@ -864,8 +911,10 @@ func (ui *UI) toggleTriageChip(id chipID) {
 // clearTriageFilters returns to the default view.
 func (ui *UI) clearTriageFilters() {
 	f := ui.triageFilterState()
-	f.applyView(0)
-	f.search = ""
+	// Clear means clear. It used to mean "back to My queue", whose chips
+	// include Open — so the filter an analyst most wants to drop was the one
+	// that came back every time they cleared.
+	f.clear()
 	ui.repaintTriageChrome()
 	ui.spawnLoad(ui.loadFindings)
 }

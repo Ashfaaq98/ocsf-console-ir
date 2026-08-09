@@ -278,9 +278,16 @@ func TestTriageOwnsItsBulkKeys(t *testing.T) {
 	ui, _ := newTestUI(t)
 	ui.destination = destTriage
 
-	for _, r := range []rune{'c', 'a', 'e', 's', 'v'} {
+	for _, r := range []rune{'e', 's', 'v'} {
 		if ui.triageKeys(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone)) != nil {
 			t.Errorf("Triage did not claim %q, so a global binding takes it", r)
+		}
+	}
+	// One escalate key. Escalation already offers "create a new case" beside
+	// every existing one, so c and a were the same form under two more names.
+	for _, r := range []rune{'c', 'a'} {
+		if ui.triageKeys(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone)) == nil {
+			t.Errorf("Triage still claims %q, which is a third name for escalate", r)
 		}
 	}
 	for _, r := range []rune{'1', '2', '3', ':', '?', 'q'} {
@@ -349,30 +356,69 @@ func TestTriageSearchFiltersFindings(t *testing.T) {
 	ui.closeTriageSearch()
 }
 
-// The Asset column names the host, not a placeholder.
+// The Asset column names the host the detection fired on.
 //
-// It held the literal string "Endpoint" whenever the raw JSON happened to
-// contain the substring "hostname" — the same word for every finding, and a
-// word for findings that had no host at all.
-func TestFindingAssetComesFromTheEvidence(t *testing.T) {
-	withHost := store.Finding{EvidencesJSON: `[{"device":{"hostname":"workstation-14"}}]`}
-	if got := findingAsset(withHost); got != "workstation-14" {
-		t.Errorf("asset = %q, want the host from the evidence", got)
+// It read the evidence artifacts, and a producer need not supply any — the demo
+// dataset supplies none at all — so the column was a dash on every row while
+// the inspector beside it listed the host from the observables. Before that it
+// held the literal string "Endpoint" whenever the raw JSON happened to contain
+// the substring "hostname".
+func TestAssetColumnComesFromTheObservables(t *testing.T) {
+	ui, st := newTestUI(t)
+	seedTriageFinding(t, st, "a", "") // carries a user and a host observable, no evidences
+
+	ui.enterScreen(destTriage)
+	awaitIdle(t, ui)
+	if len(ui.findings) == 0 {
+		t.Fatal("nothing loaded")
 	}
 
-	withUser := store.Finding{EvidencesJSON: `[{"user":{"name":"m.chen"}}]`}
-	if got := findingAsset(withUser); got != "m.chen" {
-		t.Errorf("asset = %q, want the user from the evidence", got)
+	got := ui.findingAsset[ui.findings[0].ID]
+	if got != "workstation-14" {
+		t.Errorf("asset = %q, want the host from the observables", got)
+	}
+}
+
+// A host outranks a user, which outranks an address: "which machine" is the
+// question after "what happened".
+func TestPreferredAssetPrefersTheHost(t *testing.T) {
+	obs := []store.Observable{
+		{TypeID: ocsf.ObservableTypeIPAddress, Value: "10.0.0.1"},
+		{TypeID: ocsf.ObservableTypeUserName, Value: "m.chen"},
+		{TypeID: ocsf.ObservableTypeHostname, Value: "workstation-14"},
+	}
+	if got := preferredAsset(obs); got != "workstation-14" {
+		t.Errorf("preferredAsset = %q, want the host", got)
 	}
 
-	// The old placeholder fired on the substring alone.
-	mentionsButHasNone := store.Finding{EvidencesJSON: `[{"data":{"note":"no hostname was recorded"}}]`}
-	if got := findingAsset(mentionsButHasNone); got == "Endpoint" {
-		t.Errorf("asset = %q, the placeholder that fired on a substring", got)
+	if got := preferredAsset(obs[:2]); got != "m.chen" {
+		t.Errorf("with no host, preferredAsset = %q, want the user", got)
+	}
+	if got := preferredAsset(nil); got != "" {
+		t.Errorf("preferredAsset with nothing = %q, want empty", got)
+	}
+}
+
+// The title says why findings are missing, rather than looking like a pager.
+//
+// "10 of 15" reads as page one of two with five findings unaccounted for. They
+// are not on another page; the active filters removed them.
+func TestFindingsTitleExplainsTheMissingRows(t *testing.T) {
+	ui, _ := newTestUI(t)
+
+	ui.findingsUnfiltered = 15
+	got := ui.findingsTitle(10)
+	if !strings.Contains(got, "5 hidden by filters") {
+		t.Errorf("title = %q, want it to say where the other five went", got)
+	}
+	if strings.Contains(got, "10 of 15") {
+		t.Errorf("title = %q, which reads as pagination", got)
 	}
 
-	if got := findingAsset(store.Finding{}); got != "—" {
-		t.Errorf("asset = %q with no evidence, want a dash", got)
+	// Nothing filtered: just the count.
+	ui.findingsUnfiltered = 10
+	if got := ui.findingsTitle(10); strings.Contains(got, "hidden") {
+		t.Errorf("title = %q with nothing filtered, want a bare count", got)
 	}
 }
 
@@ -406,5 +452,53 @@ func TestTriageStripCarriesOnlyTheSelection(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("the strip is missing %q: %q", want, got)
 		}
+	}
+}
+
+// Tab moves between the two panels Triage has.
+//
+// Unclaimed it reached cycleFocus, which cycles the case sidebar, the events
+// list and the event detail — and the sidebar is not in Triage's tree, so one
+// of the three stops was invisible and the status announced "Focus: Cases" on
+// the findings queue.
+func TestTriageTabCyclesItsOwnPanels(t *testing.T) {
+	ui, st := newTestUI(t)
+	seedTriageFinding(t, st, "a", "")
+	ui.enterScreen(destTriage)
+	awaitIdle(t, ui)
+	ui.app.SetFocus(ui.eventList)
+
+	tab := tcell.NewEventKey(tcell.KeyTab, 0, tcell.ModNone)
+
+	if ui.triageKeys(tab) != nil {
+		t.Fatal("Triage did not claim Tab")
+	}
+	if ui.app.GetFocus() != ui.eventDetail {
+		t.Error("Tab did not move to the detail pane")
+	}
+	if got := stripTags(ui.statusBar.GetText(true)); strings.Contains(got, "Cases") {
+		t.Errorf("Tab announced a panel Triage does not have: %s", got)
+	}
+
+	ui.triageKeys(tab)
+	if ui.app.GetFocus() != ui.eventList {
+		t.Error("Tab did not come back to the queue — there is a third invisible stop")
+	}
+}
+
+// Enter does nothing, and does not claim to.
+//
+// It called showFindingDetails, which repaints what moving the cursor has
+// already painted, so the key looked bound and was not.
+func TestTriageEnterIsNotAdvertised(t *testing.T) {
+	ui, _ := newTestUI(t)
+	ui.destination = destTriage
+
+	got := stripTags(ui.buildShortcutHints())
+	if strings.Contains(got, "⏎ open") {
+		t.Errorf("Triage still advertises Enter: %s", got)
+	}
+	if !strings.Contains(got, "Tab detail") {
+		t.Errorf("Triage does not advertise the key that reaches the detail: %s", got)
 	}
 }
