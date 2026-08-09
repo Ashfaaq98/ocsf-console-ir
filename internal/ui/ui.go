@@ -4910,23 +4910,22 @@ func (ui *UI) triageStrip() *tview.TextView {
 
 func (ui *UI) renderTriageStrip() string {
 	t := ui.theme
-	if n := ui.triageSelection().count(); n > 0 {
-		return fmt.Sprintf("  [%s:-:b]%d selected[-:-:-]  %s", t.TagAccent, n, actionBar(t,
-			keyHint{"c", "Create case"},
-			keyHint{"a", "Add to case"},
-			keyHint{"s", "Status"},
-			keyHint{"v", "Verdict"},
-			keyHint{"x", "Clear"},
-		))
+
+	// Only the selection. The screen's keys are on the status bar, and this
+	// listed them a second time — two bars, one above the other, that between
+	// them offered "/" for a filter the other did not mention and disagreed
+	// about whether s and v were bulk actions.
+	n := ui.triageSelection().count()
+	if n == 0 {
+		return ""
 	}
-	return "  " + actionBar(t,
-		keyHint{"Enter", "Open"},
-		keyHint{"Space", "Select"},
-		keyHint{"s", "Status"},
-		keyHint{"v", "Verdict"},
-		keyHint{"e", "Escalate"},
-		keyHint{"/", "Filter"},
-	)
+	return fmt.Sprintf("  [%s:-:b]%s selected[-:-:-]  %s",
+		t.TagAccent, plural(n, "finding"), actionBar(t,
+			keyHint{"e", "escalate"},
+			keyHint{"s", "status"},
+			keyHint{"v", "verdict"},
+			keyHint{"x", "clear"},
+		))
 }
 
 // triageFilterState returns the filter, creating it on first use.

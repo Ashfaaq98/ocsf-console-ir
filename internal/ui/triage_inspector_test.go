@@ -375,3 +375,36 @@ func TestFindingAssetComesFromTheEvidence(t *testing.T) {
 		t.Errorf("asset = %q with no evidence, want a dash", got)
 	}
 }
+
+// Triage draws one key bar, not two.
+//
+// The strip under the queue listed the screen's keys, and so does the status
+// bar beneath it — two bars, one above the other, that between them offered "/"
+// for a filter the other did not mention and disagreed about whether s and v
+// were bulk actions. The strip now carries only what the status bar cannot: how
+// many findings are marked.
+func TestTriageStripCarriesOnlyTheSelection(t *testing.T) {
+	ui, st := newTestUI(t)
+	for _, uid := range []string{"a", "b"} {
+		seedTriageFinding(t, st, uid, "")
+	}
+	ui.enterScreen(destTriage)
+	awaitIdle(t, ui)
+
+	if got := stripTags(ui.renderTriageStrip()); strings.TrimSpace(got) != "" {
+		t.Errorf("the strip lists keys with nothing selected: %q", got)
+	}
+
+	ui.triageSelection().toggle(ui.findings[0].FindingUID)
+	got := stripTags(ui.renderTriageStrip())
+
+	if !strings.Contains(got, "1 finding selected") {
+		t.Errorf("the strip does not report the selection: %q", got)
+	}
+	// The bulk actions, which the status bar cannot know are live.
+	for _, want := range []string{"e escalate", "x clear"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the strip is missing %q: %q", want, got)
+		}
+	}
+}
