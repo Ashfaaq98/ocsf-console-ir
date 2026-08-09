@@ -285,6 +285,11 @@ const triagePageSize = 200
 
 // updateFindingsList renders the findings queue into the main table.
 func (ui *UI) updateFindingsList(total int) {
+	// The filter panel, if it is open over the queue, counts what this query
+	// returned. Deferred because the two empty states return early, and a
+	// filter that matches nothing is exactly when the count is worth reading.
+	defer ui.filterModal.refreshCount()
+
 	// Where the cursor was, before the table is torn down.
 	//
 	// This function repaints for reasons that are not a reload — marking a

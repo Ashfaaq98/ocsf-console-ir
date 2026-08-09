@@ -104,7 +104,7 @@ func TestClosingAModalReturnsFocusToTheQueue(t *testing.T) {
 	ui.enterScreen(destTriage)
 	awaitIdle(t, ui)
 
-	ui.showTriageChips()
+	ui.showTriageFilter()
 	if ui.app.GetFocus() == ui.eventList {
 		t.Fatal("the chip menu did not take focus")
 	}

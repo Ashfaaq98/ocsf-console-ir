@@ -476,6 +476,9 @@ type UI struct {
 	// findingCase is the title of each case the loaded findings belong to,
 	// keyed by case id.
 	findingCase map[string]string
+	// filterModal is Triage's filter panel while it is open, so a reload can
+	// refresh the count it shows.
+	filterModal *triageFilterModal
 
 	// findingInspect holds the selected finding's context — its indicators and
 	// their prevalence, and the name of the case it belongs to — loaded off the
@@ -1249,7 +1252,7 @@ func (ui *UI) triageKeys(ev *tcell.EventKey) *tcell.EventKey {
 		case 'f':
 			// The chip menu. Globally f opens the events filter modal, and on
 			// Triage it printed a sentence listing keys instead.
-			ui.showTriageChips()
+			ui.showTriageFilter()
 			return nil
 		case '/':
 			// Findings, not events. Globally / opens the events full-text
@@ -2641,6 +2644,7 @@ func (ui *UI) showModal(title, text string) {
 func (ui *UI) restoreMainLayout() {
 	ui.helpActive = false
 	ui.activeModal = nil
+	ui.filterModal = nil
 
 	// Clear reference to Case Management when returning to main UI
 	ui.activeCM = nil
