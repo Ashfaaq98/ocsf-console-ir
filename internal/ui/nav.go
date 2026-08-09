@@ -72,7 +72,7 @@ func destinations() []destination {
 	return []destination{
 		{destTriage, '1', "Triage", "Ranked queue of open findings",
 			[]keyHint{{"⏎", "open"}, {"Space", "select"}, {"e", "escalate"},
-				{"v", "verdict"}, {"s", "status"}, {"r", "refresh"}},
+				{"v", "verdict"}, {"s", "status"}, {"f", "filter"}, {"/", "search"}},
 			true, false, (*UI).jumpToFindings},
 		{destCases, '2', "Cases", "Investigations and briefings",
 			[]keyHint{{"⏎", "open"}, {"c", "new case"}, {"r", "refresh"}},

@@ -446,6 +446,11 @@ type UI struct {
 	lastLoadStart int64                       // unix nano timestamp of last load start (for watchdog)
 	showAll       bool                        // when true, sidebar selection is "ALL EVENTS"
 	queryStates   map[string]*EventQueryState // per-context (ALL or caseID) filter+pagination
+	// triageSearchBar is the findings search field while it is open, and
+	// triageSearchGen discards results for a query the analyst has moved on from.
+	triageSearchBar *tview.InputField
+	triageSearchGen int
+
 	// activeModal is whatever is currently rooted over the main layout. Set by
 	// showModal and friends, cleared when the layout is restored.
 	activeModal tview.Primitive
@@ -1286,6 +1291,16 @@ func (ui *UI) triageKeys(ev *tcell.EventKey) *tcell.EventKey {
 			return nil
 		case 'v':
 			ui.showFindingVerdictModal()
+			return nil
+		case 'f':
+			// The chip menu. Globally f opens the events filter modal, and on
+			// Triage it printed a sentence listing keys instead.
+			ui.showTriageChips()
+			return nil
+		case '/':
+			// Findings, not events. Globally / opens the events full-text
+			// search, which repainted this queue as an events list.
+			ui.showTriageSearch()
 			return nil
 		}
 	}

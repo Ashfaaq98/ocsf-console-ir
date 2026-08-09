@@ -289,3 +289,89 @@ func TestTriageOwnsItsBulkKeys(t *testing.T) {
 		}
 	}
 }
+
+// Every filter chip is reachable.
+//
+// Four are drawn above the queue and applied by the query builder; only Open
+// had a key. Sev ≥ High, Last 24h and Has IOC were rendered, honoured, and
+// impossible to turn on.
+func TestEveryTriageChipIsReachable(t *testing.T) {
+	ui, st := newTestUI(t)
+	seedTriageFinding(t, st, "a", "")
+	ui.enterScreen(destTriage)
+	awaitIdle(t, ui)
+
+	state := ui.triageFilterState()
+	for _, c := range triageChips() {
+		before := state.active[c.id]
+		ui.toggleTriageChip(c.id)
+		awaitIdle(t, ui)
+		if state.active[c.id] == before {
+			t.Errorf("the chip %q cannot be toggled", c.label)
+		}
+	}
+
+	// And f is the way to them, rather than the sentence it used to print.
+	ui.destination = destTriage
+	if ui.triageKeys(rune_('f')) != nil {
+		t.Error("f is not claimed by Triage, so the events filter modal takes it")
+	}
+	if ui.activeModal == nil {
+		t.Error("f did not open the chip menu")
+	}
+	ui.closeModal()
+}
+
+// / searches findings.
+//
+// It opened the events full-text search, which repainted the shared table as an
+// events list while Triage's chip row and selection strip stayed on screen.
+// triageFilter.search was never written by anything.
+func TestTriageSearchFiltersFindings(t *testing.T) {
+	ui, st := newTestUI(t)
+	seedTriageFinding(t, st, "a", "")
+	ui.enterScreen(destTriage)
+	awaitIdle(t, ui)
+
+	if ui.triageKeys(rune_('/')) != nil {
+		t.Error("/ is not claimed by Triage, so the events search takes it")
+	}
+	if ui.triageSearchBar == nil {
+		t.Fatal("/ did not open the findings search")
+	}
+
+	// The search reaches the store filter, which nothing wrote before.
+	ui.triageFilterState().search = "attachment"
+	got := ui.triageFilterState().storeFilter(time.Now(), 10, 0)
+	if got.Search != "attachment" {
+		t.Errorf("the query's Search is %q, want the typed text", got.Search)
+	}
+	ui.closeTriageSearch()
+}
+
+// The Asset column names the host, not a placeholder.
+//
+// It held the literal string "Endpoint" whenever the raw JSON happened to
+// contain the substring "hostname" — the same word for every finding, and a
+// word for findings that had no host at all.
+func TestFindingAssetComesFromTheEvidence(t *testing.T) {
+	withHost := store.Finding{EvidencesJSON: `[{"device":{"hostname":"workstation-14"}}]`}
+	if got := findingAsset(withHost); got != "workstation-14" {
+		t.Errorf("asset = %q, want the host from the evidence", got)
+	}
+
+	withUser := store.Finding{EvidencesJSON: `[{"user":{"name":"m.chen"}}]`}
+	if got := findingAsset(withUser); got != "m.chen" {
+		t.Errorf("asset = %q, want the user from the evidence", got)
+	}
+
+	// The old placeholder fired on the substring alone.
+	mentionsButHasNone := store.Finding{EvidencesJSON: `[{"data":{"note":"no hostname was recorded"}}]`}
+	if got := findingAsset(mentionsButHasNone); got == "Endpoint" {
+		t.Errorf("asset = %q, the placeholder that fired on a substring", got)
+	}
+
+	if got := findingAsset(store.Finding{}); got != "—" {
+		t.Errorf("asset = %q with no evidence, want a dash", got)
+	}
+}

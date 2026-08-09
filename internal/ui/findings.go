@@ -206,18 +206,11 @@ func (ui *UI) updateFindingsList(total int) {
 			risk = fmt.Sprintf("%d", f.RiskScore)
 		}
 
-		// Very basic asset/source extraction logic from metadata/raw json
-		asset := "—"
 		source := f.AnalyticName
 		if source == "" {
 			source = "—"
 		}
-
-		// If there is an IP or Hostname in Evidences, we could extract it, but
-		// for now we'll put a placeholder or basic parse.
-		if strings.Contains(f.EvidencesJSON, "hostname") {
-			asset = "Endpoint" // naive placeholder
-		}
+		asset := findingAsset(f)
 
 		selPrefix := " "
 		if ui.triageSelection().has(f.FindingUID) {
@@ -275,14 +268,31 @@ func (ui *UI) selectLoadedFinding() {
 	ui.eventList.Select(1, 0)
 }
 
-func shortSeverity(sev string) string {
-	if sev == "" {
-		return "?"
+// findingAsset is the host, user or process the detection fired on.
+//
+// From the parsed evidence artifacts, which already carry the endpoints, the
+// process and the user. The column used to hold the literal string "Endpoint"
+// whenever the raw JSON happened to contain the substring "hostname" — the same
+// word for every finding, and a word for findings that had no host at all.
+func findingAsset(f store.Finding) string {
+	for _, e := range f.Evidences() {
+		if e.Device != nil && e.Device.Hostname != "" {
+			return e.Device.Hostname
+		}
+		if e.SrcEndpoint != nil && e.SrcEndpoint.Hostname != "" {
+			return e.SrcEndpoint.Hostname
+		}
+		if e.SrcEndpoint != nil && e.SrcEndpoint.IP != "" {
+			return e.SrcEndpoint.IP
+		}
+		if e.User != nil && e.User.Name != "" {
+			return e.User.Name
+		}
+		if e.Process != nil && e.Process.Name != "" {
+			return e.Process.Name
+		}
 	}
-	if len(sev) > 4 {
-		return sev[:4]
-	}
-	return sev
+	return "—"
 }
 
 // findingStatusColor encodes triage state in colour so the queue reads at a
@@ -295,19 +305,6 @@ func (ui *UI) findingStatusColor(f store.Finding) tcell.Color {
 		return ui.theme.TextPrimary
 	default:
 		return ui.theme.TableRowMuted
-	}
-}
-
-func (ui *UI) findingVerdictColor(f store.Finding) tcell.Color {
-	switch f.VerdictID {
-	case ocsf.VerdictTruePositive, ocsf.VerdictSecurityRisk:
-		return ui.getSeverityTcellColor("critical")
-	case ocsf.VerdictFalsePositive, ocsf.VerdictBenign:
-		return ui.theme.TableRowMuted
-	case ocsf.VerdictSuspicious:
-		return ui.getSeverityTcellColor("high")
-	default:
-		return ui.theme.TextMuted
 	}
 }
 
