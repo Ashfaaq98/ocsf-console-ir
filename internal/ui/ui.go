@@ -524,9 +524,12 @@ type UI struct {
 	// Copilot drawer state
 
 	// Theme state
-	theme          Theme
-	themeName      string
-	hasTrueColor   bool
+	theme        Theme
+	themeName    string
+	hasTrueColor bool
+	// screenAdopted records that the palette has been settled against the real
+	// terminal, which can only happen once one exists.
+	screenAdopted  bool
 	themeApplying  int32
 	filterApplying int32
 
@@ -918,6 +921,48 @@ func (ui *UI) Start(ctx context.Context) error {
 	return err
 }
 
+// adoptScreen settles the palette against the terminal that is actually there.
+//
+// Two things are only knowable once a screen exists, and both were decided
+// before there was one.
+//
+// The theme's background becomes the screen's default style. tcell clears with
+// that style — at Init, and on every screen switch here — and it starts as the
+// terminal's own colours, so the application showed the terminal's background
+// until the first panel painted over it and kept it anywhere no panel reached.
+// On a light terminal profile that reads as the application starting light
+// whichever theme is set.
+//
+// And the colour depth comes from the terminal rather than from a guess at the
+// environment. detectTrueColor reads COLORTERM and TERM before the screen is
+// open, and terminals that set neither — kitty, alacritty and screen among them
+// — were told they had no colour, so the analyst's chosen theme was silently
+// replaced by the sixteen-colour fallback. tcell downsamples a full palette to
+// whatever the terminal can show, so the fallback is only for terminals that
+// genuinely cannot manage 256.
+func (ui *UI) adoptScreen(screen tcell.Screen) {
+	if screen == nil {
+		return
+	}
+
+	if !ui.screenAdopted {
+		ui.screenAdopted = true
+		if !ui.hasTrueColor && screen.Colors() >= 256 {
+			ui.hasTrueColor = true
+			if build, ok := themeBuilders[ui.themeName]; ok {
+				ui.theme = build()
+				// Restyling walks every widget and repaints the screen, which
+				// is not something to do part-way through a draw — it queues
+				// updates, and this is running on the loop those updates wait
+				// for. It goes back to the loop as an update of its own.
+				go ui.queueUpdate(ui.applyTheme)
+			}
+		}
+	}
+
+	screen.SetStyle(tcell.StyleDefault.Background(ui.theme.Canvas))
+}
+
 // setupLayout creates the main layout
 func (ui *UI) setupLayout() {
 	// Create components
@@ -1009,6 +1054,7 @@ func (ui *UI) setupLayout() {
 	// Responsive layout handling, plus the rail's visibility, which depends on
 	// the destination as well as on the width.
 	ui.app.SetBeforeDrawFunc(func(screen tcell.Screen) bool {
+		ui.adoptScreen(screen)
 		ui.termWidth, _ = screen.Size()
 		ui.updateLayoutMode(screen)
 		ui.applyRailVisibility()
