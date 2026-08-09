@@ -243,6 +243,35 @@ func observableKind(o store.Observable) string {
 // A row used to be an offset into ui.events. It stopped being one when cluster
 // headers started occupying rows, and every caller that assumed otherwise would
 // have selected, opened or pivoted on the wrong event.
+// selectFirstEvent puts the cursor on the first row that is an event.
+//
+// Selecting row 1 selects a cluster header — row 1 always is one — so
+// eventForRow returned nil, showEventDetails never fired, and the Events screen
+// opened with whatever the previous screen had left in the detail pane.
+func (ui *UI) selectFirstEvent() {
+	if ui.eventList == nil {
+		return
+	}
+
+	row := 1
+	if len(ui.eventAtRow) > 0 {
+		row = -1
+		for r := range ui.eventAtRow {
+			if row == -1 || r < row {
+				row = r
+			}
+		}
+	}
+	if row < 1 || row >= ui.eventList.GetRowCount() {
+		return
+	}
+
+	ui.eventList.Select(row, 0)
+	// Explicitly: tview does not fire SelectionChanged when the row selected is
+	// the one already selected, which on a fresh list is row 1.
+	ui.showEventDetails()
+}
+
 func (ui *UI) eventForRow(row int) *store.Event {
 	if ui.eventAtRow == nil {
 		// No clustering has been rendered, so the historical mapping holds.

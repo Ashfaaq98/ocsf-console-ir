@@ -442,10 +442,14 @@ type UI struct {
 	selectedEventIDs map[string]bool
 
 	// map of selected finding IDs for multi-select actions
-	loadingEvents int32                       // atomic flag to prevent concurrent event loads
-	lastLoadStart int64                       // unix nano timestamp of last load start (for watchdog)
-	showAll       bool                        // when true, sidebar selection is "ALL EVENTS"
-	queryStates   map[string]*EventQueryState // per-context (ALL or caseID) filter+pagination
+
+	// eventsLoad and findingsLoad guard their own collections. One flag served
+	// both, so entering Triage and then Events in quick succession left the
+	// events load a no-op while the findings load repainted the shared table.
+	eventsLoad   loadGuard
+	findingsLoad loadGuard
+	showAll      bool                        // when true, sidebar selection is "ALL EVENTS"
+	queryStates  map[string]*EventQueryState // per-context (ALL or caseID) filter+pagination
 	// triageSearchBar is the findings search field while it is open, and
 	// triageSearchGen discards results for a query the analyst has moved on from.
 	triageSearchBar *tview.InputField
@@ -1208,17 +1212,9 @@ func (ui *UI) onSidebarSelect(index int) {
 	ui.logger.Printf("Selected case ID: %s", ui.selectedCaseID)
 	showLoading("Loading events for selected case...")
 
-	// If a previous load appears stuck, clear the flag to allow a new load.
-	if atomic.LoadInt32(&ui.loadingEvents) == 1 {
-		started := time.Unix(0, atomic.LoadInt64(&ui.lastLoadStart))
-		if started.IsZero() || time.Since(started) > 3*time.Second {
-			if ui.logger != nil {
-				ui.logger.Printf("onSidebarSelect: load flag stuck since %v, resetting", started)
-			}
-			atomic.StoreInt32(&ui.loadingEvents, 0)
-		} else if ui.logger != nil {
-			ui.logger.Printf("onSidebarSelect: load already in progress (%v ago)", time.Since(started))
-		}
+	// If a previous load appears stuck, free the guard so a new one can run.
+	if ui.eventsLoad.reclaimIfStuck() && ui.logger != nil {
+		ui.logger.Printf("onSidebarSelect: reclaimed a stuck events load")
 	}
 	if ui.logger != nil {
 		ui.logger.Printf("onSidebarSelect: starting loadCaseEvents (caseID=%s, filterStart=%v, filterEnd=%v)", ui.selectedCaseID, ui.filterStart, ui.filterEnd)
@@ -1318,7 +1314,51 @@ func (ui *UI) selectAllFindings() {
 	ui.setStatusDirect("[%s]%s selected[-:-:-]", ui.theme.TagAccent, plural(sel.count(), "finding"))
 }
 
-func (ui *UI) eventsKeys(ev *tcell.EventKey) *tcell.EventKey { return ev }
+// eventsKeys are the events list's own — including a case's event list, which
+// is the same table over a narrower query.
+func (ui *UI) eventsKeys(ev *tcell.EventKey) *tcell.EventKey {
+	switch ev.Key() {
+	case tcell.KeyEnter:
+		// Expand or collapse the cluster under the cursor.
+		if c := ui.clusterAtRow(rowOf(ui.eventList)); c != nil {
+			ui.toggleCluster(c.Label)
+			return nil
+		}
+	case tcell.KeyRune:
+		switch ev.Rune() {
+		case 'z':
+			// Cycle the grouping. Guarded globally on showAll, but
+			// updateEventsList clusters a case's event list too — so inside a
+			// case only the first cluster ever opened and the rest of the
+			// events could not be reached at all.
+			if len(ui.eventClusters) > 0 {
+				ui.cycleEventGrouping()
+				return nil
+			}
+		case 'p':
+			// Pivot on an observable of the event under the cursor.
+			//
+			// Handled globally it had no screen guard and read ui.events, which
+			// Triage does not clear — so p on a findings row mapped that row
+			// through a stale row-to-event map and opened a menu for an
+			// unrelated event.
+			if e := ui.eventForRow(rowOf(ui.eventList)); e != nil {
+				ui.showPivotMenu(*e)
+			}
+			return nil
+		}
+	}
+	return ev
+}
+
+// rowOf is the selected row of a table, or -1 when there is none.
+func rowOf(t *tview.Table) int {
+	if t == nil {
+		return -1
+	}
+	row, _ := t.GetSelection()
+	return row
+}
 
 func (ui *UI) casesKeys(ev *tcell.EventKey) *tcell.EventKey { return ev }
 
@@ -1377,15 +1417,9 @@ func (ui *UI) setupKeybindings() {
 			ui.app.Stop()
 			return nil
 		case tcell.KeyEnter:
-			// A cluster header is not an event. Enter on one expands it.
-			if ui.showAll && !ui.showFindings && ui.app.GetFocus() == ui.eventList {
-				row, _ := ui.eventList.GetSelection()
-				if c := ui.clusterAtRow(row); c != nil {
-					ui.toggleCluster(c.Label)
-					return nil
-				}
-			}
-			// Let the focused primitive handle Enter. The sidebar's own input capture will manage selection.
+			// Expanding a cluster is the Events screen's, and eventsKeys has it.
+			// Let the focused primitive handle Enter otherwise — the sidebar's
+			// own capture manages selection.
 			return event
 		case tcell.KeyEsc:
 			// Esc moves one level out. Modals consume it before it reaches here,
@@ -1443,15 +1477,11 @@ func (ui *UI) setupKeybindings() {
 				ui.showHelp()
 				return nil
 			case 'z':
-				// §8 assigns `g` to cycle the grouping, but §7 assigns `g`/`G`
-				// to top/bottom, and that idiom is already bound and already
-				// documented on both screens. §6 forbids one key meaning two
-				// things, so grouping takes `z` — vim's fold prefix, which is
-				// what a cluster is. Recorded as a deviation in the spec.
-				if ui.showAll && !ui.showFindings {
-					ui.cycleEventGrouping()
-					return nil
-				}
+				// Grouping is the Events screen's, and eventsKeys has it — §8
+				// assigns `g`, but §7 already binds `g`/`G` to top and bottom,
+				// so grouping took `z`: vim's fold prefix, which is what a
+				// cluster is. Recorded as a deviation in the spec.
+				return nil
 			case 'l':
 				ui.focusRight()
 				return nil
@@ -1638,14 +1668,8 @@ func (ui *UI) setupKeybindings() {
 				ui.showFilterBar()
 				return nil
 			case 'p':
-				if len(ui.events) > 0 {
-					row, _ := ui.eventList.GetSelection()
-					if row > 0 && row-1 < len(ui.events) {
-						if e := ui.eventForRow(row); e != nil {
-							ui.showPivotMenu(*e)
-						}
-					}
-				}
+				// Events owns this key — see eventsKeys. Reaching here means
+				// no screen claimed it, so there is nothing to pivot on.
 				return nil
 			case 'A':
 				// Quick-jump to ALL EVENTS from anywhere (overview panel is non-selectable)
@@ -1826,16 +1850,14 @@ func (ui *UI) updateCasesList() {
 
 // loadCaseEvents loads events for the selected case
 func (ui *UI) loadCaseEvents() {
-	// Prevent concurrent loads (can happen if both per-item and selected handlers fire)
-	if !atomic.CompareAndSwapInt32(&ui.loadingEvents, 0, 1) {
+	// Prevent concurrent loads (can happen if both per-item and selected handlers fire).
+	// A case's event list and the all-events list are the same collection, so
+	// they share a guard; the findings queue does not.
+	if !ui.eventsLoad.begin() {
 		ui.logger.Println("loadCaseEvents: already loading, skipping")
 		return
 	}
-	atomic.StoreInt64(&ui.lastLoadStart, time.Now().UnixNano())
-	defer func() {
-		atomic.StoreInt32(&ui.loadingEvents, 0)
-		atomic.StoreInt64(&ui.lastLoadStart, 0)
-	}()
+	defer ui.eventsLoad.end()
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -1926,9 +1948,8 @@ func (ui *UI) loadCaseEvents() {
 
 	ui.logger.Printf("Loaded %d events for case %s", len(events), ui.selectedCaseID)
 	if ui.logger != nil {
-		started := time.Unix(0, atomic.LoadInt64(&ui.lastLoadStart))
-		if !started.IsZero() {
-			ui.logger.Printf("loadCaseEvents: query finished in %v; updating UI", time.Since(started))
+		if d := ui.eventsLoad.startedAgo(); d > 0 {
+			ui.logger.Printf("loadCaseEvents: query finished in %v; updating UI", d)
 		}
 	}
 
@@ -1939,10 +1960,11 @@ func (ui *UI) loadCaseEvents() {
 		ui.events = events
 		ui.updateEventsList()
 
-		// Ensure the table is scrolled to the top and the first data row is selected.
+		// Ensure the table is scrolled to the top and the first *event* is
+		// selected — row 1 is a cluster header, not an event.
 		ui.eventList.SetOffset(0, 0)
 		if ui.eventList.GetRowCount() > 1 {
-			ui.eventList.Select(1, 0) // first data row (row 0 is header)
+			ui.selectFirstEvent()
 		} else {
 			ui.eventList.Select(0, 0) // header/no-data fallback
 		}
@@ -4003,17 +4025,17 @@ func (ui *UI) showMultiSelectModal(title string, options []string, initial map[s
 // scheduleEventsReload coordinates safe event reloads after actions like filter Apply/Clear.
 // It resets a stuck loading flag, logs context, and dispatches the appropriate loader.
 func (ui *UI) scheduleEventsReload(source string) {
-	le := atomic.LoadInt32(&ui.loadingEvents)
-	last := atomic.LoadInt64(&ui.lastLoadStart)
-	var sinceStr string
-	if last != 0 {
-		sinceStr = time.Since(time.Unix(0, last)).String()
-	} else {
-		sinceStr = "n/a"
+	sinceStr := "n/a"
+	if d := ui.eventsLoad.startedAgo(); d > 0 {
+		sinceStr = d.String()
+	}
+	le := 0
+	if ui.eventsLoad.busyNow() {
+		le = 1
 	}
 
 	if ui.logger != nil {
-		ui.logger.Debug("scheduleEventsReload: source=%s showFindings=%v showAll=%v selectedCaseID=%s filterStart=%v filterEnd=%v loadingEvents=%d lastLoadAgo=%s filterApplying=%d",
+		ui.logger.Debug("scheduleEventsReload: source=%s showFindings=%v showAll=%v selectedCaseID=%s filterStart=%v filterEnd=%v eventsBusy=%d lastLoadAgo=%s filterApplying=%d",
 			source, ui.showFindings, ui.showAll, ui.selectedCaseID, ui.filterStart, ui.filterEnd, le, sinceStr, atomic.LoadInt32(&ui.filterApplying))
 	}
 
@@ -4023,19 +4045,16 @@ func (ui *UI) scheduleEventsReload(source string) {
 			ui.logger.Printf("scheduleEventsReload: deferring reload until current load completes")
 		}
 		go func() {
-			deadline := time.Now().Add(3 * time.Second)
-			for atomic.LoadInt32(&ui.loadingEvents) == 1 && time.Now().Before(deadline) {
+			deadline := time.Now().Add(loadWatchdog)
+			for ui.eventsLoad.busyNow() && time.Now().Before(deadline) {
 				time.Sleep(100 * time.Millisecond)
 			}
-			// If still busy after deadline, consider it stuck and reset.
-			if atomic.LoadInt32(&ui.loadingEvents) == 1 {
-				started := time.Unix(0, atomic.LoadInt64(&ui.lastLoadStart))
-				if started.IsZero() || time.Since(started) > 3*time.Second {
+			// If still busy after the deadline, consider it stuck and reclaim.
+			if ui.eventsLoad.busyNow() {
+				if ui.eventsLoad.reclaimIfStuck() {
 					if ui.logger != nil {
-						ui.logger.Printf("scheduleEventsReload: force-resetting stuck loadingEvents (since=%v)", started)
+						ui.logger.Printf("scheduleEventsReload: reclaimed a stuck events load")
 					}
-					atomic.StoreInt32(&ui.loadingEvents, 0)
-					atomic.StoreInt64(&ui.lastLoadStart, 0)
 				}
 			}
 			// Now dispatch
@@ -4123,17 +4142,13 @@ func parseFlexibleTime(input string, now time.Time) (time.Time, error) {
 // loadAllEvents loads all events across all cases (respects time filters if set)
 func (ui *UI) loadAllEvents() {
 	// Prevent concurrent loads
-	if !atomic.CompareAndSwapInt32(&ui.loadingEvents, 0, 1) {
+	if !ui.eventsLoad.begin() {
 		if ui.logger != nil {
 			ui.logger.Println("loadAllEvents: already loading, skipping")
 		}
 		return
 	}
-	atomic.StoreInt64(&ui.lastLoadStart, time.Now().UnixNano())
-	defer func() {
-		atomic.StoreInt32(&ui.loadingEvents, 0)
-		atomic.StoreInt64(&ui.lastLoadStart, 0)
-	}()
+	defer ui.eventsLoad.end()
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -4229,9 +4244,8 @@ func (ui *UI) loadAllEvents() {
 
 	if ui.logger != nil {
 		ui.logger.Printf("Loaded %d ALL events", len(events))
-		started := time.Unix(0, atomic.LoadInt64(&ui.lastLoadStart))
-		if !started.IsZero() {
-			ui.logger.Printf("loadAllEvents: query finished in %v; updating UI", time.Since(started))
+		if d := ui.eventsLoad.startedAgo(); d > 0 {
+			ui.logger.Printf("loadAllEvents: query finished in %v; updating UI", d)
 		}
 	}
 
@@ -4241,10 +4255,11 @@ func (ui *UI) loadAllEvents() {
 		ui.events = events
 		ui.updateEventsList()
 
-		// Ensure the table is scrolled to the top and the first data row is selected.
+		// Ensure the table is scrolled to the top and the first *event* is
+		// selected — row 1 is a cluster header, not an event.
 		ui.eventList.SetOffset(0, 0)
 		if ui.eventList.GetRowCount() > 1 {
-			ui.eventList.Select(1, 0) // first data row (row 0 is header)
+			ui.selectFirstEvent()
 		} else {
 			ui.eventList.Select(0, 0) // header/no-data fallback
 		}
@@ -5102,13 +5117,7 @@ func (ui *UI) switchToAllEvents() {
 		SetTextColor(ui.theme.TableRowMuted))
 	ui.setStatusDirect("[%s]Loading ALL events...[-:-:-]", ui.theme.TagWarning)
 
-	if atomic.LoadInt32(&ui.loadingEvents) == 1 {
-		started := time.Unix(0, atomic.LoadInt64(&ui.lastLoadStart))
-		if started.IsZero() || time.Since(started) > 3*time.Second {
-			atomic.StoreInt32(&ui.loadingEvents, 0)
-			atomic.StoreInt64(&ui.lastLoadStart, 0)
-		}
-	}
+	ui.eventsLoad.reclaimIfStuck()
 	ui.spawnLoad(ui.loadAllEvents)
 }
 

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
@@ -68,14 +67,12 @@ func (ui *UI) setFindingsHeaders() {
 
 // loadFindings fetches the triage queue and renders it.
 func (ui *UI) loadFindings() {
-	if !atomic.CompareAndSwapInt32(&ui.loadingEvents, 0, 1) {
+	// The findings queue's own guard. It shared one with the events list, so a
+	// findings load in flight silently cancelled an events load and vice versa.
+	if !ui.findingsLoad.begin() {
 		return
 	}
-	atomic.StoreInt64(&ui.lastLoadStart, time.Now().UnixNano())
-	defer func() {
-		atomic.StoreInt32(&ui.loadingEvents, 0)
-		atomic.StoreInt64(&ui.lastLoadStart, 0)
-	}()
+	defer ui.findingsLoad.end()
 
 	defer func() {
 		if r := recover(); r != nil {
