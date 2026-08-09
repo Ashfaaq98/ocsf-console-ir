@@ -1340,7 +1340,43 @@ func rowOf(t *tview.Table) int {
 	return row
 }
 
-func (ui *UI) casesKeys(ev *tcell.EventKey) *tcell.EventKey { return ev }
+// casesKeys are the Cases screen's own.
+func (ui *UI) casesKeys(ev *tcell.EventKey) *tcell.EventKey {
+	if ev.Key() != tcell.KeyRune {
+		return ev
+	}
+	switch ev.Rune() {
+	case 'f':
+		// The case filter, whatever has focus. Globally f picks between the
+		// case filter and the events filter by asking which widget is focused,
+		// so on this screen it opened the events filter whenever focus had
+		// moved off the list.
+		ui.showCaseFilterModal()
+		return nil
+	case 'r':
+		// The case list, and only that. Globally r also schedules an events
+		// reload, which on this screen queries a table that is not on screen.
+		ui.reloadCases()
+		return nil
+	}
+	return ev
+}
+
+// reloadCases re-reads the case list without blocking the event loop.
+func (ui *UI) reloadCases() {
+	ui.setStatusDirect("[%s]Refreshing cases…[-:-:-]", ui.theme.TagAccent)
+	ui.spawnLoad(func() {
+		if err := ui.refreshCases(); err != nil {
+			ui.queueUpdate(func() {
+				ui.setStatusDirect("[%s]Could not refresh cases: %v[-:-:-]", ui.theme.TagError, err)
+			})
+			return
+		}
+		ui.queueUpdate(func() {
+			ui.setStatusDirect("[%s]Cases refreshed[-:-:-]", ui.theme.TagSuccess)
+		})
+	})
+}
 
 // setupKeybindings sets up global keybindings
 func (ui *UI) setupKeybindings() {
@@ -1789,18 +1825,25 @@ func (ui *UI) refreshCases() error {
 // updateCasesList updates the cases sidebar
 func (ui *UI) updateCasesList() {
 	ui.queueUpdate(func() {
+		// Which case the cursor was on, before the list is torn down. A
+		// refresh used to send it back to the first case, so pressing r while
+		// reading case four put case one's briefing on screen.
+		wasOn := ui.selectedCaseID
+		if i := ui.sidebar.GetCurrentItem(); i >= 0 && i < len(ui.cases) {
+			wasOn = ui.cases[i].ID
+		}
+
 		ui.sidebar.Clear()
 
 		if len(ui.cases) == 0 {
 			return
 		}
 
+		// The title has whatever the list's width leaves after the number.
+		room := casesListWidth(ui.termWidth) - 10
+
 		for i, case_ := range ui.cases {
-			// Format case display - allow longer titles with wider sidebar
-			title := case_.Title
-			if len(title) > 40 {
-				title = title[:37] + "..."
-			}
+			title := truncate(case_.Title, room)
 
 			severity := strings.ToUpper(case_.Severity)
 			severityColor := ui.getSeverityColor(case_.Severity)
@@ -1821,9 +1864,25 @@ func (ui *UI) updateCasesList() {
 			ui.sidebar.AddItem(mainText, secondaryText, shortcut, nil)
 		}
 
-		// Default focus to ALL EVENTS item
-		ui.sidebar.SetCurrentItem(0)
+		ui.selectCaseByID(wasOn)
 	})
+}
+
+// selectCaseByID puts the cursor on a case, falling back to the first.
+//
+// By identity rather than by index: a refresh can add or remove a case, and an
+// index survives neither.
+func (ui *UI) selectCaseByID(id string) {
+	if ui.sidebar.GetItemCount() == 0 {
+		return
+	}
+	for i, c := range ui.cases {
+		if c.ID == id && i < ui.sidebar.GetItemCount() {
+			ui.sidebar.SetCurrentItem(i)
+			return
+		}
+	}
+	ui.sidebar.SetCurrentItem(0)
 }
 
 // loadCaseEvents loads events for the selected case
@@ -1947,8 +2006,15 @@ func (ui *UI) loadCaseEvents() {
 			ui.eventList.Select(0, 0) // header/no-data fallback
 		}
 
-		// Move focus to the Events panel so changes are immediately visible
-		ui.app.SetFocus(ui.eventList)
+		// Focus follows the events table only where it is on screen.
+		//
+		// This load runs on the Cases screen too — r refreshes there — and the
+		// case list and briefing are what is showing, not this table. Taking
+		// focus anyway put it on a widget nobody could see, and the arrow keys
+		// stopped moving the case list.
+		if ui.eventsListOnScreen() {
+			ui.app.SetFocus(ui.eventList)
+		}
 
 		// Find the case title for status message
 		var caseTitle string
@@ -5072,7 +5138,7 @@ func (ui *UI) switchToCases() {
 	// screen it is the content, and everywhere else it was furniture.
 	ui.casesPane = tview.NewFlex().SetDirection(tview.FlexColumn)
 	ui.casesPane.SetBackgroundColor(ui.theme.Bg)
-	ui.casesPane.AddItem(ui.sidebar, casesListWidth, 0, true)
+	ui.casesPane.AddItem(ui.sidebar, casesListWidth(ui.termWidth), 0, true)
 	ui.casesPane.AddItem(ui.buildCaseBriefingTab(ui.cases[0]), 0, 1, false)
 	ui.selectedCaseID = ui.cases[0].ID
 
@@ -5095,11 +5161,37 @@ func (ui *UI) switchToCases() {
 	if ui.sidebar.GetItemCount() > 0 {
 		ui.sidebar.SetCurrentItem(0)
 	}
+	// Rebuild the rows for the width in force now.
+	//
+	// The list is filled once at start-up, when the terminal's width is not yet
+	// known, and the titles are cut to fit it — so a wide terminal showed
+	// titles trimmed to the narrowest layout until something else refreshed
+	// the list.
+	ui.updateCasesList()
 	ui.setStatusDirect("[%s]Cases • Enter opens a case · c creates one[-:-:-]", ui.theme.TagAccent)
 }
 
-// casesListWidth is the case list's width on the Cases screen.
-const casesListWidth = 38
+// The case list's width on the Cases screen.
+//
+// It was a fixed 38, which truncated "Suspected account compromise — m.chen"
+// mid-word — and the title is what the list is for. A third of the terminal,
+// bounded at both ends so a narrow terminal keeps a readable briefing beside
+// it and a very wide one does not hand the list half the screen.
+const (
+	casesListMin = 38
+	casesListMax = 64
+)
+
+func casesListWidth(termWidth int) int {
+	w := termWidth / 3
+	if w < casesListMin {
+		return casesListMin
+	}
+	if w > casesListMax {
+		return casesListMax
+	}
+	return w
+}
 
 // showCaseBriefing swaps the briefing pane to a different case, keeping the
 // list beside it. Without this the list could select a case it could not open.

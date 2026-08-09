@@ -75,7 +75,7 @@ func destinations() []destination {
 				{"s", "status"}, {"f", "filter"}, {"/", "search"}, {"Tab", "detail"}},
 			true, false, (*UI).jumpToFindings},
 		{destCases, '2', "Cases", "Investigations and briefings",
-			[]keyHint{{"⏎", "open"}, {"c", "new case"}, {"r", "refresh"}},
+			[]keyHint{{"⏎", "open"}, {"c", "new case"}, {"f", "filter"}, {"r", "refresh"}},
 			false, false, (*UI).switchToCases},
 		{destEvents, '3', "Events", "Corroborating OCSF events",
 			[]keyHint{{"⏎", "expand"}, {"p", "pivot"}, {"z", "group"},
@@ -360,4 +360,11 @@ func (ui *UI) screenHints() []keyHint {
 // the Cases list, and "Tot:0" under a Triage queue holding two hundred findings.
 func (ui *UI) hasEventsContext() bool {
 	return ui.destination == destEvents
+}
+
+// eventsListOnScreen says whether the shared events table is part of what is
+// being drawn. On Cases and Indicators it is loaded but not shown, so nothing
+// that loads it may take focus.
+func (ui *UI) eventsListOnScreen() bool {
+	return ui.destination == destEvents || ui.activeCM != nil
 }

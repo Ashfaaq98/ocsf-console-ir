@@ -111,8 +111,14 @@ func briefingStatement(b *strings.Builder, d briefingData, t Theme, width int) {
 	// this screen generates an AI summary. The store has SetStatement and it
 	// has no caller but the demo seeder; a way to write a briefing from the UI
 	// is a feature, and until it exists the panel does not claim otherwise.
-	fmt.Fprintf(b, " [%s]No statement yet — one sentence on what happened, so the next person[-]\n", t.TagMuted)
-	fmt.Fprintf(b, " [%s]does not have to reconstruct it from the evidence.[-]\n", t.TagMuted)
+	// Wrapped to the pane, as a written statement is. It was two hard-coded
+	// lines, so on any pane narrower than the sentence it broke mid-word
+	// wherever the wrap happened to land.
+	const prompt = "No statement yet — one sentence on what happened, " +
+		"so the next person does not have to reconstruct it from the evidence."
+	for _, line := range wrapText(prompt, maxInt(width-4, 30)) {
+		fmt.Fprintf(b, " [%s]%s[-]\n", t.TagMuted, line)
+	}
 }
 
 // scopeLines summarises what the case covers.
@@ -329,9 +335,15 @@ func (ui *UI) buildCaseBriefingTab(c store.Case) *tview.Flex {
 	}
 
 	// The width is not known until the first draw, so the text is rebuilt then.
+	//
+	// The inner rect, not the outer one. Returning the outer rect laid the text
+	// out over the panel's own border: the first column of every line landed on
+	// the left edge and the last wrapped past the right, so the border survived
+	// only on the rows that happened to be blank.
 	view.SetDrawFunc(func(screen tcell.Screen, x, y, width, height int) (int, int, int, int) {
-		view.SetText(renderBriefing(d, ui.theme, width-2))
-		return x, y, width, height
+		ix, iy, iw, ih := boxInnerRect(x, y, width, height)
+		view.SetText(renderBriefing(d, ui.theme, iw))
+		return ix, iy, iw, ih
 	})
 
 	flex.AddItem(view, 0, 1, true)
