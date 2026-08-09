@@ -268,15 +268,43 @@ func (r findingInspector) render(f store.Finding, fc findingContext) string {
 	b.WriteString(r.narrative(f))
 	b.WriteString("\n\n")
 
-	for i := 0; i < len(left) || i < len(right); i++ {
-		b.WriteString(" ")
-		b.WriteString(padCell(cellAt(left, i), widestCell(left)))
-		b.WriteString("   ")
-		b.WriteString(cellAt(right, i).text)
-		b.WriteString("\n")
+	if r.splits() {
+		for i := 0; i < len(left) || i < len(right); i++ {
+			b.WriteString(" ")
+			b.WriteString(padCell(cellAt(left, i), widestCell(left)))
+			b.WriteString("   ")
+			b.WriteString(cellAt(right, i).text)
+			b.WriteString("\n")
+		}
+		return strings.TrimRight(b.String(), "\n")
+	}
+
+	// Stacked. Beside the queue the pane is a third of the body, which is not
+	// enough for two columns — laid out side by side anyway, the right-hand one
+	// wrapped onto its own lines and the two interleaved.
+	for _, c := range left {
+		b.WriteString(" " + c.text + "\n")
+	}
+	b.WriteString("\n")
+	for _, c := range right {
+		b.WriteString(" " + c.text + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
+
+// splits reports whether the pane is wide enough for two columns.
+//
+// Measured against the content rather than a layout tier, so the fallback
+// happens for the reason it exists — the columns would not fit — and stays
+// right if the indicator table's widths change.
+func (r findingInspector) splits() bool {
+	const minRight = 20
+	return r.innerWidth() >= 1+inspectorLeftWidth+3+minRight
+}
+
+// inspectorLeftWidth is the left column's width, fixed by the indicator table:
+// indent, type, gap, value, gap, and the prevalence note.
+const inspectorLeftWidth = 2 + indicatorTypeWidth + 1 + indicatorValueWidth + 1 + 14
 
 // padCell writes a cell out to width columns, counting what is drawn rather
 // than what is written — a tagged string's length includes markup that is not.
@@ -330,17 +358,20 @@ func (r findingInspector) lines() int {
 }
 
 func (r findingInspector) innerWidth() int {
-	if w := r.width - 2; w > 40 {
+	if w := r.width - 2; w > 24 {
 		return w
 	}
-	return 40
+	return 24
 }
 
 // rightColumnBudget is how wide the right column may be, measured from the left
 // column's width, which the indicator table fixes.
 func (r findingInspector) rightColumnBudget() int {
-	const leftColumnWidth = 2 + indicatorTypeWidth + 1 + indicatorValueWidth + 1 + 14
-	if b := r.innerWidth() - leftColumnWidth - 4; b > 20 {
+	if !r.splits() {
+		// Stacked: the right column has the whole pane.
+		return r.innerWidth() - 2
+	}
+	if b := r.innerWidth() - inspectorLeftWidth - 4; b > 20 {
 		return b
 	}
 	return 20
@@ -395,22 +426,46 @@ func (r findingInspector) indicatorCell(ind indicatorSighting) welcomeCell {
 	if ind.Findings > 1 {
 		shared = fmt.Sprintf("in %d more", ind.Findings-1)
 	}
-	value := truncate(ind.Value, indicatorValueWidth)
-	plain := fmt.Sprintf("  %-*s %-*s %s",
-		indicatorTypeWidth, ind.Type, indicatorValueWidth, value, shared)
+	vw := r.valueWidth()
+	value := truncate(ind.Value, vw)
+	plain := fmt.Sprintf("  %-*s %-*s %s", indicatorTypeWidth, ind.Type, vw, value, shared)
 	return welcomeCell{
 		text: fmt.Sprintf("  [%s]%-*s[-:-:-] [%s]%-*s[-:-:-] [%s]%s[-:-:-]",
 			t.TagMuted, indicatorTypeWidth, ind.Type,
-			t.TagTextPrimary, indicatorValueWidth, tview.Escape(value),
+			t.TagTextPrimary, vw, tview.Escape(value),
 			t.TagAccent, shared),
 		width: len([]rune(plain)),
 	}
+}
+
+// valueWidth is how much of an indicator's value fits.
+//
+// Fixed beside the queue would overrun the pane, which is a third of the body
+// there; the row would then wrap and the prevalence note — the reason the row
+// is worth a query — would land on a line of its own.
+func (r findingInspector) valueWidth() int {
+	const fixed = 2 + indicatorTypeWidth + 1 + 1 + 14 // indent, type, gaps, note
+	if r.splits() {
+		return indicatorValueWidth
+	}
+	w := r.innerWidth() - fixed
+	if w < 10 {
+		return 10
+	}
+	if w > indicatorValueWidth {
+		return indicatorValueWidth
+	}
+	return w
 }
 
 // labelled is a muted label with its value beside it, indented to match the
 // indicator rows so entries line up under their heading in either column.
 func (r findingInspector) labelled(label, value string) welcomeCell {
 	t := r.theme
+	// The label block is twelve columns; whatever is left is the value's.
+	if room := r.innerWidth() - 13; room > 8 {
+		value = truncate(value, room)
+	}
 	plain := fmt.Sprintf("  %-9s %s", label, value)
 	return welcomeCell{
 		text: fmt.Sprintf("  [%s]%-9s[-:-:-] [%s]%s[-:-:-]",

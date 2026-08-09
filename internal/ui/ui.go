@@ -446,6 +446,19 @@ type UI struct {
 	lastLoadStart int64                       // unix nano timestamp of last load start (for watchdog)
 	showAll       bool                        // when true, sidebar selection is "ALL EVENTS"
 	queryStates   map[string]*EventQueryState // per-context (ALL or caseID) filter+pagination
+	// termWidth is the terminal's width from the last frame's preamble.
+	//
+	// Panels that wrap text need a width before they draw, and tview's
+	// GetInnerRect reports the *previous* frame's rect — zero on the first
+	// paint, so a pane that asked the widget wrapped to a fallback width and
+	// corrected itself one repaint later.
+	termWidth int
+
+	// findingInspect holds the selected finding's context — its indicators and
+	// their prevalence, and the name of the case it belongs to — loaded off the
+	// UI goroutine behind a debounce.
+	findingInspect inspectorContext
+
 	// loads counts the screen loads started and not yet finished.
 	loads sync.WaitGroup
 
@@ -723,6 +736,7 @@ func NewUI(ctx context.Context, store *store.Store, llmProvider llm.LLMProvider,
 		// open event are rare (its own lookups), so this is generous.
 		enrichNotify: make(chan string, 32),
 	}
+	ui.findingInspect.ui = ui
 	ui.openEventID.Store("")
 
 	// Enrichment is asynchronous, so without this the detail pane shows whatever
@@ -969,6 +983,7 @@ func (ui *UI) setupLayout() {
 	// Responsive layout handling, plus the rail's visibility, which depends on
 	// the destination as well as on the width.
 	ui.app.SetBeforeDrawFunc(func(screen tcell.Screen) bool {
+		ui.termWidth, _ = screen.Size()
 		ui.updateLayoutMode(screen)
 		ui.applyRailVisibility()
 		// tview does not clear between frames, so a panel that shrinks or
@@ -1042,7 +1057,9 @@ func (ui *UI) setupEventHandlers() {
 	// Event list selection change
 	ui.eventList.SetSelectionChangedFunc(func(row, col int) {
 		if ui.showFindings {
-			ui.showFindingDetails()
+			// Debounced: this fires once per row while an arrow key is held,
+			// and the inspector's context costs a query per indicator.
+			ui.findingSelectionChanged()
 			return
 		}
 		if row > 0 && row-1 < len(ui.events) { // Skip header row

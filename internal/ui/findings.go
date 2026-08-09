@@ -342,72 +342,104 @@ func (ui *UI) showFindingDetails() {
 	// findings, which is the distinction the whole product turns on.
 	ui.eventDetail.SetTitle(" SELECTED FINDING ")
 
+	// The head is the shared renderer — the same one the dashboard uses, so a
+	// finding reads identically wherever it is seen. It replaced a second
+	// implementation that showed strictly less: no indicator prevalence, ATT&CK
+	// as bare comma-joined identifiers, the raw case identifier instead of the
+	// case's name, two identical timestamps under different labels, and no
+	// escaping at all, so a title containing a bracket was read as a colour tag.
+	r := findingInspector{
+		theme: ui.theme,
+		width: ui.inspectorWidth(),
+		// Triage's pane is the full height of the screen rather than a fifteen
+		// row panel, so the producer's description is not squeezed into two.
+		narrativeLines: triageNarrativeLines,
+	}
+
 	var b strings.Builder
+	b.WriteString(r.render(f, ui.findingInspect.get(f.ID)))
+	b.WriteString("\n")
+	ui.appendFindingDetail(&b, f)
+
+	ui.eventDetail.SetText(b.String())
+	ui.eventDetail.ScrollToBeginning()
+}
+
+// triageNarrativeLines is how much of the producer's description Triage shows.
+const triageNarrativeLines = 6
+
+// inspectorWidth is the detail pane's width for the current layout.
+//
+// From the layout rather than the widget: tview reports the previous frame's
+// rect, so asking the widget gives an answer one repaint out of date.
+func (ui *UI) inspectorWidth() int {
+	main := ui.termWidth
+	if main <= 0 {
+		// Before the first frame. Ask the widget — stale, but better than a
+		// constant once anything has been drawn at all.
+		if ui.eventDetail != nil {
+			if _, _, w, _ := ui.eventDetail.GetInnerRect(); w > 0 {
+				return w
+			}
+		}
+		return 60
+	}
+	if ui.navRailVisible() {
+		main -= navRailWidth
+	}
+
+	// The detail pane is one third of the body beside the list, or the full
+	// width beneath it — see restoreEventsView, which builds both arrangements
+	// from the same 2:1 ratio.
+	w := main / 3
+	if ui.currentLayoutMode != LayoutWide {
+		w = main
+	}
+	if w < 40 {
+		return 40
+	}
+	return w - 2
+}
+
+// findingSelectionChanged repaints the inspector and, once the cursor settles,
+// asks for the context the record does not carry.
+//
+// The queries used to run inline on the UI goroutine from the table's selection
+// callback — one GetObservablesByFinding per row while an arrow key was held.
+func (ui *UI) findingSelectionChanged() {
+	ui.showFindingDetails()
+
+	f, ok := ui.currentFinding()
+	if !ok {
+		return
+	}
+	id := f.ID
+	ui.findingInspect.schedule(f.ID, f.CaseID, func() {
+		if sel, ok := ui.currentFinding(); ok && sel.ID == id {
+			ui.showFindingDetails()
+		}
+	})
+}
+
+// appendFindingDetail writes the long form below the shared head: the artifacts
+// the detection saw, the telemetry it came from, and the record's identifiers.
+//
+// This is what Triage has that the dashboard does not, and the reason it has a
+// pane rather than a panel.
+func (ui *UI) appendFindingDetail(b *strings.Builder, f store.Finding) {
+	t := ui.theme
 	line := func(label, value string) {
 		if strings.TrimSpace(value) == "" {
 			return
 		}
-		fmt.Fprintf(&b, "[%s]%-14s[-] %s\n", ui.theme.TagMuted, label+":", value)
+		fmt.Fprintf(b, "[%s]%-14s[-] %s\n", t.TagMuted, label+":", tview.Escape(value))
 	}
 
-	// §7 order, identical to the inspector on Analyst Home so a finding reads
-	// the same wherever it is seen: title, the one-line verdict, how it was
-	// found, when — then why it matters, then the counts, and only then the
-	// raw record. A human explanation always precedes the JSON.
-	fmt.Fprintf(&b, "[%s]%s[-]\n\n", ui.theme.TagAccent, f.Title)
-
-	risk := "—"
-	if f.RiskScore > 0 {
-		risk = fmt.Sprintf("%d", f.RiskScore)
-	}
-	fmt.Fprintf(&b, "[%s]risk[-] %s · %s · %s\n\n",
-		ui.theme.TagMuted, risk, formatSeverityBadge(f.Severity, ui.theme), f.StatusName())
-
-	line("Analytic", f.AnalyticName)
-	line("First seen", f.FirstSeen.Format("2006-01-02 15:04:05"))
-	line("Last seen", f.LastSeen.Format("2006-01-02 15:04:05"))
-
-	// Why it matters, before any artifact list. The message is the producer's
-	// own explanation; without it the analyst is reading JSON to find out what
-	// the detection thought it saw.
-	why := strings.TrimSpace(f.Message)
-	if why == "" || why == f.Title {
-		why = "No description was supplied by the producer."
-	}
-	fmt.Fprintf(&b, "\n[%s]WHY IT MATTERS[-]\n%s\n", ui.theme.TagMuted, why)
-
-	// The counts, so the shape of the finding is legible before the detail.
-	fmt.Fprintf(&b, "\n[%s]EVIDENCE[-] %d   [%s]INDICATORS[-] %d   [%s]RELATED EVENTS[-] %d\n",
-		ui.theme.TagMuted, len(f.Evidences()),
-		ui.theme.TagMuted, len(f.AttackTechniques()),
-		ui.theme.TagMuted, len(f.RelatedEvents()))
-
-	caseLabel := "none"
-	if f.CaseID != "" {
-		caseLabel = f.CaseID
-	}
-	fmt.Fprintf(&b, "[%s]RELATED CASES[-] %s\n", ui.theme.TagMuted, caseLabel)
-
-	fmt.Fprintf(&b, "\n[%s]  j  raw OCSF[-]\n", ui.theme.TagAccent)
-
-	// Reference detail below the summary, in the order it was.
-	fmt.Fprintf(&b, "\n[%s]%s[-]\n", ui.theme.TagMuted, strings.Repeat("─", 30))
+	fmt.Fprintf(b, "\n[%s]%s[-]\n", t.TagMuted, strings.Repeat("─", 30))
 	line("Class", fmt.Sprintf("%s (%d)", f.ClassName(), f.ClassUID))
-	if v := f.VerdictName(); v != "" {
-		line("Verdict", v)
-	}
-	if f.ConfidenceID > 0 {
-		line("Confidence", ocsf.ConfidenceName(f.ConfidenceID))
-	}
 	line("Finding UID", f.FindingUID)
-	if f.Assignee != "" {
-		line("Assignee", f.Assignee)
-	}
 	if f.IsSuspectedBreach {
 		line("Breach", "SUSPECTED")
-	}
-	if techniques := f.AttackTechniques(); len(techniques) > 0 {
-		line("ATT&CK", strings.Join(techniques, ", "))
 	}
 
 	// Evidence artifacts: what the detection actually saw.
@@ -415,7 +447,7 @@ func (ui *UI) showFindingDetails() {
 		// OCSF's own display name for finding_info.evidences. "Evidence" alone
 		// collides with the case tab one keystroke away, which holds events —
 		// these are artifacts.
-		fmt.Fprintf(&b, "\n[%s]Evidence Artifacts (%d)[-]\n", ui.theme.TagAccent, len(ev))
+		fmt.Fprintf(b, "\n[%s]Evidence Artifacts (%d)[-]\n", t.TagAccent, len(ev))
 		for _, e := range ev {
 			label := e.Name
 			if label == "" {
@@ -425,25 +457,25 @@ func (ui *UI) showFindingDetails() {
 			if e.Verdict != "" {
 				verdict = "  [" + e.Verdict + "]"
 			}
-			fmt.Fprintf(&b, "  • %s%s\n", label, verdict)
+			fmt.Fprintf(b, "  • %s%s\n", tview.Escape(label), tview.Escape(verdict))
 			if e.Process != nil && e.Process.Name != "" {
-				fmt.Fprintf(&b, "      process: %s", e.Process.Name)
+				fmt.Fprintf(b, "      process: %s", tview.Escape(e.Process.Name))
 				if e.Process.CommandLine != "" {
-					fmt.Fprintf(&b, "  %s", e.Process.CommandLine)
+					fmt.Fprintf(b, "  %s", tview.Escape(e.Process.CommandLine))
 				}
 				b.WriteString("\n")
 			}
 			if e.File != nil && e.File.Name != "" {
-				fmt.Fprintf(&b, "      file: %s\n", e.File.Name)
+				fmt.Fprintf(b, "      file: %s\n", tview.Escape(e.File.Name))
 			}
 			if e.SrcEndpoint != nil && e.SrcEndpoint.IP != "" {
-				fmt.Fprintf(&b, "      src: %s\n", e.SrcEndpoint.IP)
+				fmt.Fprintf(b, "      src: %s\n", tview.Escape(e.SrcEndpoint.IP))
 			}
 			if e.DstEndpoint != nil && e.DstEndpoint.IP != "" {
-				fmt.Fprintf(&b, "      dst: %s\n", e.DstEndpoint.IP)
+				fmt.Fprintf(b, "      dst: %s\n", tview.Escape(e.DstEndpoint.IP))
 			}
 			if e.User != nil && e.User.Name != "" {
-				fmt.Fprintf(&b, "      user: %s\n", e.User.Name)
+				fmt.Fprintf(b, "      user: %s\n", tview.Escape(e.User.Name))
 			}
 		}
 	}
@@ -451,30 +483,15 @@ func (ui *UI) showFindingDetails() {
 	// related_events is OCSF's documented route from a finding back to the
 	// telemetry the analytic examined.
 	if rel := f.RelatedEvents(); len(rel) > 0 {
-		fmt.Fprintf(&b, "\n[%s]Related events (%d)[-]\n", ui.theme.TagAccent, len(rel))
+		fmt.Fprintf(b, "\n[%s]Related events (%d)[-]\n", t.TagAccent, len(rel))
 		for _, r := range rel {
-			fmt.Fprintf(&b, "  • %s", r.UID)
+			fmt.Fprintf(b, "  • %s", tview.Escape(r.UID))
 			if r.TypeUID != 0 {
-				fmt.Fprintf(&b, "  (type_uid %d)", r.TypeUID)
+				fmt.Fprintf(b, "  (type_uid %d)", r.TypeUID)
 			}
 			b.WriteString("\n")
 		}
 	}
-
-	// Indicators, from the observables table.
-	if obs, err := ui.store.GetObservablesByFinding(ui.ctx, f.ID); err == nil && len(obs) > 0 {
-		fmt.Fprintf(&b, "\n[%s]Observables (%d)[-]\n", ui.theme.TagAccent, len(obs))
-		for _, o := range obs {
-			src := "derived"
-			if o.IsAsserted() {
-				src = "asserted"
-			}
-			fmt.Fprintf(&b, "  • %-14s %s  [%s]\n", o.Type, o.Value, src)
-		}
-	}
-
-	ui.eventDetail.SetText(b.String())
-	ui.eventDetail.ScrollToBeginning()
 }
 
 // showFindingStatusModal lets the analyst move a finding through triage.
