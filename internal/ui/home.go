@@ -140,7 +140,7 @@ type homeView struct {
 	width int
 
 	// inspect holds the selected finding's context and its debounce timer.
-	inspect homeInspector
+	inspect inspectorContext
 
 	stop chan struct{}
 	once sync.Once
@@ -177,6 +177,7 @@ func (ui *UI) showAnalystHome() {
 
 func newHomeView(ui *UI) *homeView {
 	h := &homeView{ui: ui, stop: make(chan struct{})}
+	h.inspect.ui = ui
 	t := ui.theme
 
 	h.header = homeText(t, tview.AlignLeft)
