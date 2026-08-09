@@ -66,7 +66,7 @@ func manualIndicators(notes []store.Note) ([]store.CaseIndicator, map[string]str
 }
 
 // renderCaseIndicators draws the aggregated indicators.
-func renderCaseIndicators(table *tview.Table, indicators []store.CaseIndicator, t Theme) {
+func renderCaseIndicators(table *tview.Table, indicators []store.CaseIndicator, t Theme, emptyHint []string) {
 	table.Clear()
 
 	headers := []string{"TYPE", "VALUE", "PROVENANCE", "SIGHTINGS", "FIRST", "LAST"}
@@ -76,12 +76,13 @@ func renderCaseIndicators(table *tview.Table, indicators []store.CaseIndicator, 
 	}
 
 	if len(indicators) == 0 {
-		for i, line := range []string{
-			"No indicators extracted.",
-			"",
-			"Indicators come from the observables on this case's events and findings.",
-			"Attach evidence, or wait for enrichment to derive them.",
-		} {
+		// The empty state is the caller's: this renderer serves a case's tab
+		// and the cross-database screen, and "this case's events and findings"
+		// was wrong on the second of those.
+		if len(emptyHint) == 0 {
+			emptyHint = []string{"No indicators extracted."}
+		}
+		for i, line := range emptyHint {
 			colour := t.TextMuted
 			if i == 0 {
 				colour = t.TextPrimary
@@ -106,11 +107,19 @@ func renderCaseIndicators(table *tview.Table, indicators []store.CaseIndicator, 
 	}
 }
 
+// stampOrDash renders a sighting time.
+//
+// With the date unless it was today. A bare clock time collapses every day onto
+// the same twenty-four labels, so on a cross-case view two sightings a week
+// apart read as two sightings minutes apart.
 func stampOrDash(at time.Time) string {
 	if at.IsZero() {
 		return "—"
 	}
-	return at.Format("15:04")
+	if sameDay(at, time.Now()) {
+		return at.Format("15:04")
+	}
+	return at.Format("01-02 15:04")
 }
 
 // renderIOCs paints the Indicators tab.
@@ -145,7 +154,12 @@ func (cm *CaseManagement) renderIOCs() {
 	}
 
 	cm.caseIndicators = indicators
-	renderCaseIndicators(cm.iocsTable, indicators, cm.theme)
+	renderCaseIndicators(cm.iocsTable, indicators, cm.theme, []string{
+		"No indicators extracted.",
+		"",
+		"Indicators come from the observables on this case's events and findings.",
+		"Attach evidence, or wait for enrichment to derive them.",
+	})
 
 	// Map the manual rows back to their notes, so Space and d still act on the
 	// analyst's own entries.
@@ -179,28 +193,6 @@ func (cm *CaseManagement) pivotSelectedIndicator() {
 		Value:  ind.Value,
 		Kind:   orDash(ind.Type),
 	})
-}
-
-// buildCaseIndicatorsTab renders a case's indicators for the Indicators
-// destination, using the same renderer the case tab uses.
-func (ui *UI) buildCaseIndicatorsTab(_ []store.Event) *tview.Table {
-	table := tview.NewTable().SetSelectable(true, false).SetFixed(1, 0)
-	stylePanel(table.Box, "INDICATORS", PanelRolePrimary, ui.theme)
-	table.SetBackgroundColor(ui.theme.Bg)
-
-	// Across every case, since this is the cross-case view rather than one
-	// case's tab.
-	var all []store.CaseIndicator
-	for _, c := range ui.cases {
-		ind, err := ui.store.GetCaseIndicators(ui.ctx, c.ID)
-		if err != nil {
-			ui.logger.Warn("indicators: could not aggregate case %s: %v", c.ID, err)
-			continue
-		}
-		all = append(all, ind...)
-	}
-	renderCaseIndicators(table, mergeIndicators(all), ui.theme)
-	return table
 }
 
 // mergeIndicators combines the same indicator seen in several cases.

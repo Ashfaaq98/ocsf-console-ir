@@ -37,7 +37,7 @@ func TestIndicatorProvenanceAlwaysRenders(t *testing.T) {
 		{TypeID: 2, Type: "ip", Value: "198.51.100.73", Source: "asserted", Sightings: 12},
 		{TypeID: 2, Type: "ip", Value: "203.0.113.9", Source: "derived", Sightings: 1},
 		{TypeID: 1, Type: "hostname", Value: "fin-02", Source: "", Sightings: 4},
-	}, theme)
+	}, theme, nil)
 
 	for row := 1; row <= 3; row++ {
 		cell := table.GetCell(row, 2)
@@ -70,7 +70,7 @@ func TestIndicatorSightingsComeFromTheData(t *testing.T) {
 	renderCaseIndicators(table, []store.CaseIndicator{
 		{Type: "ip", Value: "198.51.100.73", Source: "asserted", Sightings: 12},
 		{Type: "ip", Value: "203.0.113.9", Source: "derived", Sightings: 1},
-	}, themeDark())
+	}, themeDark(), nil)
 
 	got := tableCells(table)
 	for _, want := range []string{"12", "198.51.100.73", "203.0.113.9"} {

@@ -115,13 +115,15 @@ func (ui *UI) closeModal() {
 // to the question actually being asked — "have I seen this before?" — so it is
 // shown even though the list holds events.
 func (ui *UI) pivotTo(target pivotTarget) {
-	ui.showFindings = false
-	ui.showAll = true
-	ui.selectedCaseID = ""
-	ui.pivot = &target
+	// The screen change first, then the pivot.
+	//
+	// beginScreen clears what the outgoing screen left behind, and a pivot is
+	// one of those things — assigned before the call it was wiped a line later,
+	// and the events list loaded unfiltered.
 	ui.beginScreen(destEvents)
+	ui.pivot = &target
 
-	go func() {
+	ui.spawnLoad(func() {
 		events, err := ui.store.FindEventsByObservable(ui.ctx, target.TypeID, target.Value, pivotLimit)
 		if err != nil {
 			ui.queueUpdate(func() {
@@ -142,7 +144,7 @@ func (ui *UI) pivotTo(target pivotTarget) {
 			ui.setStatusDirect("[%s]%s %s · %d events · %d findings[-:-:-]",
 				ui.theme.TagAccent, target.Kind, target.Value, len(events), findings)
 		})
-	}()
+	})
 }
 
 // clearPivot drops the pivot and returns to the unfiltered event list.

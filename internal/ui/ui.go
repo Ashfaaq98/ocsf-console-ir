@@ -455,6 +455,9 @@ type UI struct {
 	triageSearchBar *tview.InputField
 	triageSearchGen int
 
+	// indicators is the cross-database Indicators screen.
+	indicators *indicatorsView
+
 	// activeModal is whatever is currently rooted over the main layout. Set by
 	// showModal and friends, cleared when the layout is restored.
 	activeModal tview.Primitive
@@ -1291,8 +1294,6 @@ func rowOf(t *tview.Table) int {
 }
 
 func (ui *UI) casesKeys(ev *tcell.EventKey) *tcell.EventKey { return ev }
-
-func (ui *UI) indicatorKeys(ev *tcell.EventKey) *tcell.EventKey { return ev }
 
 // setupKeybindings sets up global keybindings
 func (ui *UI) setupKeybindings() {
@@ -5034,11 +5035,6 @@ func (ui *UI) showCaseBriefing(c store.Case) {
 	}
 	ui.casesPane.RemoveItem(ui.casesPane.GetItem(1))
 	ui.casesPane.AddItem(ui.buildCaseBriefingTab(c), 0, 1, false)
-}
-
-func (ui *UI) switchToIndicators() {
-	ui.setMainView(ui.buildCaseIndicatorsTab(ui.events))
-	ui.setStatusDirect("[%s]Indicators View • Cross-case observables & watchlists[-:-:-]", ui.theme.TagAccent)
 }
 
 func (ui *UI) switchToReports() {
