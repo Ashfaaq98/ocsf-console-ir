@@ -387,6 +387,52 @@ func (s *Store) GetObservablesForEvents(ctx context.Context, eventIDs []string) 
 	return out, nil
 }
 
+// GetObservablesForFindings is GetObservablesForEvents for findings: one query
+// per chunk rather than one per row.
+//
+// A queue that wants an indicator per row — the host a detection fired on, say
+// — must not issue a query per row to get it.
+func (s *Store) GetObservablesForFindings(ctx context.Context, findingIDs []string) (map[string][]Observable, error) {
+	out := make(map[string][]Observable, len(findingIDs))
+	if len(findingIDs) == 0 {
+		return out, nil
+	}
+
+	const chunkSize = 500
+	for start := 0; start < len(findingIDs); start += chunkSize {
+		end := start + chunkSize
+		if end > len(findingIDs) {
+			end = len(findingIDs)
+		}
+		chunk := findingIDs[start:end]
+
+		placeholders := make([]string, len(chunk))
+		args := make([]interface{}, len(chunk))
+		for i, id := range chunk {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+
+		rows, err := s.db.QueryContext(ctx,
+			`SELECT `+observableColumns+` FROM observables
+			 WHERE finding_id IN (`+strings.Join(placeholders, ",")+`)
+			 ORDER BY type_id, value`, args...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to query finding observables: %w", err)
+		}
+		obs, err := scanObservables(rows)
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+		for _, o := range obs {
+			out[o.FindingID] = append(out[o.FindingID], o)
+		}
+	}
+
+	return out, nil
+}
+
 // observablesForFinding builds the rows to persist for a finding. Its
 // observables are the highest-value indicators in the system, so they must be
 // pivotable alongside event-derived ones.
@@ -565,4 +611,135 @@ func (s *Store) GetCaseIndicators(ctx context.Context, caseID string) ([]CaseInd
 		out = append(out, ci)
 	}
 	return out, rows.Err()
+}
+
+// IndicatorFilter narrows the cross-database indicator list.
+type IndicatorFilter struct {
+	// Search matches the value, case-insensitively, anywhere in it. An analyst
+	// looking for an indicator usually has a fragment of it — the last octet, a
+	// domain's second level — rather than the whole string.
+	Search string
+	// TypeIDs restricts to particular observable types. Empty means every type.
+	TypeIDs []int
+	// MinSightings hides the long tail of things seen once.
+	MinSightings int
+	// Limit and Offset page the result. Limit is not optional: a database with
+	// a million distinct observables must not be read into a table widget.
+	Limit  int
+	Offset int
+}
+
+// indicatorWhere builds the shared WHERE clause and its arguments.
+func (f IndicatorFilter) indicatorWhere() (string, []interface{}) {
+	clause := ""
+	args := []interface{}{}
+
+	if v := strings.TrimSpace(f.Search); v != "" {
+		clause += " AND LOWER(o.value) LIKE ?"
+		args = append(args, "%"+strings.ToLower(v)+"%")
+	}
+	if len(f.TypeIDs) > 0 {
+		clause += " AND o.type_id IN ("
+		for i, id := range f.TypeIDs {
+			if i > 0 {
+				clause += ","
+			}
+			clause += "?"
+			args = append(args, id)
+		}
+		clause += ")"
+	}
+	return clause, args
+}
+
+// ListIndicators aggregates every observable in the database by identity.
+//
+// The Indicators screen used to be built by looping the case list and calling
+// GetCaseIndicators once per case, which meant it could only ever show what had
+// already been attached to a case — a database full of findings and no cases
+// rendered an empty screen over a full observables table — and that the Cases
+// sidebar's own filters silently narrowed it.
+//
+// Same shape as GetCaseIndicators without the case_members join, so the row
+// type and the renderer are shared. The ORDER BY runs on
+// idx_observables_type_value, so the most widely seen come first without a sort
+// in Go.
+func (s *Store) ListIndicators(ctx context.Context, f IndicatorFilter) ([]CaseIndicator, error) {
+	where, args := f.indicatorWhere()
+
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 500
+	}
+
+	q := `
+		SELECT o.type_id,
+		       MIN(o.type),
+		       o.value,
+		       MIN(o.source),
+		       COUNT(*),
+		       MIN(COALESCE(e.timestamp, o.created_at)),
+		       MAX(COALESCE(e.timestamp, o.created_at))
+		FROM observables o
+		LEFT JOIN events e ON e.id = o.event_id
+		WHERE 1=1` + where + `
+		GROUP BY o.type_id, o.value`
+
+	if f.MinSightings > 1 {
+		q += " HAVING COUNT(*) >= ?"
+		args = append(args, f.MinSightings)
+	}
+
+	q += " ORDER BY COUNT(*) DESC, o.value LIMIT ? OFFSET ?"
+	args = append(args, limit, f.Offset)
+
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list indicators: %w", err)
+	}
+	defer rows.Close()
+
+	out := []CaseIndicator{}
+	for rows.Next() {
+		var (
+			ci              CaseIndicator
+			typ, src        sql.NullString
+			firstTS, lastTS sql.NullInt64
+		)
+		if err := rows.Scan(&ci.TypeID, &typ, &ci.Value, &src, &ci.Sightings, &firstTS, &lastTS); err != nil {
+			return nil, fmt.Errorf("failed to scan indicator: %w", err)
+		}
+		ci.Type, ci.Source = typ.String, src.String
+		if firstTS.Valid {
+			ci.FirstSeen = time.Unix(firstTS.Int64, 0)
+		}
+		if lastTS.Valid {
+			ci.LastSeen = time.Unix(lastTS.Int64, 0)
+		}
+		out = append(out, ci)
+	}
+	return out, rows.Err()
+}
+
+// CountIndicators is how many distinct indicators match, so a screen showing a
+// page can say what it is not showing.
+func (s *Store) CountIndicators(ctx context.Context, f IndicatorFilter) (int, error) {
+	where, args := f.indicatorWhere()
+
+	q := `SELECT COUNT(*) FROM (
+		SELECT o.type_id, o.value
+		FROM observables o
+		WHERE 1=1` + where + `
+		GROUP BY o.type_id, o.value`
+	if f.MinSightings > 1 {
+		q += " HAVING COUNT(*) >= ?"
+		args = append(args, f.MinSightings)
+	}
+	q += ")"
+
+	var n int
+	if err := s.db.QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("failed to count indicators: %w", err)
+	}
+	return n, nil
 }

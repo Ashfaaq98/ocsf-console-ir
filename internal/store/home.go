@@ -199,3 +199,47 @@ func (s *Store) GetLastEvent(ctx context.Context) (time.Time, bool, error) {
 	}
 	return time.Unix(ts.Int64, 0), true, nil
 }
+
+// EventVolumeBuckets returns event counts per hour over the window ending at
+// now, oldest first.
+//
+// A total on its own says nothing about shape: "1,204 events today" reads the
+// same whether they arrived steadily or all landed in one burst four hours ago,
+// and those are different situations. One row per bucket, so a quiet hour is a
+// zero rather than a gap the caller has to infer.
+func (s *Store) EventVolumeBuckets(ctx context.Context, now time.Time, hours int) ([]int, error) {
+	if hours <= 0 {
+		return nil, nil
+	}
+
+	// Truncated to the hour so the buckets line up with clock hours rather than
+	// with whenever the dashboard happened to refresh — otherwise the shape
+	// shifts under the analyst once every ten seconds.
+	end := now.Truncate(time.Hour).Add(time.Hour)
+	start := end.Add(-time.Duration(hours) * time.Hour)
+
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT CAST((timestamp - ?) / 3600 AS INTEGER) AS bucket, COUNT(1)
+		   FROM events
+		  WHERE timestamp >= ? AND timestamp < ?
+		  GROUP BY bucket`,
+		start.Unix(), start.Unix(), end.Unix())
+	if err != nil {
+		return nil, fmt.Errorf("failed to bucket event volume: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]int, hours)
+	for rows.Next() {
+		var bucket, n int
+		if err := rows.Scan(&bucket, &n); err != nil {
+			return nil, fmt.Errorf("failed to scan volume bucket: %w", err)
+		}
+		// Guard the index rather than trusting the arithmetic: a clock change
+		// between the query and the scan would otherwise panic the dashboard.
+		if bucket >= 0 && bucket < hours {
+			out[bucket] = n
+		}
+	}
+	return out, rows.Err()
+}

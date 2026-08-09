@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
@@ -15,6 +14,10 @@ import (
 // root rather than from the main layout with panels hidden: a first-time user
 // shown an empty dashboard with zeroed metric cards concludes the tool is
 // broken. Nothing here constructs a table, an inspector or a sidebar.
+//
+// The screen itself is a two-column page — see welcome_page.go for the layout,
+// welcome_brand.go for the identity column, welcome_actions.go for the choices.
+// This file owns the state machine, the keys and the lifecycle.
 
 // WelcomeAction is the choice an analyst made on the Welcome Screen.
 type WelcomeAction int
@@ -55,14 +58,29 @@ type WelcomeResult struct {
 
 // WelcomeOptions configures the Welcome Screen.
 type WelcomeOptions struct {
-	// DBPath is the database that was looked for and not found. It is shown in
-	// the error state, because "could not create the database" is unactionable
-	// without knowing where it was attempted.
+	// DBPath is the database that was looked for and not found. It is named on
+	// the page before anything is created, and again if creating it fails:
+	// "could not create the database" is unactionable without knowing where it
+	// was attempted, and so is "a database will be created".
 	DBPath string
 
 	// WatchDir pre-fills the watch-folder prompt with the folder the running
 	// configuration would actually watch.
 	WatchDir string
+
+	// DemoSummary says what the demo investigation actually contains, in one
+	// line. The caller supplies it because the counts live in two places this
+	// package has no business reaching into — the embedded dataset and the
+	// seeded cases — and because a literal here would rot the first time either
+	// changed. Empty is fine; the action simply loses its detail line.
+	DemoSummary string
+
+	// Version is the build being run, shown beside the name. This is the first
+	// screen a new install shows and often the only one a bug report can be
+	// written from, so the answer to "what am I running" belongs on it. It is
+	// passed through buildinfo.Display, so it reads the same here as it does in
+	// the main header and in `console-ir version`.
+	Version string
 
 	// Perform carries out the chosen action. It runs off the UI goroutine and
 	// reports each stage through progress, which is safe to call from it.
@@ -78,31 +96,21 @@ type WelcomeOptions struct {
 // and its tests cannot disagree about what the product says.
 const (
 	welcomeTitleText   = "Console-IR"
-	welcomeDescription = "Terminal-native incident response, OCSF-native."
-	welcomeMessage     = "No local database was found."
-	welcomePrivacyA    = "Everything stays on this machine."
-	welcomePrivacyB    = "No cloud. No account. No telemetry."
-	welcomeTipText     = "Press 2 to immediately explore Console-IR."
+	welcomeDescription = "Terminal-native incident response."
+	welcomePrivacyA    = "Everything stays on this machine"
+	welcomePrivacyB    = "No cloud, no account, no telemetry"
+
+	// welcomeDatabaseLead* introduce the path the first action will write to.
+	// Two short lines rather than one long one: the block's width is already
+	// set by the path itself, and there is no reason for the prose to widen the
+	// brand column past it.
+	welcomeDatabaseLeadA = "No database yet."
+	welcomeDatabaseLeadB = "One will be created at"
 )
 
-// welcomeOption is one row of the action list.
-type welcomeOption struct {
-	key    rune
-	label  string
-	action WelcomeAction
-}
-
-var welcomeOptions = []welcomeOption{
-	{'1', "Create database", WelcomeCreate},
-	{'2', "Load demo investigation", WelcomeDemo},
-	{'3', "Import JSON / JSONL", WelcomeImport},
-	{'4', "Watch a folder", WelcomeWatch},
-	{'q', "Quit", WelcomeQuit},
-}
-
-// welcomeState is which face of the card is showing. The card is one widget in
-// four states rather than four widgets, so a state change cannot leave two of
-// them on screen at once.
+// welcomeState is which face the right-hand column is showing. The page is one
+// layout in four states rather than four layouts, so a state change cannot
+// leave two of them on screen at once.
 type welcomeState int
 
 const (
@@ -112,41 +120,8 @@ const (
 	welcomeStateError
 )
 
-// Row budget. The screen has to survive an 80x24 terminal, so the order in
-// which things are dropped is stated here rather than discovered at runtime.
-const (
-	welcomeLogoRows  = 3
-	welcomeTitleRows = 2
-	welcomeTipRows   = 1
-	welcomeBarRows   = 1
-	welcomeGapRows   = 1
-
-	// The prompt state adds an input field and its hint below the card body.
-	welcomePromptInputRows = 1
-	welcomePromptHintRows  = 3
-)
-
-// Card widths per responsive tier.
-const (
-	welcomeCardWide     = 60
-	welcomeCardStandard = 48
-	welcomeCardMinimum  = 24
-)
-
-// welcomeLogoUnicode and welcomeLogoASCII are the same mark twice. Terminals
-// without a UTF-8 locale render the block-drawing characters as replacement
-// glyphs, which looks like a rendering fault on the very first screen.
-var welcomeLogoUnicode = []string{
-	" ▄▄▄  ▄▄▄ ",
-	"█   ██   █",
-	" ▀▀▀  ▀▀▀ ",
-}
-
-var welcomeLogoASCII = []string{
-	" ___  ___ ",
-	"|   ||   |",
-	" ---  --- ",
-}
+// welcomeFooterRows is the navigation bar pinned to the bottom row.
+const welcomeFooterRows = 1
 
 // welcomeView is the screen. It owns its own root and none of the main layout.
 type welcomeView struct {
@@ -155,17 +130,17 @@ type welcomeView struct {
 	app   *tview.Application
 
 	root  *tview.Flex
-	logo  *tview.TextView
-	title *tview.TextView
-	card  *tview.Flex
-	body  *tview.Flex
+	page  *tview.Flex
 	input *tview.InputField
-	hint  *tview.TextView
-	tip   *tview.TextView
 	bar   *tview.TextView
 
-	// bodyRows are the card's lines, one widget each. See setBody.
-	bodyRows []*tview.TextView
+	// rows are the page's lines, one single-line widget each. See setPage.
+	rows []*tview.TextView
+
+	// promptRow hosts the input field in the right-hand column, which is the
+	// one row of the page that cannot be a rendered string.
+	promptRow  *tview.Flex
+	promptLead *tview.TextView
 
 	// Layout state, so a redraw at an unchanged size costs nothing.
 	mode   LayoutMode
@@ -174,18 +149,26 @@ type welcomeView struct {
 	height int
 	built  bool
 
-	// privacyOverride lets the layout measure the card with and without the
-	// privacy statement while deciding what fits. Nil outside that measurement.
-	privacyOverride *bool
-
-	// dirty means the tree changed shape and the screen owes a clear.
-	dirty bool
-
 	// Screen state.
-	state   welcomeState
-	pending WelcomeResult
-	loading string
-	err     error
+	state welcomeState
+	// cursor is the action the arrow keys are resting on.
+	cursor int
+	// watchStatus is what the drop folder looked like when the screen opened.
+	watchStatus string
+	// density is how much optional content the current page is carrying. It is
+	// settled by pageRows, which composes the page at each level until one fits.
+	density welcomeDensity
+	// truecolor is whether this terminal can draw the wordmark's gradient.
+	truecolor bool
+
+	// The reveal. frame is the animation clock and is meaningless while
+	// revealing is false, which is when every part of the page is on screen.
+	revealing  bool
+	frame      int
+	revealDone chan struct{}
+	pending    WelcomeResult
+	loading    string
+	err        error
 
 	// Outcome, read by RunWelcome once the application stops.
 	result  WelcomeResult
@@ -210,6 +193,7 @@ func RunWelcome(opts WelcomeOptions) (WelcomeResult, error) {
 
 	v.app.SetRoot(v.root, true)
 	v.focusForState()
+	v.startReveal()
 
 	if err := v.app.Run(); err != nil {
 		return WelcomeResult{}, err
@@ -217,221 +201,319 @@ func RunWelcome(opts WelcomeOptions) (WelcomeResult, error) {
 	return v.result, v.outcome
 }
 
-// newWelcomeView builds the widget tree. It performs no I/O beyond reading the
-// persisted theme, so the first paint does not wait on anything.
+// newWelcomeView builds the widget tree.
+//
+// Its only I/O is reading the persisted theme and probing the drop folder, both
+// of which are a single local read, so the first paint does not wait on
+// anything. Nothing here opens a database or touches the network.
 func newWelcomeView(opts WelcomeOptions) *welcomeView {
 	theme := themeBuilders[loadThemeName()]()
 
-	v := &welcomeView{opts: opts, theme: theme}
+	v := &welcomeView{
+		opts:      opts,
+		theme:     theme,
+		cursor:    welcomeDefaultCursor,
+		truecolor: supportsTrueColor(),
+	}
+	v.probe()
 
-	v.logo = welcomeText(theme, tview.AlignCenter)
-	v.logo.SetText(v.logoText())
+	v.page = tview.NewFlex().SetDirection(tview.FlexRow)
 
-	v.title = welcomeText(theme, tview.AlignCenter)
-	v.title.SetText(fmt.Sprintf("[%s:-:b]%s[-:-:-]\n[%s]%s[-:-:-]",
-		theme.TagAccent, welcomeTitleText, theme.TagMuted, welcomeDescription))
-
-	v.body = tview.NewFlex().SetDirection(tview.FlexRow)
-	v.body.SetBackgroundColor(theme.SurfaceRaised)
-
-	v.hint = welcomeText(theme, tview.AlignLeft)
-	v.hint.SetBackgroundColor(theme.SurfaceRaised)
-
-	// The label and placeholder are the affordance: an empty field on a card
+	// The label and placeholder are the affordance: an empty field on a page
 	// whose background it shares is indistinguishable from a blank row, and a
 	// screen that looks like it is waiting for nothing is a screen people quit.
 	v.input = tview.NewInputField()
-	v.input.SetLabel("  › ").
+	v.input.SetLabel("› ").
 		SetFieldBackgroundColor(theme.Surface).
 		SetFieldTextColor(theme.TextPrimary).
 		SetPlaceholderTextColor(theme.TextMuted).
 		SetLabelColor(theme.Accent)
-	v.input.SetBackgroundColor(theme.SurfaceRaised)
+	v.input.SetBackgroundColor(theme.Canvas)
 	v.input.SetDoneFunc(v.promptDone)
 
-	v.card = tview.NewFlex().SetDirection(tview.FlexRow)
-	stylePanel(v.card.Box, "", PanelRoleModal, theme)
+	v.promptLead = welcomeText(theme, tview.AlignLeft)
+	v.promptRow = tview.NewFlex()
 
-	v.tip = welcomeText(theme, tview.AlignCenter)
 	v.bar = welcomeText(theme, tview.AlignLeft)
 
+	// No SetBackgroundColor here: tview.NewFlex sets dontClear on its Box, so a
+	// Flex never paints its own background and the call would be a silent no-op.
+	// The canvas is painted in beforeDraw, which says why.
 	v.root = tview.NewFlex().SetDirection(tview.FlexRow)
-	v.root.SetBackgroundColor(theme.Bg)
 
 	// A sensible size until the first draw reports the real one, so the tree is
 	// never empty and tests can drive the view without a screen.
-	v.width, v.height = 100, 30
+	v.width, v.height = 120, 34
 	v.render()
 	return v
 }
 
 // welcomeText builds one of the screen's text widgets.
+//
+// The background is the canvas, not theme.Bg. These widgets are full-width, so
+// any colour of their own reads as a horizontal band across the screen rather
+// than as a background — which is exactly what the screen used to render.
 func welcomeText(theme Theme, align int) *tview.TextView {
 	tv := tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(align)
-	tv.SetBackgroundColor(theme.Bg)
+	tv.SetBackgroundColor(theme.Canvas)
 	return tv
-}
-
-// logoText picks the mark the terminal can actually draw.
-func (v *welcomeView) logoText() string {
-	lines := welcomeLogoUnicode
-	if !supportsUnicode() {
-		lines = welcomeLogoASCII
-	}
-	return fmt.Sprintf("[%s]%s[-:-:-]", v.theme.TagAccent, strings.Join(lines, "\n"))
-}
-
-// supportsUnicode reports whether the terminal's locale is UTF-8. tcell will
-// happily draw block characters into a Latin-1 terminal, where they arrive as
-// question marks.
-func supportsUnicode() bool {
-	for _, key := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
-		if val := os.Getenv(key); val != "" {
-			v := strings.ToLower(val)
-			return strings.Contains(v, "utf-8") || strings.Contains(v, "utf8")
-		}
-	}
-	return false
 }
 
 // ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
 
-// render repaints every part of the screen that depends on the current state,
-// then rebuilds the layout, because the card's height is state-dependent. The
-// card body itself is written by rebuild, which is what decides how much of it
-// fits.
+// render repaints everything that depends on the current state and rebuilds the
+// layout, because the page's height is state-dependent.
 func (v *welcomeView) render() {
-	v.tip.SetText(v.tipText())
-	v.bar.SetText(v.barText())
+	v.bar.SetText(v.footerText())
 	v.built = false
 	v.rebuild()
 	v.focusForState()
 }
 
-// bodyLines is the content of the card, one line per row, so the card's height
-// is derived from what it holds rather than guessed.
-func (v *welcomeView) bodyLines() []string {
-	t := v.theme
-
-	switch v.state {
-	case welcomeStatePrompt:
-		return []string{
-			"",
-			fmt.Sprintf("  [%s]%s[-:-:-]", t.TagTextPrimary, v.promptLabel()),
-			"",
-		}
-
-	case welcomeStateError:
-		lines := []string{
-			"",
-			fmt.Sprintf("  [%s]%s[-:-:-]", t.TagError, "Could not "+v.pending.Action.verb()+"."),
-			"",
-		}
-		for _, l := range wrapText(v.errorText(), v.cardInnerWidth()-4) {
-			lines = append(lines, fmt.Sprintf("  [%s]%s[-:-:-]", t.TagTextPrimary, tview.Escape(l)))
-		}
-		lines = append(lines, "")
-		for _, l := range wrapText(v.attemptedPath(), v.cardInnerWidth()-4) {
-			lines = append(lines, fmt.Sprintf("  [%s]%s[-:-:-]", t.TagMuted, tview.Escape(l)))
-		}
-		lines = append(lines, "",
-			welcomeActionLine('r', "Retry", t),
-			welcomeActionLine('q', "Quit", t),
-			"")
-		return lines
-
-	case welcomeStateLoading:
-		lines := v.cardIntro()
-		lines = append(lines, "  "+loadingState(v.loading, t), "")
-		// Hold the card at its menu height so it does not jump while working.
-		return padLines(lines, len(v.menuLines()))
-
-	default:
-		return v.menuLines()
-	}
-}
-
-// cardIntro is the part of the card that does not change with state: the
-// message, and the privacy statement when there is room for it.
-func (v *welcomeView) cardIntro() []string {
-	t := v.theme
-	lines := []string{
-		"",
-		fmt.Sprintf("  [%s]%s[-:-:-]", t.TagTextPrimary, welcomeMessage),
-		"",
-	}
-	if v.showPrivacy() {
-		lines = append(lines,
-			fmt.Sprintf("  [%s]%s[-:-:-]", t.TagMuted, welcomePrivacyA),
-			fmt.Sprintf("  [%s]%s[-:-:-]", t.TagMuted, welcomePrivacyB),
-			"")
-	}
-	return lines
-}
-
-// menuLines is the card in its resting state.
-func (v *welcomeView) menuLines() []string {
-	lines := v.cardIntro()
-	for _, o := range welcomeOptions {
-		lines = append(lines, welcomeActionLine(o.key, o.label, v.theme))
-	}
-	return append(lines, "")
-}
-
-// welcomeActionLine renders one "[k]  Label" row of the action list.
+// beforeDraw is the frame preamble, run once per repaint before the root is
+// drawn. It re-tiers the layout for the current terminal size and paints the
+// canvas the whole screen is built on.
 //
-// The brackets have to be escaped: tview reads "[q]" in dynamic-colour text as
-// a colour tag and swallows it, so an unescaped action list loses exactly the
-// keys it is there to teach.
-func welcomeActionLine(key rune, label string, theme Theme) string {
-	return fmt.Sprintf("   [%s]%s[-:-:-]  [%s]%s[-:-:-]",
-		theme.TagAccent, tview.Escape(fmt.Sprintf("[%c]", key)), theme.TagTextPrimary, label)
+// The fill is not optional, and it has to be a fill rather than screen.Clear().
+//
+// Clear() fills with tcell.StyleDefault, which is the terminal's own background
+// — so every row not covered by a widget showed the user's terminal colours
+// instead of the theme's, and the screen rendered as horizontal stripes. Nor
+// can the root Flex be asked to do it: tview.NewFlex sets dontClear on its Box,
+// so SetBackgroundColor on a Flex is a permanent no-op.
+//
+// Filling unconditionally also retires the dirty-tracking this function used to
+// do. tview does not clear between frames and the page changes shape between
+// states, so a missed clear left the previous state's rows on screen; repainting
+// the canvas every frame makes that impossible rather than merely accounted for.
+// It costs nothing on the wire — tcell only emits cells that actually changed.
+func (v *welcomeView) beforeDraw(screen tcell.Screen) bool {
+	width, height := screen.Size()
+	v.relayout(width, height)
+	screen.Fill(' ', tcell.StyleDefault.Background(v.theme.Canvas))
+	return false
 }
 
-func (v *welcomeView) tipText() string {
-	if v.state != welcomeStateMenu {
-		return ""
+// relayout recomputes the responsive tier and rebuilds only when it changed.
+// It returns whether it rebuilt.
+func (v *welcomeView) relayout(width, height int) bool {
+	mode, short := GetLayoutMode(width, height)
+	if v.built && mode == v.mode && short == v.short && width == v.width && height == v.height {
+		return false
 	}
-	return fmt.Sprintf("[%s]%s[-:-:-]", v.theme.TagMuted, welcomeTipText)
+	v.mode, v.short = mode, short
+	v.width, v.height = width, height
+	v.rebuild()
+	return true
 }
 
-func (v *welcomeView) barText() string {
+// rebuild assembles the root from scratch: the page anchored a little above
+// centre, with the navigation bar pinned to the bottom row.
+func (v *welcomeView) rebuild() {
+	v.mode, v.short = GetLayoutMode(v.width, v.height)
+
+	rows := v.pageRows()
+	rows = v.trimToHeight(rows)
+	v.setPage(rows)
+
+	v.root.Clear()
+	v.root.AddItem(nil, v.topSpace(len(rows)), 0, false)
+	v.root.AddItem(v.page, len(rows), 0, true)
+	v.root.AddItem(nil, 0, 1, false)
+	v.root.AddItem(v.bar, welcomeFooterRows, 0, false)
+
+	v.built = true
+}
+
+// topSpace is how many rows sit above the page.
+//
+// True centring puts as much space above the page as below it, which on a tall
+// terminal reads as a small block floating in a void. Anchoring a little above
+// centre reads as composed, and on a short terminal it degrades to nothing
+// rather than to a negative.
+func (v *welcomeView) topSpace(pageRows int) int {
+	free := v.height - pageRows - welcomeFooterRows
+	if free <= 0 {
+		return 0
+	}
+	return free * welcomeAnchor / 100
+}
+
+// trimToHeight drops rows from the end when the terminal cannot hold the page.
+//
+// It is a backstop, not the layout: the columns drop their optional content
+// first, and reaching this point means even the reduced page does not fit. The
+// actions are the last thing standing because without them the screen does
+// nothing at all.
+func (v *welcomeView) trimToHeight(rows []string) []string {
+	if max := v.height - welcomeFooterRows; len(rows) > max && max > 0 {
+		return rows[:max]
+	}
+	return rows
+}
+
+// setPage fills the page with one single-line widget per row.
+//
+// One widget per line rather than one multi-line TextView, because tview's
+// escaped-tag state leaks between the lines of a single TextView: a block built
+// that way renders with one more character of the previous line's colour tag
+// bleeding onto every subsequent row.
+//
+// The widgets are reused across rebuilds, so a redraw allocates nothing.
+func (v *welcomeView) setPage(rows []string) {
+	v.page.Clear()
+
+	promptAt := -1
+	if v.state == welcomeStatePrompt {
+		promptAt = v.promptRowIndex(len(rows))
+	}
+
+	for i, line := range rows {
+		if i >= len(v.rows) {
+			v.rows = append(v.rows, welcomeText(v.theme, tview.AlignLeft))
+		}
+		v.rows[i].SetText(line)
+
+		if i == promptAt {
+			v.page.AddItem(v.promptFlex(line), 1, 0, true)
+			continue
+		}
+		v.page.AddItem(v.rows[i], 1, 0, false)
+	}
+}
+
+// promptFlex is the one row of the page that is two widgets rather than a
+// string: the brand column's text, then the real input field beside it.
+//
+// No truncation is needed to make room. The prompt's cell for this row is
+// deliberately empty, so the composed line already stops where the right-hand
+// column begins — which matters, because cutting a tagged string at a screen
+// column can land inside a colour tag and put the markup on the screen.
+func (v *welcomeView) promptFlex(line string) *tview.Flex {
+	v.promptLead.SetText(line)
+
+	v.promptRow.Clear()
+	v.promptRow.AddItem(v.promptLead, v.rightColumnAt(), 0, false)
+	v.promptRow.AddItem(v.input, 0, 1, true)
+	return v.promptRow
+}
+
+// rightColumnAt is the screen column the right-hand column begins at, or 0 when
+// the page is stacked rather than split.
+func (v *welcomeView) rightColumnAt() int {
+	left, right := v.leftColumn(), v.rightColumn()
+	if !v.splitFits(left, right) {
+		return v.stackedIndent(left, right)
+	}
+	return welcomePageIndent + widestCell(left) + welcomeGutter
+}
+
+// promptRowIndex is which page row carries the input field.
+func (v *welcomeView) promptRowIndex(total int) int {
+	left, right := v.leftColumn(), v.rightColumn()
+	if v.splitFits(left, right) {
+		return promptFieldRow
+	}
+	// Stacked, the right-hand column starts after the brand and the gap.
+	row := len(left) + welcomeStackedGap + promptFieldRow
+	if total > 0 && row >= total {
+		return total - 1
+	}
+	return row
+}
+
+// pageLines is the page as it reaches the screen, one string per row.
+func (v *welcomeView) pageLines() []string {
+	out := make([]string, 0, v.page.GetItemCount())
+	for i := 0; i < v.page.GetItemCount(); i++ {
+		switch row := v.page.GetItem(i).(type) {
+		case *tview.TextView:
+			out = append(out, row.GetText(true))
+		case *tview.Flex:
+			out = append(out, v.promptLead.GetText(true)+v.input.GetText())
+		default:
+			out = append(out, "")
+		}
+	}
+	return out
+}
+
+// ---------------------------------------------------------------------------
+// The footer
+// ---------------------------------------------------------------------------
+
+// footerText is the bottom row: how to drive this state on the left, and what
+// the screen has detected about this terminal on the right.
+//
+// It no longer repeats the action list. The page already lists every action
+// with its key, and a bar that lists them again taught nothing while taking the
+// only row it had.
+func (v *welcomeView) footerText() string {
 	t := v.theme
+	var hints string
 	switch v.state {
 	case welcomeStatePrompt:
-		return actionBar(t, keyHint{"Enter", "Continue"}, keyHint{"Esc", "Back"})
+		hints = actionBar(t, keyHint{"Enter", "Continue"}, keyHint{"Esc", "Back"})
 	case welcomeStateLoading:
-		return actionBar(t, keyHint{"Ctrl+C", "Cancel"})
+		hints = actionBar(t, keyHint{"Ctrl+C", "Cancel"})
 	case welcomeStateError:
-		return actionBar(t, keyHint{"r", "Retry"}, keyHint{"q", "Quit"})
+		hints = actionBar(t, keyHint{"r", "Retry"}, keyHint{"q", "Quit"})
 	default:
-		hints := make([]keyHint, 0, len(welcomeOptions))
-		for _, o := range welcomeOptions {
-			hints = append(hints, keyHint{string(o.key), welcomeShortLabel(o.action)})
-		}
-		return actionBar(t, hints...)
+		hints = actionBar(t,
+			keyHint{welcomeArrows(), "Move"},
+			keyHint{welcomeEnter(), "Select"},
+			keyHint{"1-4", "Jump"},
+			keyHint{"q", "Quit"})
 	}
+
+	status := v.statusText()
+	pad := v.width - len([]rune(stripTags(hints))) - len([]rune(status)) - 2
+	if pad < 2 {
+		return " " + hints
+	}
+	return " " + hints + strings.Repeat(" ", pad) + fmt.Sprintf("[%s]%s[-:-:-]", t.TagMuted, status)
 }
 
-// welcomeShortLabel is the action bar's one-word form of each action.
-func welcomeShortLabel(a WelcomeAction) string {
-	switch a {
-	case WelcomeCreate:
-		return "Create"
-	case WelcomeDemo:
-		return "Demo"
-	case WelcomeImport:
-		return "Import"
-	case WelcomeWatch:
-		return "Watch"
-	default:
-		return "Quit"
+// welcomeArrows and welcomeEnter name the movement keys in whichever alphabet
+// this terminal can draw. A footer that teaches the keys in glyphs the screen
+// cannot render teaches nothing.
+func welcomeArrows() string {
+	if supportsUnicode() {
+		return "↑↓"
 	}
+	return "up/dn"
 }
+
+func welcomeEnter() string {
+	if supportsUnicode() {
+		return "⏎"
+	}
+	return "Enter"
+}
+
+// statusText is what the screen worked out about this terminal. It is a small
+// thing that says the detection ran, on the one screen where a rendering fault
+// would otherwise look like a broken install.
+func (v *welcomeView) statusText() string {
+	parts := []string{loadThemeName()}
+	if supportsUnicode() {
+		parts = append(parts, "UTF-8")
+	} else {
+		parts = append(parts, "ASCII")
+	}
+	if v.truecolor {
+		parts = append(parts, "truecolor")
+	}
+	return strings.Join(parts, " · ")
+}
+
+// ---------------------------------------------------------------------------
+// Copy that depends on state
+// ---------------------------------------------------------------------------
 
 // verb names an action the way an error message needs to.
 func (a WelcomeAction) verb() string {
@@ -471,220 +553,18 @@ func (v *welcomeView) promptLabel() string {
 }
 
 // ---------------------------------------------------------------------------
-// Layout
-// ---------------------------------------------------------------------------
-
-// beforeDraw is the frame preamble, run once per repaint before the root is
-// drawn. It re-tiers the layout for the current terminal size and clears the
-// screen when the tree has changed shape.
-//
-// The clear is not optional. tview does not clear between frames, and the card
-// changes height between states — menu, prompt, error — so without it the rows
-// the previous card occupied keep its border, and the screen accumulates two
-// overlapping cards.
-func (v *welcomeView) beforeDraw(screen tcell.Screen) bool {
-	width, height := screen.Size()
-	v.relayout(width, height)
-	if v.dirty {
-		screen.Clear()
-		v.dirty = false
-	}
-	return false
-}
-
-// relayout recomputes the responsive tier and rebuilds only when it changed.
-// It returns whether it rebuilt.
-func (v *welcomeView) relayout(width, height int) bool {
-	mode, short := GetLayoutMode(width, height)
-	if v.built && mode == v.mode && short == v.short && width == v.width && height == v.height {
-		return false
-	}
-	v.mode, v.short = mode, short
-	v.width, v.height = width, height
-	v.rebuild()
-	return true
-}
-
-// rebuild assembles the root from scratch. The card is centred on an otherwise
-// empty canvas, with the action bar pinned to the bottom row.
-func (v *welcomeView) rebuild() {
-	v.mode, v.short = GetLayoutMode(v.width, v.height)
-	showLogo, showPrivacy := v.blocks()
-
-	// The card's content depends on whether the privacy lines fit, so it is
-	// re-rendered here rather than only on a state change.
-	lines := v.bodyLinesFor(showPrivacy)
-	v.setBody(lines)
-
-	cardWidth := v.cardWidth()
-	cardRows := v.cardRows(showPrivacy)
-
-	v.card.Clear()
-	if v.state == welcomeStatePrompt {
-		// Fixed rows throughout: a proportional split would size the prompt
-		// against the hint rather than against its own content.
-		v.card.AddItem(v.body, len(lines), 0, false)
-		v.card.AddItem(v.input, welcomePromptInputRows, 0, true)
-		v.card.AddItem(v.hint, welcomePromptHintRows, 0, false)
-		v.hint.SetText(fmt.Sprintf("\n  [%s]Enter to continue · Esc to go back[-:-:-]", v.theme.TagMuted))
-	} else {
-		v.card.AddItem(v.body, 0, 1, false)
-	}
-
-	v.root.Clear()
-	v.root.AddItem(nil, 0, 1, false)
-	if showLogo {
-		v.root.AddItem(v.logo, welcomeLogoRows, 0, false)
-		v.root.AddItem(nil, welcomeGapRows, 0, false)
-	}
-	v.root.AddItem(v.title, welcomeTitleRows, 0, false)
-	v.root.AddItem(nil, welcomeGapRows, 0, false)
-	v.root.AddItem(centred(v.card, cardWidth), cardRows, 0, true)
-	if v.state == welcomeStateMenu {
-		v.root.AddItem(nil, welcomeGapRows, 0, false)
-		v.root.AddItem(v.tip, welcomeTipRows, 0, false)
-	}
-	v.root.AddItem(nil, 0, 1, false)
-	v.root.AddItem(v.bar, welcomeBarRows, 0, false)
-
-	v.built = true
-	v.dirty = true
-}
-
-// setBody fills the card with one single-line widget per row.
-//
-// One widget per line rather than one multi-line TextView, because tview's
-// escaped-tag state leaks between the lines of a single TextView: an action
-// list built that way renders with one more character of the previous line's
-// colour tag bleeding onto every subsequent row, so "[3]  Import" arrives as
-// "]   [3]  Import". A widget per line resets that state, and the card is a
-// stack of rows anyway.
-//
-// The widgets are reused across rebuilds, so a redraw allocates nothing.
-func (v *welcomeView) setBody(lines []string) {
-	v.body.Clear()
-	for i, line := range lines {
-		if i >= len(v.bodyRows) {
-			row := welcomeText(v.theme, tview.AlignLeft)
-			row.SetBackgroundColor(v.theme.SurfaceRaised)
-			v.bodyRows = append(v.bodyRows, row)
-		}
-		v.bodyRows[i].SetText(line)
-		v.body.AddItem(v.bodyRows[i], 1, 0, false)
-	}
-}
-
-// cardLines is the card as it reaches the screen, one string per row.
-func (v *welcomeView) cardLines() []string {
-	out := make([]string, 0, v.body.GetItemCount())
-	for i := 0; i < v.body.GetItemCount(); i++ {
-		if row, ok := v.body.GetItem(i).(*tview.TextView); ok {
-			out = append(out, row.GetText(true))
-		}
-	}
-	return out
-}
-
-// bodyLinesFor renders the card body for a given privacy-line decision, which
-// the layout owns and the state does not.
-func (v *welcomeView) bodyLinesFor(showPrivacy bool) []string {
-	saved := v.privacyOverride
-	v.privacyOverride = &showPrivacy
-	defer func() { v.privacyOverride = saved }()
-	return v.bodyLines()
-}
-
-// blocks decides which optional blocks fit in the available height. The order
-// is fixed: the logo goes first, then the privacy statement. The actions and
-// the tip are never dropped, because without them the screen does nothing.
-func (v *welcomeView) blocks() (showLogo, showPrivacy bool) {
-	showLogo = v.mode != LayoutCompact && !v.short
-	showPrivacy = !v.short
-
-	for {
-		if v.requiredRows(showLogo, showPrivacy) <= v.height {
-			return showLogo, showPrivacy
-		}
-		switch {
-		case showLogo:
-			showLogo = false
-		case showPrivacy:
-			showPrivacy = false
-		default:
-			return false, false
-		}
-	}
-}
-
-// requiredRows is the height the screen needs with the given blocks present.
-func (v *welcomeView) requiredRows(showLogo, showPrivacy bool) int {
-	rows := welcomeTitleRows + welcomeGapRows + v.cardRows(showPrivacy) + welcomeBarRows
-	if showLogo {
-		rows += welcomeLogoRows + welcomeGapRows
-	}
-	if v.state == welcomeStateMenu {
-		rows += welcomeGapRows + welcomeTipRows
-	}
-	return rows
-}
-
-// cardRows is the card's height including its border.
-func (v *welcomeView) cardRows(showPrivacy bool) int {
-	rows := len(v.bodyLinesFor(showPrivacy)) + 2
-	if v.state == welcomeStatePrompt {
-		rows += welcomePromptInputRows + welcomePromptHintRows
-	}
-	return rows
-}
-
-// cardWidth is the card's width per responsive tier.
-func (v *welcomeView) cardWidth() int {
-	switch v.mode {
-	case LayoutWide:
-		return welcomeCardWide
-	case LayoutStandard:
-		return welcomeCardStandard
-	default:
-		if w := v.width - 2; w > welcomeCardMinimum {
-			return w
-		}
-		return welcomeCardMinimum
-	}
-}
-
-// cardInnerWidth is the width text has inside the card's border.
-func (v *welcomeView) cardInnerWidth() int {
-	if w := v.cardWidth() - 2; w > 8 {
-		return w
-	}
-	return 8
-}
-
-// showPrivacy answers for the current render pass. The layout overrides it
-// while measuring; outside that it follows the short-screen rule.
-func (v *welcomeView) showPrivacy() bool {
-	if v.privacyOverride != nil {
-		return *v.privacyOverride
-	}
-	return !v.short
-}
-
-// centred wraps a primitive in a fixed-width column on an empty canvas.
-func centred(p tview.Primitive, width int) *tview.Flex {
-	return tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(p, width, 0, true).
-		AddItem(nil, 0, 1, false)
-}
-
-// ---------------------------------------------------------------------------
 // Input
 // ---------------------------------------------------------------------------
 
 // handleKey is the screen's only key handler. Each state accepts exactly the
-// keys its action bar advertises, so nothing on this screen is reachable
-// without being shown.
+// keys its footer advertises, so nothing on this screen is reachable without
+// being shown.
 func (v *welcomeView) handleKey(ev *tcell.EventKey) *tcell.EventKey {
+	// Whatever the key was, it means the analyst is ready and the reveal is
+	// not. Finishing it here rather than in each branch means no key can be
+	// swallowed by an animation that happened to be running when it arrived.
+	v.finishReveal()
+
 	switch v.state {
 	case welcomeStateLoading:
 		// Work is in flight against the filesystem; the only safe answer is to
@@ -716,8 +596,25 @@ func (v *welcomeView) handleKey(ev *tcell.EventKey) *tcell.EventKey {
 		switch ev.Key() {
 		case tcell.KeyCtrlC:
 			return ev
+		case tcell.KeyUp:
+			v.moveCursor(-1)
+		case tcell.KeyDown:
+			v.moveCursor(1)
+		case tcell.KeyEnter:
+			v.activate(v.cursorOption())
 		case tcell.KeyRune:
-			v.choose(ev.Rune())
+			switch ev.Rune() {
+			case 'k':
+				v.moveCursor(-1)
+			case 'j':
+				v.moveCursor(1)
+			default:
+				// The digits still act immediately rather than moving the
+				// cursor. That is what the screen has always done and what the
+				// footer advertises; the cursor is a second way in, not a
+				// replacement that makes everyone press a key twice.
+				v.choose(ev.Rune())
+			}
 		}
 		return nil
 	}
@@ -729,15 +626,20 @@ func (v *welcomeView) choose(r rune) {
 		if o.key != r {
 			continue
 		}
-		switch o.action {
-		case WelcomeQuit:
-			v.quit()
-		case WelcomeImport, WelcomeWatch:
-			v.ask(o.action)
-		default:
-			v.launch(WelcomeResult{Action: o.action})
-		}
+		v.activate(o)
 		return
+	}
+}
+
+// activate carries out one option.
+func (v *welcomeView) activate(o welcomeOption) {
+	switch o.action {
+	case WelcomeQuit:
+		v.quit()
+	case WelcomeImport, WelcomeWatch:
+		v.ask(o.action)
+	default:
+		v.launch(WelcomeResult{Action: o.action})
 	}
 }
 
@@ -757,7 +659,7 @@ func (v *welcomeView) ask(action WelcomeAction) {
 	v.render()
 }
 
-// promptDone handles the prompt's terminal keys. Esc returns to the card with
+// promptDone handles the prompt's terminal keys. Esc returns to the page with
 // no side effects at all: nothing has been created at this point.
 func (v *welcomeView) promptDone(key tcell.Key) {
 	switch key {
@@ -867,6 +769,9 @@ func (v *welcomeView) update(fn func()) {
 }
 
 func (v *welcomeView) stop() {
+	// Before the application, so the reveal's goroutine sees the screen going
+	// away rather than queueing an update nothing will ever run.
+	v.finishReveal()
 	if v.app != nil {
 		v.app.Stop()
 	}
@@ -903,12 +808,4 @@ func wrapText(s string, width int) []string {
 		line += " " + w
 	}
 	return append(lines, line)
-}
-
-// padLines extends lines with blanks so a state change does not move the card.
-func padLines(lines []string, want int) []string {
-	for len(lines) < want {
-		lines = append(lines, "")
-	}
-	return lines
 }

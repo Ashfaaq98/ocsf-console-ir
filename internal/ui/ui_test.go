@@ -165,7 +165,7 @@ func TestCaseCreation(t *testing.T) {
 	ui.selectedEventIDs = map[string]bool{eventID: true}
 
 	// Test case creation (this would normally be called by the UI)
-	ui.createCaseWithEvents("Test Case", "Test Description", "medium", "test-user")
+	ui.createCase("Test Case", "Test Description", "medium", "test-user", ui.selectedEventIDList())
 
 	// Give some time for the goroutine to complete
 	time.Sleep(200 * time.Millisecond)
@@ -387,8 +387,12 @@ func TestHintsShowDeleteForEventsSelection(t *testing.T) {
 	logger := logging.New(io.Discard, logging.LevelDebug, "test")
 	ui := NewUI(ctx, st, &mockLLMProvider{}, logger, "test")
 
-	// Focus events table with a selection so hints include "d:delete"
-	ui.app.SetFocus(ui.eventList)
+	// On the Events screen with a selection, the bulk actions are offered.
+	//
+	// The hints used to be chosen by which widget held focus, which meant three
+	// screens fell through to the same irrelevant six; they now come from the
+	// destination table, so the screen is what decides.
+	ui.destination = destEvents
 	ui.selectedEventIDs["evt-1"] = true
 
 	hints := ui.buildShortcutHints()
@@ -412,7 +416,71 @@ func TestHintsShowDeleteForEventsSelection(t *testing.T) {
 		return b.String()
 	}
 	plain := strip(hints)
-	if !strings.Contains(plain, "d:delete") {
-		t.Fatalf("expected hints to contain 'd:delete' when events are selected; got: %s", plain)
+	for _, want := range []string{"d delete", "c new case", "a add to case"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("expected hints to offer %q when events are selected; got: %s", want, plain)
+		}
+	}
+}
+
+// And a screen with no selection to act on does not offer the bulk actions.
+func TestHintsAreScopedToTheScreen(t *testing.T) {
+	st, err := store.NewStore(":memory:")
+	if err != nil {
+		t.Fatalf("store.NewStore error: %v", err)
+	}
+	defer st.Close()
+
+	ui := NewUI(context.Background(), st, &mockLLMProvider{},
+		logging.New(io.Discard, logging.LevelDebug, "test"), "test")
+
+	for _, tc := range []struct {
+		id       destinationID
+		want     []string
+		unwanted []string
+		name     string
+	}{
+		{destTriage, []string{"e escalate", "v verdict"}, []string{"A all events", "Tab panels", "N next"}, "Triage"},
+		{destCases, []string{"c new case"}, []string{"A all events", "N next", "Space select"}, "Cases"},
+		{destEvents, []string{"p pivot", "N next"}, []string{"e escalate"}, "Events"},
+		{destIndicators, []string{"? help"}, []string{"A all events", "Tab panels", "f filter"}, "Indicators"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ui.destination = tc.id
+			got := stripTags(ui.buildShortcutHints())
+
+			for _, w := range tc.want {
+				if !strings.Contains(got, w) {
+					t.Errorf("%s is missing %q: %s", tc.name, w, got)
+				}
+			}
+			for _, u := range tc.unwanted {
+				if strings.Contains(got, u) {
+					t.Errorf("%s advertises %q, which belongs to another screen: %s", tc.name, u, got)
+				}
+			}
+		})
+	}
+}
+
+// The pager belongs to the Events screen and nowhere else.
+func TestStatusBarHasNoPagerOffEvents(t *testing.T) {
+	st, err := store.NewStore(":memory:")
+	if err != nil {
+		t.Fatalf("store.NewStore error: %v", err)
+	}
+	defer st.Close()
+
+	ui := NewUI(context.Background(), st, &mockLLMProvider{},
+		logging.New(io.Discard, logging.LevelDebug, "test"), "test")
+
+	for _, id := range []destinationID{destHome, destTriage, destCases, destIndicators, destReports} {
+		ui.destination = id
+		got := stripTags(ui.buildStatusMain("Ready"))
+		for _, badge := range []string{"Page:", "Tot:", "Sel:"} {
+			if strings.Contains(got, badge) {
+				t.Errorf("destination %v shows %q, and it has no events context: %s", id, badge, got)
+			}
+		}
 	}
 }

@@ -86,21 +86,17 @@ func (ui *UI) showPivotMenu(event store.Event) {
 	if height > 16 {
 		height = 16
 	}
-	centered := tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(list, height, 1, true).
-			AddItem(nil, 0, 1, false), 60, 1, true).
-		AddItem(nil, 0, 1, false)
-
-	ui.app.SetRoot(centered, true)
-	ui.app.SetFocus(list)
+	ui.overlayModal(list, 60, height)
 }
 
 // closeModal returns to the main layout.
 func (ui *UI) closeModal() {
-	ui.app.SetRoot(ui.layout, true)
+	// The whole root, not just the layout.
+	//
+	// SetRoot(ui.layout) drops the status bar, which lives in the flex above it
+	// — so cancelling or choosing from the pivot menu left the application
+	// without a status bar for the rest of the session.
+	ui.restoreMainLayout()
 }
 
 // pivotTo shows every event carrying an observable, and says how many findings
@@ -110,13 +106,15 @@ func (ui *UI) closeModal() {
 // to the question actually being asked — "have I seen this before?" — so it is
 // shown even though the list holds events.
 func (ui *UI) pivotTo(target pivotTarget) {
-	ui.showFindings = false
-	ui.showAll = true
-	ui.selectedCaseID = ""
+	// The screen change first, then the pivot.
+	//
+	// beginScreen clears what the outgoing screen left behind, and a pivot is
+	// one of those things — assigned before the call it was wiped a line later,
+	// and the events list loaded unfiltered.
+	ui.beginScreen(destEvents)
 	ui.pivot = &target
-	ui.setDestination(destEvents)
 
-	go func() {
+	ui.spawnLoad(func() {
 		events, err := ui.store.FindEventsByObservable(ui.ctx, target.TypeID, target.Value, pivotLimit)
 		if err != nil {
 			ui.queueUpdate(func() {
@@ -137,7 +135,7 @@ func (ui *UI) pivotTo(target pivotTarget) {
 			ui.setStatusDirect("[%s]%s %s · %d events · %d findings[-:-:-]",
 				ui.theme.TagAccent, target.Kind, target.Value, len(events), findings)
 		})
-	}()
+	})
 }
 
 // clearPivot drops the pivot and returns to the unfiltered event list.
@@ -146,7 +144,7 @@ func (ui *UI) clearPivot() {
 		return
 	}
 	ui.pivot = nil
-	ui.switchToAllEvents()
+	ui.enterScreen(destEvents)
 }
 
 // rememberPivot records a pivot for the Home screen's recent list.

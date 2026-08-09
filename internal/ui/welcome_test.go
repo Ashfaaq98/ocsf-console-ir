@@ -28,11 +28,14 @@ func press(v *welcomeView, r rune) {
 	v.handleKey(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone))
 }
 
-// cardText is the card as it reaches the screen: colour tags resolved away and
-// escaped brackets restored, which is exactly what an analyst reads.
-func cardText(v *welcomeView) string {
-	return strings.Join(v.cardLines(), "\n")
+// pageText is the page as it reaches the screen: colour tags resolved away,
+// which is exactly what an analyst reads.
+func pageText(v *welcomeView) string {
+	return strings.Join(v.pageLines(), "\n")
 }
+
+// keycapFor is how an action's key is drawn: a padded cap, not "[1]".
+func keycapFor(key rune) string { return fmt.Sprintf(" %c ", key) }
 
 // The Welcome Screen must not look like the main application. A first-time user
 // shown an empty dashboard concludes the tool is broken, so these widgets have
@@ -80,31 +83,29 @@ func walk(p tview.Primitive, visit func(tview.Primitive)) {
 // product change, so the strings are pinned here.
 func TestWelcomeCopy(t *testing.T) {
 	v := newTestWelcome(t, WelcomeOptions{})
-	text := cardText(v)
+	text := pageText(v)
 
 	for _, want := range []string{
-		welcomeMessage,
+		welcomeDescription,
 		welcomePrivacyA,
 		welcomePrivacyB,
 	} {
 		if !strings.Contains(text, want) {
-			t.Errorf("card is missing %q\ngot:\n%s", want, text)
+			t.Errorf("the page is missing %q\ngot:\n%s", want, text)
 		}
 	}
 
-	if got := v.title.GetText(true); !strings.Contains(got, welcomeTitleText) ||
-		!strings.Contains(got, welcomeDescription) {
-		t.Errorf("title block = %q", got)
-	}
-	if got := v.tip.GetText(true); !strings.Contains(got, welcomeTipText) {
-		t.Errorf("tip = %q, want it to contain %q", got, welcomeTipText)
+	// The wordmark is the name, so the name has to be on the page in whichever
+	// form this terminal can draw.
+	if !strings.Contains(text, wordmarkLines()[0]) {
+		t.Errorf("the wordmark is not on the page\ngot:\n%s", text)
 	}
 
 	// Every action must be listed, or the screen teaches a key it does not show.
 	for _, o := range welcomeOptions {
-		want := fmt.Sprintf("[%c]", o.key)
-		if !strings.Contains(text, want) {
-			t.Errorf("action list is missing %s %s\ngot:\n%s", want, o.label, text)
+		if !strings.Contains(text, keycapFor(o.key)) {
+			t.Errorf("action list is missing the key %q for %s\ngot:\n%s",
+				keycapFor(o.key), o.label, text)
 		}
 		if !strings.Contains(text, o.label) {
 			t.Errorf("action list is missing the label %q", o.label)
@@ -112,26 +113,27 @@ func TestWelcomeCopy(t *testing.T) {
 	}
 }
 
-// The literal copy must survive tview's dynamic-colour parser: an unescaped
-// "[q]" is read as a colour tag and vanishes from the screen.
-func TestWelcomeActionKeysSurviveColourTags(t *testing.T) {
+// No action label may carry a bracket into tview's dynamic-colour parser.
+//
+// The keys used to be drawn as "[1]", which tview reads as a colour tag and
+// swallows, so the list had to escape its own brackets and then showed the
+// escaping. Key caps removed the problem rather than working around it — but a
+// label with a bracket in it would bring it straight back, so this pins the
+// labels as well as the caps.
+func TestWelcomeActionsCarryNoBrackets(t *testing.T) {
 	v := newTestWelcome(t, WelcomeOptions{})
 
-	// GetText(false) keeps the markup; the escape is what has to be there.
-	var raw strings.Builder
-	for i := 0; i < v.body.GetItemCount(); i++ {
-		if row, ok := v.body.GetItem(i).(*tview.TextView); ok {
-			raw.WriteString(row.GetText(false))
-			raw.WriteByte('\n')
+	for _, o := range welcomeOptions {
+		if strings.ContainsAny(o.label, "[]") {
+			t.Errorf("the label %q contains a bracket, which tview will read as a colour tag", o.label)
 		}
 	}
-	if !strings.Contains(raw.String(), "[q[]") {
-		t.Errorf("the quit key is not escaped, so tview will swallow it:\n%s", raw.String())
-	}
 
-	// And with tags interpreted, the brackets are still on screen.
-	if got := cardText(v); !strings.Contains(got, "[q]") {
-		t.Errorf("rendered card does not show [q]:\n%s", got)
+	text := pageText(v)
+	for _, o := range welcomeOptions {
+		if !strings.Contains(text, keycapFor(o.key)) {
+			t.Errorf("the key cap for %q is not on the page:\n%s", o.label, text)
+		}
 	}
 }
 
@@ -266,8 +268,8 @@ func TestWelcomeEscapeLeavesNoSideEffects(t *testing.T) {
 	if v.pending.Action != WelcomeQuit {
 		t.Errorf("pending action = %v, want it cleared", v.pending.Action)
 	}
-	if !strings.Contains(cardText(v), welcomeMessage) {
-		t.Error("the card did not return to the menu")
+	if !strings.Contains(pageText(v), welcomeOptions[0].label) {
+		t.Error("the page did not return to the menu")
 	}
 }
 
@@ -314,10 +316,10 @@ func TestWelcomeErrorStateNeverFallsThrough(t *testing.T) {
 		t.Errorf("result = %v; a failure must not report a completed action", v.result.Action)
 	}
 
-	text := cardText(v)
-	for _, want := range []string{"permission denied", "/nowhere/console-ir.db", "[r]", "[q]"} {
+	text := pageText(v)
+	for _, want := range []string{"permission denied", "/nowhere/console-ir.db", " r ", " q "} {
 		if !strings.Contains(text, want) {
-			t.Errorf("error card is missing %q\ngot:\n%s", want, text)
+			t.Errorf("the error state is missing %q\ngot:\n%s", want, text)
 		}
 	}
 }
@@ -397,7 +399,7 @@ func TestWelcomeShowsEachStage(t *testing.T) {
 		Perform: func(_ WelcomeResult, progress func(string)) error {
 			for _, stage := range []string{"Creating database…", "Loading sample incident…"} {
 				progress(stage)
-				seen = append(seen, cardText(v))
+				seen = append(seen, pageText(v))
 			}
 			return nil
 		},
@@ -415,66 +417,132 @@ func TestWelcomeShowsEachStage(t *testing.T) {
 		t.Errorf("second stage on the card = %q", seen[1])
 	}
 
-	// The message and the actions swap places, not the whole card: a card that
-	// changes height mid-action jumps around the screen.
-	if !strings.Contains(seen[0], welcomeMessage) {
-		t.Error("the loading card dropped the message")
+	// Only the right-hand column changes: the brand stays put, and the actions
+	// give up their place to the progress rather than the whole page moving.
+	if !strings.Contains(seen[0], welcomeDescription) {
+		t.Error("the loading page dropped the brand column")
 	}
-	if strings.Contains(seen[0], "Create database") {
-		t.Error("the loading card still lists the actions")
+	if strings.Contains(seen[0], welcomeOptions[0].label) {
+		t.Error("the loading page still lists the actions")
 	}
 }
 
-// Compact terminals drop decoration, never the actions. An 80x24 window is a
-// normal size, not an edge case.
-func TestWelcomeResponsiveTiers(t *testing.T) {
+// The brand column is what holds the page still.
+//
+// Every state changes only the right-hand column, so the page keeps its height
+// and its left edge whatever happens. A page that reflows when an action starts
+// or fails redraws in a different place and reads as the screen glitching.
+func TestWelcomePageDoesNotReflowBetweenStates(t *testing.T) {
+	v := newTestWelcome(t, WelcomeOptions{
+		DBPath:  "/read-only/console-ir.db",
+		Perform: func(WelcomeResult, func(string)) error { return errPermission },
+	})
+	v.relayout(140, 40)
+	brand := v.leftColumn()
+
 	for _, tc := range []struct {
-		name          string
-		width, height int
-		wantCardWidth int
-		wantLogo      bool
+		name  string
+		enter func()
 	}{
-		{"wide", 140, 40, welcomeCardWide, true},
-		{"standard", 100, 30, welcomeCardStandard, true},
-		{"compact", 70, 30, 68, false},
-		{"short", 100, 20, welcomeCardStandard, false},
+		{"loading", func() { v.state, v.loading = welcomeStateLoading, "Loading sample incident…" }},
+		{"prompt", func() { v.state, v.pending = welcomeStatePrompt, WelcomeResult{Action: WelcomeImport} }},
+		{"error", func() { v.state, v.err = welcomeStateError, errPermission }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			v := newTestWelcome(t, WelcomeOptions{})
-			v.relayout(tc.width, tc.height)
+			tc.enter()
+			v.render()
 
-			if got := v.cardWidth(); got != tc.wantCardWidth {
-				t.Errorf("card width = %d, want %d", got, tc.wantCardWidth)
+			got := v.leftColumn()
+			if len(got) != len(brand) {
+				t.Fatalf("the brand column is %d rows in the %s state, want %d",
+					len(got), tc.name, len(brand))
 			}
-			showLogo, _ := v.blocks()
-			if showLogo != tc.wantLogo {
-				t.Errorf("logo shown = %v, want %v", showLogo, tc.wantLogo)
-			}
-
-			// Whatever else is dropped, every action and the tip stay on screen.
-			text := cardText(v)
-			for _, o := range welcomeOptions {
-				if !strings.Contains(text, o.label) {
-					t.Errorf("%dx%d dropped the action %q", tc.width, tc.height, o.label)
+			for i := range got {
+				if got[i] != brand[i] {
+					t.Errorf("brand row %d changed in the %s state:\n got %q\nwant %q",
+						i, tc.name, got[i].text, brand[i].text)
 				}
-			}
-			if got := v.tip.GetText(true); !strings.Contains(got, welcomeTipText) {
-				t.Errorf("%dx%d dropped the tip", tc.width, tc.height)
 			}
 		})
 	}
 }
 
+// Compact terminals drop decoration, never the actions. An 80x24 window is a
+// normal size, not an edge case.
+//
+// The page reduces by measurement rather than by tier, so this pins the ladder
+// itself: as the terminal shrinks the page gives up more, never less, and the
+// actions survive every rung. They used to be pinned to specific sizes, which
+// asserted the arithmetic of the day rather than the rule.
+func TestWelcomeDropsDecorationBeforeActions(t *testing.T) {
+	heights := []int{40, 30, 24, 18, 14, 12, 10, 8}
+	last := densityFull
+
+	for _, h := range heights {
+		v := newTestWelcome(t, WelcomeOptions{DBPath: "/tmp/console-ir.db"})
+		v.relayout(120, h)
+
+		if v.density < last {
+			t.Errorf("120x%d carries more than a taller terminal did (%v after %v)",
+				h, v.density, last)
+		}
+		last = v.density
+
+		text := pageText(v)
+		for _, o := range welcomeOptions {
+			if !strings.Contains(text, o.label) {
+				t.Errorf("120x%d dropped the action %q\n%s", h, o.label, text)
+			}
+		}
+		// The name goes last of all: a screen that cannot say what it is has
+		// nothing left worth showing.
+		if !strings.Contains(text, wordmarkLines()[0]) {
+			t.Errorf("120x%d dropped the wordmark\n%s", h, text)
+		}
+	}
+
+	if last == densityFull {
+		t.Error("the page never reduced, so the ladder was never exercised")
+	}
+}
+
+// Two columns where they fit, one where they do not.
+func TestWelcomeSplitsOnlyWhenItFits(t *testing.T) {
+	for _, tc := range []struct {
+		width, height int
+		wantSplit     bool
+	}{
+		{140, 40, true},
+		{120, 34, true},
+		{100, 30, true},
+		{70, 30, false},
+	} {
+		v := newTestWelcome(t, WelcomeOptions{})
+		v.relayout(tc.width, tc.height)
+
+		left, right := v.leftColumn(), v.rightColumn()
+		if got := v.splitFits(left, right); got != tc.wantSplit {
+			t.Errorf("%dx%d: two columns = %v, want %v (needs %d columns)",
+				tc.width, tc.height, got, tc.wantSplit, v.splitWidth(left, right))
+		}
+	}
+}
+
 // The screen has to fit the terminal it is given, down to the smallest one the
-// layout tiers acknowledge.
+// layout tiers acknowledge — in both directions.
 func TestWelcomeFitsSmallTerminals(t *testing.T) {
 	for _, size := range [][2]int{{140, 40}, {100, 30}, {100, 24}, {80, 24}, {70, 20}} {
 		v := newTestWelcome(t, WelcomeOptions{})
 		v.relayout(size[0], size[1])
 
-		showLogo, showPrivacy := v.blocks()
-		if rows := v.requiredRows(showLogo, showPrivacy); rows > size[1] {
-			t.Errorf("%dx%d needs %d rows", size[0], size[1], rows)
+		rows := v.trimToHeight(v.pageRows())
+		if len(rows)+welcomeFooterRows > size[1] {
+			t.Errorf("%dx%d needs %d rows", size[0], size[1], len(rows)+welcomeFooterRows)
+		}
+		for i, row := range rows {
+			if w := len([]rune(stripTags(row))); w > size[0] {
+				t.Errorf("%dx%d: row %d is %d columns wide", size[0], size[1], i, w)
+			}
 		}
 	}
 }
@@ -524,3 +592,116 @@ func TestWrapText(t *testing.T) {
 
 // errPermission is the failure the error-state tests provoke.
 var errPermission = errors.New("permission denied")
+
+// The cursor is the second way into the action list, and it has to wrap: on a
+// five-item list, pressing up from the top is how people reach Quit.
+func TestWelcomeCursorWraps(t *testing.T) {
+	v := newTestWelcome(t, WelcomeOptions{})
+	last := len(welcomeOptions) - 1
+
+	v.cursor = 0
+	press(v, 'k')
+	if v.cursor != last {
+		t.Errorf("up from the top landed on %d, want %d", v.cursor, last)
+	}
+
+	v.cursor = last
+	v.handleKey(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone))
+	if v.cursor != 0 {
+		t.Errorf("down from the bottom landed on %d, want 0", v.cursor)
+	}
+}
+
+// Enter runs whatever the cursor is resting on.
+func TestWelcomeEnterActivatesTheCursor(t *testing.T) {
+	var got WelcomeResult
+	v := newTestWelcome(t, WelcomeOptions{
+		Perform: func(res WelcomeResult, _ func(string)) error {
+			got = res
+			return nil
+		},
+	})
+
+	v.cursor = 0 // Create a database
+	v.handleKey(tcell.NewEventKey(tcell.KeyEnter, 0, tcell.ModNone))
+
+	if got.Action != WelcomeCreate {
+		t.Errorf("Enter ran %v, want the action under the cursor", got.Action)
+	}
+}
+
+// The digits still act on their own. The cursor was added beside them, not in
+// place of them: making everyone press a key twice would be a regression for
+// anybody who already knows this screen.
+func TestWelcomeDigitsStillActImmediately(t *testing.T) {
+	var got WelcomeResult
+	v := newTestWelcome(t, WelcomeOptions{
+		Perform: func(res WelcomeResult, _ func(string)) error {
+			got = res
+			return nil
+		},
+	})
+
+	v.cursor = 0 // deliberately not the demo
+	press(v, '2')
+
+	if got.Action != WelcomeDemo {
+		t.Errorf("pressing 2 ran %v, want the demo regardless of the cursor", got.Action)
+	}
+}
+
+// The cursor opens on the demo. That is the recommendation, and it replaced a
+// line of copy under the card that said the same thing in a sentence.
+func TestWelcomeCursorOpensOnTheDemo(t *testing.T) {
+	v := newTestWelcome(t, WelcomeOptions{})
+
+	if got := v.cursorOption().action; got != WelcomeDemo {
+		t.Errorf("the cursor opens on %v, want the demo", got)
+	}
+}
+
+// Exactly one row is selected, and the band is a rectangle: every action row
+// has to be the same drawn width, or the highlight follows the ragged right
+// edge of the labels.
+func TestWelcomeSelectionIsOneFullWidthRow(t *testing.T) {
+	v := newTestWelcome(t, WelcomeOptions{})
+	v.density = densityNoDetails // one cell per action, so the rows line up with the options
+	cells := v.actionCells()
+
+	if len(cells) != len(welcomeOptions) {
+		t.Fatalf("got %d action rows, want %d", len(cells), len(welcomeOptions))
+	}
+	if cells[v.cursor].width != welcomeActionWidth() {
+		t.Errorf("the selected row is %d columns wide, want the full %d",
+			cells[v.cursor].width, welcomeActionWidth())
+	}
+	for i, c := range cells {
+		if i == v.cursor {
+			continue
+		}
+		if c.width > welcomeActionWidth() {
+			t.Errorf("row %d is %d columns, wider than the band's %d",
+				i, c.width, welcomeActionWidth())
+		}
+	}
+}
+
+// A selected action and its consequence line are one band, not a highlighted
+// row with a loose line under it.
+func TestWelcomeSelectionCoversTheDetailLine(t *testing.T) {
+	v := newTestWelcome(t, WelcomeOptions{DemoSummary: "727 events · 4 cases"})
+	v.density = densityFull
+	cells := v.actionCells()
+
+	band := tagColor(v.theme.SelectionBg)
+	var banded int
+	for _, c := range cells {
+		if strings.Contains(c.text, band) {
+			banded++
+		}
+	}
+	if banded != 2 {
+		t.Errorf("%d rows carry the selection band, want the label and its detail\n%v",
+			banded, cells)
+	}
+}

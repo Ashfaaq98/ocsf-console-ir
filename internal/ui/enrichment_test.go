@@ -299,23 +299,6 @@ func contains(haystack []string, needle string) bool {
 	return false
 }
 
-// stripTags removes tview colour tags so assertions read the text, not the markup.
-func stripTags(s string) string {
-	var sb strings.Builder
-	depth := 0
-	for _, r := range s {
-		switch {
-		case r == '[':
-			depth++
-		case r == ']' && depth > 0:
-			depth--
-		case depth == 0:
-			sb.WriteRune(r)
-		}
-	}
-	return sb.String()
-}
-
 func nonEmptyLines(s string) []string {
 	var out []string
 	for _, l := range strings.Split(s, "\n") {

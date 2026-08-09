@@ -76,16 +76,33 @@ func TestBriefingHasNoTagDrift(t *testing.T) {
 	}
 }
 
-// The affordances still reach the screen, in the house style: the key coloured
-// rather than bracketed, as every action bar does it.
-func TestBriefingAffordancesReachTheScreen(t *testing.T) {
-	got := rendered(renderBriefing(sampleBriefing(), themeDark(), 120))
-	for _, want := range []string{"a accept into notes", "r regenerate"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("briefing is missing %q\n%s", want, got)
+// The briefing offers no key it does not have.
+//
+// It advertised S write one, H add one, A add one, g generate, a accept and
+// r regenerate. None was handled here or in the case screen, and the globals
+// made H open help, A leave for the events list and g jump to the top. The
+// store methods behind three of them — SetStatement, AddHypothesis,
+// AddNextAction — have no caller in the application at all.
+func TestBriefingAdvertisesNoDeadKeys(t *testing.T) {
+	for _, data := range []briefingData{
+		sampleBriefing(),
+		{Case: store.Case{Title: "new case"}, Pinned: map[string]bool{}},
+	} {
+		got := rendered(renderBriefing(data, themeDark(), 120))
+		// The rendered key form — "g generate" — not the bare word, which also
+		// appears in the AI summary's "generated, not case truth" label.
+		for _, dead := range []string{
+			"S write one", "H add one", "A add one", "g generate",
+			"a accept into notes", "r regenerate",
+		} {
+			if strings.Contains(got, dead) {
+				t.Errorf("the briefing still offers %q, which nothing handles\n%s", dead, got)
+			}
 		}
 	}
-	// Checkboxes are glyphs, which need no escaping.
+
+	// The read-only affordances stay: checkboxes are glyphs, not keys.
+	got := rendered(renderBriefing(sampleBriefing(), themeDark(), 120))
 	if !strings.Contains(got, "✓") || !strings.Contains(got, "○") {
 		t.Errorf("the checklist has no done/not-done marks\n%s", got)
 	}
@@ -96,11 +113,13 @@ func TestBriefingEmptyStatesAreInstructions(t *testing.T) {
 	empty := briefingData{Case: store.Case{Title: "new case"}, Pinned: map[string]bool{}}
 	got := rendered(renderBriefing(empty, themeDark(), 120))
 
+	// Each section says what is absent, without claiming a key that would fill
+	// it — writing a briefing from the UI does not exist yet.
 	for _, want := range []string{
-		"No statement yet", "S write one",
-		"Nothing recorded.", "H add one",
-		"Nothing outstanding.", "A add one",
-		"None generated.", "g generate",
+		"No statement yet",
+		"Nothing recorded.",
+		"Nothing outstanding.",
+		"None generated.",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("empty briefing is missing %q\n%s", want, got)
@@ -119,8 +138,10 @@ func TestSummaryIsAlwaysLabelled(t *testing.T) {
 		if !strings.Contains(got, "generated, not case truth") {
 			t.Errorf("at width %d the summary is not labelled as generated", width)
 		}
-		if !strings.Contains(got, "accept into notes") {
-			t.Errorf("at width %d there is no deliberate route into the record", width)
+		// The label is the whole guarantee now. There is no route from the
+		// generated text into the record, so the panel must not imply one.
+		if strings.Contains(got, "accept into notes") {
+			t.Errorf("at width %d the summary offers a route into the record that does not exist", width)
 		}
 	}
 }

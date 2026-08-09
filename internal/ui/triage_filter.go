@@ -97,6 +97,21 @@ func newTriageFilter() *triageFilter {
 	return f
 }
 
+// viewNone means no saved view is selected — every finding, no chips.
+//
+// Without it "clear" had nowhere to go but back to a view, and view zero is
+// "My queue", whose chips include Open. Clearing the filters therefore
+// re-applied Open, and the one chip an analyst most wants to drop was the one
+// that came straight back.
+const viewNone = -1
+
+// clear drops every filter: the chips, the saved view and the search.
+func (f *triageFilter) clear() {
+	f.active = map[chipID]bool{}
+	f.view = viewNone
+	f.search = ""
+}
+
 // applyView resets the chips to a saved view's starting point.
 func (f *triageFilter) applyView(idx int) {
 	views := savedViews()
@@ -113,6 +128,9 @@ func (f *triageFilter) applyView(idx int) {
 // viewName is the saved view currently selected.
 func (f *triageFilter) viewName() string {
 	views := savedViews()
+	if f.view == viewNone {
+		return "All findings"
+	}
 	if f.view < 0 || f.view >= len(views) {
 		return ""
 	}
@@ -121,11 +139,19 @@ func (f *triageFilter) viewName() string {
 
 // cycleView moves to the next saved view, wrapping.
 func (f *triageFilter) cycleView() {
+	// From "no view" the cycle starts at the first saved one.
+	if f.view == viewNone {
+		f.applyView(0)
+		return
+	}
 	f.applyView((f.view + 1) % len(savedViews()))
 }
 
 // toggle flips one chip.
 func (f *triageFilter) toggle(id chipID) {
+	// A hand-picked set of chips is no longer the saved view, and saying so is
+	// what stops the next V or F from silently putting a chip back.
+	f.view = viewNone
 	if f.active[id] {
 		delete(f.active, id)
 		return

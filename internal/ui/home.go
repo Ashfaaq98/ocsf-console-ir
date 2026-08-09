@@ -2,6 +2,8 @@ package ui
 
 import (
 	"fmt"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -33,8 +35,6 @@ const (
 	panelCases
 	panelEvidence
 	panelQueue
-	panelRecent
-	panelPulse
 	homePanelCount
 )
 
@@ -44,8 +44,16 @@ const (
 const (
 	homeClockInterval   = time.Second
 	homeRefreshInterval = 10 * time.Second
-	homeQueueSize       = 5
-	homeRecentCases     = 4
+
+	// homeQueueFloor is the smallest useful queue, not a cap. The panel takes
+	// whatever height the screen has left and asks for that many, so a tall
+	// terminal triages twenty findings instead of showing five above a hole.
+	homeQueueFloor = 5
+
+	// homeQueueCeiling bounds the query on an unusually tall terminal. A queue
+	// nobody can read in one glance is a list, and there is a whole screen for
+	// that behind key 1.
+	homeQueueCeiling = 40
 )
 
 // homeData is one complete snapshot of the dashboard.
@@ -66,11 +74,14 @@ type homeData struct {
 	observables    int
 	observablesErr error
 
+	// volume is the last day's event count per hour, oldest first.
+	volume []int
+
 	queue    []store.Finding
 	queueErr error
-
-	recent    []store.Case
-	recentErr error
+	// queueTotal is how many open findings there are, so the panel can say what
+	// it is not showing.
+	queueTotal int
 
 	lastEvent    time.Time
 	hasLastEvent bool
@@ -112,13 +123,7 @@ type homeView struct {
 	cards     *tview.Flex
 	cardBox   [3]*tview.TextView
 	queue     *tview.Table
-	recent    *tview.TextView
-	pulse     *tview.TextView
 	inspector *tview.TextView
-	footer    *tview.TextView
-
-	// body holds the two responsive arrangements of queue and recent cases.
-	body *tview.Flex
 
 	mu      sync.Mutex
 	data    homeData
@@ -127,9 +132,21 @@ type homeView struct {
 	mode  LayoutMode
 	short bool
 	built bool
+	// queueRows is the height the queue was last laid out at, including its
+	// border. The query asks for what fits.
+	queueRows int
+	// width is the width the screen was last laid out at, so panels can wrap
+	// text without asking a widget for a rect that is a frame out of date.
+	width int
+
+	// inspect holds the selected finding's context and its debounce timer.
+	inspect inspectorContext
 
 	stop chan struct{}
 	once sync.Once
+	// inflight counts the loads that have been started and not yet finished, so
+	// a caller that is about to take the database away can wait for them.
+	inflight sync.WaitGroup
 }
 
 // showAnalystHome opens the dashboard. It is the only destination the UI starts
@@ -139,11 +156,15 @@ type homeView struct {
 // Home renders its own empty states, so an existing but empty database is not a
 // special case.
 func (ui *UI) showAnalystHome() {
-	ui.showFindings = false
-	ui.showAll = false
-	ui.selectedCaseID = ""
-	ui.destination = destHome
-	ui.renderNavRail()
+	// What was new last time stops being new now. The mark is read from the
+	// previous visit and the clock is reset here, on the way in, so a finding
+	// stays marked for the whole of the visit that first saw it.
+	ui.markSince = ui.lastVisit
+	ui.lastVisit = time.Now()
+	ui.saveUISettings()
+
+	// The context flags and the rail marker come from beginScreen; showAnalystHome
+	// is reached through enterScreen like every other destination.
 
 	if ui.home != nil {
 		ui.home.close()
@@ -156,13 +177,19 @@ func (ui *UI) showAnalystHome() {
 
 func newHomeView(ui *UI) *homeView {
 	h := &homeView{ui: ui, stop: make(chan struct{})}
+	h.inspect.ui = ui
 	t := ui.theme
 
 	h.header = homeText(t, tview.AlignLeft)
-	h.footer = homeText(t, tview.AlignLeft)
 
 	for i := range h.cardBox {
 		card := homeText(t, tview.AlignLeft)
+		// A card is two rows and no more. Wrapped, an over-long first row
+		// reflows onto the second and pushes it out of the panel — which is how
+		// the pipeline line disappeared the moment a sparkline was added to the
+		// row above it. Clipping loses the tail of one line; wrapping loses a
+		// whole line, silently.
+		card.SetWrap(false)
 		stylePanel(card.Box, homeCardTitles[i], PanelRolePrimary, t)
 		card.SetBackgroundColor(t.Surface)
 		h.cardBox[i] = card
@@ -171,24 +198,19 @@ func newHomeView(ui *UI) *homeView {
 	h.cards.SetBackgroundColor(t.Bg)
 
 	h.queue = tview.NewTable().SetSelectable(true, false)
-	stylePanel(h.queue.Box, "PRIORITY QUEUE  ·  ranked by risk", PanelRolePrimary, t)
+	stylePanel(h.queue.Box, homeQueueTitle, PanelRolePrimary, t)
 	h.queue.SetBackgroundColor(t.Bg)
 	h.queue.SetSelectedStyle(tcell.StyleDefault.
 		Background(t.SelectionBg).Foreground(t.SelectionFg))
 
-	h.recent = homeText(t, tview.AlignLeft)
-	stylePanel(h.recent.Box, "RECENT CASES", PanelRolePrimary, t)
-	h.recent.SetBackgroundColor(t.Surface)
-
-	h.pulse = homeText(t, tview.AlignLeft)
-	stylePanel(h.pulse.Box, "EVIDENCE PULSE", PanelRolePrimary, t)
-	h.pulse.SetBackgroundColor(t.Surface)
-
 	h.inspector = homeText(t, tview.AlignLeft)
-	stylePanel(h.inspector.Box, "SELECTED FINDING", PanelRoleInspector, t)
+	// Two columns composed into one string per row, so a row that overran its
+	// panel used to reflow onto the next and push the rows below it out. The
+	// narrative wraps deliberately; nothing else may.
+	h.inspector.SetWrap(false)
+	stylePanel(h.inspector.Box, homeInspectorTitle, PanelRoleInspector, t)
 	h.inspector.SetBackgroundColor(t.Surface)
 
-	h.body = tview.NewFlex()
 	h.root = tview.NewFlex().SetDirection(tview.FlexRow)
 	h.root.SetBackgroundColor(t.Bg)
 
@@ -206,7 +228,7 @@ func newHomeView(ui *UI) *homeView {
 
 	// Every number on this screen is a shortcut to the work it counts.
 	h.queue.SetSelectedFunc(func(row, _ int) { h.openSelected() })
-	h.queue.SetSelectionChangedFunc(func(row, _ int) { h.renderInspector() })
+	h.queue.SetSelectionChangedFunc(func(row, _ int) { h.selectionChanged() })
 
 	h.rebuild(100, 30)
 	h.renderAll()
@@ -214,15 +236,33 @@ func newHomeView(ui *UI) *homeView {
 }
 
 // openSelected opens the finding under the cursor in Triage.
+//
+// The selection travels with it. Jumping to a queue of a hundred findings with
+// the cursor on the first one loses the very thing that was being looked at,
+// which makes Enter a change of scenery rather than an action.
 func (h *homeView) openSelected() {
 	f := h.selectedFinding()
 	if f == nil {
 		return
 	}
-	h.ui.jumpToFindings()
+	h.ui.pendingFindingID = f.ID
+	h.ui.enterScreen(destTriage)
 }
 
-var homeCardTitles = [3]string{"OPEN FINDINGS", "ACTIVE CASES", "EVIDENCE TODAY"}
+// homeCardTitles names the three metrics across the top.
+//
+// The third used to be EVIDENCE TODAY and stated the same two numbers as the
+// evidence pulse four rows below it — "0 events / 0 indicators" beside "events
+// today 0   indicators 0". The pulse is the better of the two and it is now the
+// card, which is also where it belongs: pipeline health is something you check
+// on the way in, not something buried under the fold.
+var homeCardTitles = [3]string{"OPEN FINDINGS", "ACTIVE CASES", "EVIDENCE PULSE"}
+
+// Panel titles, named once so a theme change restyles the panel it built.
+const (
+	homeQueueTitle     = "PRIORITY QUEUE  ·  ranked by risk"
+	homeInspectorTitle = "SELECTED FINDING"
+)
 
 func homeText(theme Theme, align int) *tview.TextView {
 	tv := tview.NewTextView().SetDynamicColors(true).SetTextAlign(align)
@@ -236,7 +276,7 @@ func homeText(theme Theme, align int) *tview.TextView {
 
 // start issues the first load and begins the clock and refresh timers.
 func (h *homeView) start() {
-	go h.load()
+	h.reload()
 
 	go func() {
 		clock := time.NewTicker(homeClockInterval)
@@ -257,15 +297,69 @@ func (h *homeView) start() {
 				// their loading and loaded states forever.
 				h.ui.queueUpdate(h.renderHeader)
 			case <-refresh.C:
-				go h.load()
+				h.reload()
 			}
 		}
 	}()
 }
 
+// applyTheme restyles the screen in place.
+//
+// In place, rather than by rebuilding: this screen holds a cursor, a selected
+// finding and the record of what was new when the analyst arrived, and none of
+// that should be lost to changing the colours. Without it, pressing the theme
+// key on the dashboard recoloured the rail and the status bar around a
+// dashboard still drawn in the old palette.
+func (h *homeView) applyTheme() {
+	t := h.ui.theme
+
+	for i, card := range h.cardBox {
+		stylePanel(card.Box, homeCardTitles[i], PanelRolePrimary, t)
+		card.SetBackgroundColor(t.Surface)
+	}
+
+	stylePanel(h.queue.Box, homeQueueTitle, PanelRolePrimary, t)
+	h.queue.SetBackgroundColor(t.Bg)
+	h.queue.SetSelectedStyle(tcell.StyleDefault.
+		Background(t.SelectionBg).Foreground(t.SelectionFg))
+
+	stylePanel(h.inspector.Box, homeInspectorTitle, PanelRoleInspector, t)
+	h.inspector.SetBackgroundColor(t.Surface)
+
+	for _, tv := range []*tview.TextView{h.header, h.inspector} {
+		tv.SetTextColor(t.TextPrimary)
+	}
+	h.header.SetBackgroundColor(t.Bg)
+	h.cards.SetBackgroundColor(t.Bg)
+	h.root.SetBackgroundColor(t.Bg)
+
+	h.renderAll()
+	h.renderInspector()
+}
+
+// reload runs a load off the UI goroutine, tracked so it can be waited for.
+func (h *homeView) reload() {
+	h.inflight.Add(1)
+	go func() {
+		defer h.inflight.Done()
+		h.load()
+	}()
+}
+
 // close stops the timers. Safe to call more than once.
+//
+// It does not wait for a load that is already running: close is called from the
+// UI goroutine, and a load part-way through queueing a repaint is waiting for
+// that same goroutine. Waiting here would deadlock the application on every
+// screen change. Callers that are about to remove the database — which in
+// practice means tests — call wait afterwards.
 func (h *homeView) close() {
 	h.once.Do(func() { close(h.stop) })
+}
+
+// wait blocks until no load is in flight.
+func (h *homeView) wait() {
+	h.inflight.Wait()
 }
 
 // load issues every query concurrently and paints each panel as its own query
@@ -278,6 +372,14 @@ func (h *homeView) load() {
 	st := h.ui.store
 	if st == nil {
 		return
+	}
+	// Already closed. The ticker that scheduled this may have fired just before
+	// the screen went away, and there is no point querying on behalf of a view
+	// nobody is looking at — or, in a test, one whose database is being removed.
+	select {
+	case <-h.stop:
+		return
+	default:
 	}
 
 	var wg sync.WaitGroup
@@ -301,25 +403,36 @@ func (h *homeView) load() {
 	})
 
 	run(panelEvidence, func() {
-		n, err := st.CountEventsToday(ctx, time.Now())
+		now := time.Now()
+		n, err := st.CountEventsToday(ctx, now)
 		o, oerr := st.CountObservables(ctx)
+		// The shape of the day, which the total cannot carry. A failure here
+		// costs the sparkline and nothing else.
+		v, _ := st.EventVolumeBuckets(ctx, now, homeVolumeHours)
 		h.set(func(d *homeData) {
 			d.eventsToday, d.eventsTodayErr = n, err
 			d.observables, d.observablesErr = o, oerr
+			d.volume = v
 		})
 	})
 
 	run(panelQueue, func() {
-		q, err := st.GetPriorityQueue(ctx, homeQueueSize)
-		h.set(func(d *homeData) { d.queue, d.queueErr = q, err })
+		// One more than the panel can show, so "and N more" can be truthful
+		// without a second count query.
+		// Asked once: the panel must not decide how many to keep from a
+		// different answer than the one it queried with.
+		want := h.queueWant()
+		q, err := st.GetPriorityQueue(ctx, want+1)
+		h.set(func(d *homeData) {
+			d.queueTotal = len(q)
+			if len(q) > want {
+				q = q[:want]
+			}
+			d.queue, d.queueErr = q, err
+		})
 	})
 
-	run(panelRecent, func() {
-		c, err := st.GetRecentCases(ctx, homeRecentCases)
-		h.set(func(d *homeData) { d.recent, d.recentErr = c, err })
-	})
-
-	run(panelPulse, func() {
+	run(panelEvidence, func() {
 		ts, ok, err := st.GetLastEvent(ctx)
 		// Watcher and enrichment are not store queries: they come from the
 		// ingest package and the plugin manager, injected by cmd.
@@ -366,7 +479,6 @@ func (h *homeView) renderAll() {
 	for p := homePanel(0); p < homePanelCount; p++ {
 		h.renderPanel(p)
 	}
-	h.renderFooter()
 }
 
 func (h *homeView) renderPanel(p homePanel) {
@@ -374,52 +486,29 @@ func (h *homeView) renderPanel(p homePanel) {
 	case panelFindings, panelCases:
 		h.renderCards()
 	case panelEvidence:
-		// The pulse repeats these counts, so it repaints with them. Otherwise
-		// whichever of the two panels resolved last decided what each showed,
-		// and the card could report 26 indicators beside a pulse reporting 0.
 		h.renderCards()
-		h.renderPulse()
 	case panelQueue:
 		h.renderQueue()
 		h.renderInspector()
-	case panelRecent:
-		h.renderRecent()
-	case panelPulse:
-		h.renderPulse()
-		// Freshness lives in the header and comes from the same query.
-		h.renderHeader()
 	}
 }
 
-// renderHeader paints the two header rows. Called on every clock tick, so it
-// must not query anything.
+// renderHeader paints the header row. Called on every clock tick, so it must
+// not query anything.
 func (h *homeView) renderHeader() {
-	d, _ := h.snapshot()
 	t := h.ui.theme
 
-	connected := fmt.Sprintf("[%s]●[-:-:-] [%s]connected[-:-:-]", t.TagSuccess, t.TagMuted)
+	// "connected" on its own answers nothing — connected to what? The only
+	// connection this screen has is the database, and whether it is open is the
+	// difference between an empty dashboard and a broken one.
+	db := fmt.Sprintf("[%s]●[-:-:-] [%s]DB connected[-:-:-]", t.TagSuccess, t.TagMuted)
 	if h.ui.store == nil {
-		connected = fmt.Sprintf("[%s]●[-:-:-] [%s]disconnected[-:-:-]", t.TagError, t.TagMuted)
+		db = fmt.Sprintf("[%s]●[-:-:-] [%s]DB unavailable[-:-:-]", t.TagError, t.TagMuted)
 	}
 
-	freshness := fmt.Sprintf("[%s]no events yet[-:-:-]", t.TagMuted)
-	if d.hasLastEvent {
-		freshness = fmt.Sprintf("[%s]last event %s ago[-:-:-]",
-			t.TagMuted, renderRelativeTime(d.lastEvent))
-	}
-
-	h.header.SetText(fmt.Sprintf("[%s:-:b]Console-IR[-:-:-]   [%s]Analyst Home[-:-:-]   %s   %s   [%s]%s[-:-:-]",
-		t.TagAccent, t.TagTextPrimary, connected, freshness,
-		t.TagMuted, time.Now().Format("15:04:05")))
-}
-
-func (h *homeView) renderFooter() {
-	h.footer.SetText(actionBar(h.ui.theme,
-		keyHint{"Enter", "Open"},
-		keyHint{"/", "Filter"},
-		keyHint{":", "Command palette"},
-		keyHint{"?", "Help"},
-	))
+	// No product name here. It is on the status bar, once.
+	h.header.SetText(fmt.Sprintf(" [%s:-:b]Analyst Home[-:-:-]    %s    [%s]%s[-:-:-]",
+		t.TagAccent, db, t.TagMuted, time.Now().Format("15:04:05")))
 }
 
 // renderCards paints the three metric cards. Each is a shortcut to the work it
@@ -444,10 +533,14 @@ func (h *homeView) renderCards() {
 		} else if d.findings.High > 0 {
 			tone = "high"
 		}
+		// Not %02d. It pads below ten and not above, so a screen showing "05"
+		// beside "12" disagreed with itself about how counts are written.
 		h.cardBox[0].SetText(h.homeCard(
-			metric("", fmt.Sprintf("%02d", d.findings.Total),
-				fmt.Sprintf("%d critical · %d high", d.findings.Critical, d.findings.High), tone, t),
-			fmt.Sprintf("[%s]%d medium · %d low[-:-:-]", t.TagMuted, d.findings.Medium, d.findings.Low)))
+			metric("", strconv.Itoa(d.findings.Total),
+				h.severityBar(d.findings, homeSeverityBarWidth), tone, t),
+			fmt.Sprintf("[%s]%d critical · %d high · %d medium · %d low[-:-:-]",
+				t.TagMuted, d.findings.Critical, d.findings.High,
+				d.findings.Medium, d.findings.Low)))
 	}
 
 	switch {
@@ -456,13 +549,16 @@ func (h *homeView) renderCards() {
 	case d.casesErr != nil:
 		h.cardBox[1].SetText(cardError(d.casesErr, t))
 	default:
-		second := fmt.Sprintf("[%s]press 3[-:-:-]", t.TagMuted)
+		// The second line is a fact about the cases or, when there are none, says
+		// so. It used to fall back to the key hint "press 3", which put an
+		// instruction in a slot that otherwise holds data.
+		second := fmt.Sprintf("[%s]none open yet[-:-:-]", t.TagMuted)
 		if !d.cases.OldestOpened.IsZero() {
-			second = fmt.Sprintf("[%s]oldest %s[-:-:-]", t.TagMuted,
+			second = fmt.Sprintf("[%s]oldest opened %s[-:-:-]", t.TagMuted,
 				renderRelativeTime(d.cases.OldestOpened))
 		}
 		h.cardBox[1].SetText(h.homeCard(
-			metric("", fmt.Sprintf("%02d", d.cases.Total),
+			metric("", strconv.Itoa(d.cases.Total),
 				fmt.Sprintf("%d investigating", d.cases.Investigating), "accent", t),
 			second))
 	}
@@ -473,10 +569,105 @@ func (h *homeView) renderCards() {
 	case d.eventsTodayErr != nil:
 		h.cardBox[2].SetText(cardError(d.eventsTodayErr, t))
 	default:
-		h.cardBox[2].SetText(h.homeCard(
-			metric("", humanCount(d.eventsToday)+" events", "", "accent", t),
-			fmt.Sprintf("[%s]%s indicators[-:-:-]", t.TagMuted, humanCount(d.observables))))
+		h.cardBox[2].SetText(h.homeCard(h.pulseTop(d), h.pulseBottom(d)))
 	}
+}
+
+// pulseTop is what arrived today, and the shape it arrived in.
+func (h *homeView) pulseTop(d homeData) string {
+	t := h.ui.theme
+	spark := ""
+	if w := h.sparkWidth(); w > 0 {
+		spark = fmt.Sprintf(" [%s]%s[-:-:-] ", t.TagAccent, sparkline(d.volume, w))
+	}
+	return fmt.Sprintf("[%s:-:b]%s[-:-:-] [%s]events[-:-:-]%s  [%s]%s indicators[-:-:-]",
+		t.TagTextPrimary, humanCount(d.eventsToday), t.TagMuted, spark,
+		t.TagMuted, humanCount(d.observables))
+}
+
+// sparkWidth is how much of the card the chart may have.
+//
+// Three sizes rather than a continuous fit: a chart that changes resolution
+// with every column of window width cannot be compared against the one that was
+// there a moment ago. Below the smallest it is dropped — the counts beside it
+// are the part that must survive.
+func (h *homeView) sparkWidth() int {
+	card := h.width/len(h.cardBox) - 2
+	switch {
+	case card >= 46:
+		return homeSparkWidth
+	case card >= 34:
+		return homeSparkWidth / 2
+	default:
+		return 0
+	}
+}
+
+// pulseBottom is the state of the pipeline that produced it.
+//
+// Enrichment is silent while idle rather than spending a third of a two-row
+// card to report that nothing is happening.
+func (h *homeView) pulseBottom(d homeData) string {
+	line := fmt.Sprintf("%s  %s", h.lastEventText(d), h.watcherText(d))
+	if e := h.enrichmentText(d); e != "" {
+		line += "  " + e
+	}
+	return line
+}
+
+func (h *homeView) lastEventText(d homeData) string {
+	t := h.ui.theme
+	if !d.hasLastEvent {
+		return fmt.Sprintf("[%s]no events yet[-:-:-]", t.TagMuted)
+	}
+	// A bare clock time on a 929-day-old event reads as "just now". Show the
+	// date as soon as the event is not from today.
+	stamp := d.lastEvent.Format("2006-01-02 15:04")
+	if sameDay(d.lastEvent, time.Now()) {
+		stamp = d.lastEvent.Format("15:04:05")
+	}
+	return fmt.Sprintf("[%s]last[-:-:-] [%s]%s[-:-:-]", t.TagMuted, t.TagTextPrimary, stamp)
+}
+
+func (h *homeView) watcherText(d homeData) string {
+	t := h.ui.theme
+	if d.watcher.Dir == "" {
+		return fmt.Sprintf("[%s]not watching[-:-:-]", t.TagMuted)
+	}
+	if d.watcher.Errors > 0 {
+		reason := d.watcher.LastErr
+		if strings.TrimSpace(reason) == "" {
+			reason = plural(d.watcher.Errors, "error")
+		}
+		return fmt.Sprintf("[%s]▲[-:-:-] [%s]%s[-:-:-]",
+			t.TagWarning, t.TagWarning, tview.Escape(truncate(reason, 34)))
+	}
+	// The folder's own name, not its path. The card is a third of the screen
+	// and the path filled it end to end with the part that never changes.
+	//
+	// The watcher's own error text replaces all of this when there is one: it
+	// was collected on every refresh and rendered nowhere, so a failing watcher
+	// showed a glyph and a path — the symptom, never the reason.
+	return fmt.Sprintf("[%s]●[-:-:-] [%s]%s %d[-:-:-]", t.TagSuccess, t.TagMuted,
+		tview.Escape(filepath.Base(d.watcher.Dir)), d.watcher.Ingested)
+}
+
+func (h *homeView) enrichmentText(d homeData) string {
+	t := h.ui.theme
+	if d.enrichment.Idle() {
+		return ""
+	}
+	parts := []string{}
+	if d.enrichment.Pending > 0 {
+		parts = append(parts, fmt.Sprintf("[%s]%d pending[-:-:-]", t.TagMuted, d.enrichment.Pending))
+	}
+	if d.enrichment.Failed > 0 {
+		parts = append(parts, fmt.Sprintf("[%s]%d failed[-:-:-]", t.TagError, d.enrichment.Failed))
+	}
+	if d.enrichment.Dropped > 0 {
+		parts = append(parts, fmt.Sprintf("[%s]%d dropped[-:-:-]", t.TagWarning, d.enrichment.Dropped))
+	}
+	return strings.Join(parts, " ")
 }
 
 // homeCard lays out a card body with a consistent left margin: two rows
@@ -498,8 +689,16 @@ func cardError(err error, theme Theme) string {
 		theme.TagError, theme.TagMuted, tview.Escape(truncate(err.Error(), 26)))
 }
 
-// renderQueue paints the priority queue: severity, risk, title, age. Nothing
-// else — every extra column is a column an analyst has to read past.
+// renderQueue paints the priority queue.
+//
+// Severity, risk, title, age. Nothing else — every extra column is a column an
+// analyst has to read past.
+//
+// Colour means one thing here, and that thing is severity. Risk used to carry a
+// second scale of its own and status a third, so three palettes competed for
+// the same eye and the screen read busier than it was. The leading bar is in
+// the severity colour, which groups the queue into tiers without spending a row
+// on a separator.
 func (h *homeView) renderQueue() {
 	d, loading := h.snapshot()
 	t := h.ui.theme
@@ -516,148 +715,94 @@ func (h *homeView) renderQueue() {
 		return
 	}
 	if len(d.queue) == 0 {
-		h.queue.SetCell(0, 0, tview.NewTableCell(fmt.Sprintf("\n  [%s]No findings yet.[-:-:-]",
-			t.TagTextPrimary)).SetSelectable(false))
-		h.queue.SetCell(1, 0, tview.NewTableCell(fmt.Sprintf("  [%s]Press 3 to import events, or : then demo.[-:-:-]",
-			t.TagMuted)).SetSelectable(false))
+		h.renderEmptyQueue()
 		return
 	}
 
 	for i, f := range d.queue {
-		h.queue.SetCell(i, 0, tview.NewTableCell(" "+formatSeverityBadge(severityLabel(f.SeverityID), t)).
+		colour := h.ui.getSeverityColor(severityLabel(f.SeverityID))
+
+		h.queue.SetCell(i, 0, tview.NewTableCell(
+			fmt.Sprintf(" [%s]▌[-:-:-] %s", colour, formatSeverityBadge(severityLabel(f.SeverityID), t))).
 			SetSelectable(true))
+
+		// Plain. The number is already ordered by the sort and coloured by the
+		// badge beside it; a third colour scale on top of that said nothing new.
 		h.queue.SetCell(i, 1, tview.NewTableCell(fmt.Sprintf("[%s]%3d[-:-:-]",
-			riskTag(f.RiskScore, t), f.RiskScore)))
-		h.queue.SetCell(i, 2, tview.NewTableCell(tview.Escape(f.Title)).
+			t.TagTextPrimary, f.RiskScore)))
+
+		// Arrived since the last visit. A dashboard checked ten times a shift
+		// is only useful if it can say which of these are new.
+		mark := "  "
+		if h.isNew(f) {
+			mark = fmt.Sprintf("[%s]• [-:-:-]", t.TagAccent)
+		}
+		h.queue.SetCell(i, 2, tview.NewTableCell(mark+tview.Escape(f.Title)).
 			SetTextColor(t.TextPrimary).SetExpansion(1))
-		h.queue.SetCell(i, 3, tview.NewTableCell(fmt.Sprintf("[%s]%s[-:-:-]",
+
+		// Whether somebody has already picked this up. Without it the queue
+		// offers the same finding every time you look, with no sign that it is
+		// already in an open case.
+		picked := ""
+		if strings.TrimSpace(f.CaseID) != "" {
+			picked = fmt.Sprintf("[%s]▪ in case[-:-:-]", t.TagMuted)
+		}
+		h.queue.SetCell(i, 3, tview.NewTableCell(picked))
+
+		h.queue.SetCell(i, 4, tview.NewTableCell(fmt.Sprintf("[%s]%s [-:-:-]",
 			t.TagMuted, renderRelativeTime(f.LastSeen))))
 	}
-}
 
-func (h *homeView) renderRecent() {
-	d, loading := h.snapshot()
-	t := h.ui.theme
-
-	switch {
-	case loading[panelRecent]:
-		h.recent.SetText(" " + loadingState("", t))
-	case d.recentErr != nil:
-		h.recent.SetText(fmt.Sprintf("\n  [%s]%s[-:-:-]\n  %s",
-			t.TagError, tview.Escape(d.recentErr.Error()), renderKey("r", "Retry", t)))
-	case len(d.recent) == 0:
-		h.recent.SetText(fmt.Sprintf("\n  [%s]No active investigations.[-:-:-]", t.TagMuted))
-	default:
-		var b strings.Builder
-		for _, c := range d.recent {
-			b.WriteString(fmt.Sprintf("\n [%s]▸[-:-:-] [%s]%s[-:-:-]  [%s]%s[-:-:-]",
-				t.TagAccent, t.TagTextPrimary, tview.Escape(truncate(c.Title, 26)),
-				t.TagMuted, renderRelativeTime(c.UpdatedAt)))
-			b.WriteString(fmt.Sprintf("\n   [%s]%s · %s[-:-:-]",
-				t.TagMuted, strings.ToLower(c.Status), plural(c.FindingCount, "finding")))
-		}
-		h.recent.SetText(b.String())
+	// What the panel is not showing. The queue is a top-N view and nothing said
+	// so, so a dashboard of five looked like a backlog of five.
+	if more := d.queueTotal - len(d.queue); more > 0 {
+		row := len(d.queue)
+		h.queue.SetCell(row, 2, tview.NewTableCell(fmt.Sprintf("[%s]… and %s · press 1 for the full queue[-:-:-]",
+			t.TagMuted, plural(more, "more"))).SetSelectable(false).SetExpansion(1))
 	}
 }
 
-// renderPulse paints the read-only evidence strip.
-func (h *homeView) renderPulse() {
-	d, loading := h.snapshot()
-	t := h.ui.theme
-
-	if loading[panelPulse] {
-		h.pulse.SetText(" " + loadingState("", t))
-		return
-	}
-
-	enrich := fmt.Sprintf("[%s]idle[-:-:-]", t.TagMuted)
-	if !d.enrichment.Idle() {
-		parts := []string{}
-		if d.enrichment.Pending > 0 {
-			parts = append(parts, fmt.Sprintf("%d pending", d.enrichment.Pending))
-		}
-		if d.enrichment.Failed > 0 {
-			parts = append(parts, fmt.Sprintf("[%s]%d failed[-:-:-]", t.TagError, d.enrichment.Failed))
-		}
-		if d.enrichment.Dropped > 0 {
-			parts = append(parts, fmt.Sprintf("[%s]%d dropped[-:-:-]", t.TagWarning, d.enrichment.Dropped))
-		}
-		enrich = strings.Join(parts, " ")
-	}
-
-	watcher := fmt.Sprintf("[%s]not watching[-:-:-]", t.TagMuted)
-	if d.watcher.Dir != "" {
-		glyph, colour := "●", t.TagSuccess
-		if d.watcher.Errors > 0 {
-			glyph, colour = "▲", t.TagWarning
-		}
-		watcher = fmt.Sprintf("[%s]%s[-:-:-] [%s]%s[-:-:-]",
-			colour, glyph, t.TagMuted, tview.Escape(shortenPath(d.watcher.Dir)))
-	}
-
-	// A bare clock time on a 929-day-old event reads as "just now". Show the
-	// date as soon as the event is not from today.
-	last := "—"
-	if d.hasLastEvent {
-		if sameDay(d.lastEvent, time.Now()) {
-			last = d.lastEvent.Format("15:04:05")
-		} else {
-			last = d.lastEvent.Format("2006-01-02 15:04")
-		}
-	}
-
-	h.pulse.SetText(fmt.Sprintf(
-		" [%s]events today[-:-:-] %s    [%s]indicators[-:-:-] %s    [%s]enrichment[-:-:-] %s    [%s]watcher[-:-:-] %s\n [%s]last event[-:-:-] [%s]%s[-:-:-]",
-		t.TagMuted, humanCount(d.eventsToday),
-		t.TagMuted, humanCount(d.observables),
-		t.TagMuted, enrich,
-		t.TagMuted, watcher,
-		t.TagMuted, t.TagTextPrimary, last))
-}
-
-// renderInspector paints the selected finding.
+// isNew reports whether a finding arrived since the previous visit.
 //
-// The order is Triage's order (§7), so a finding reads the same wherever it is
-// seen, and the human explanation comes before the raw record — never the other
-// way round.
-func (h *homeView) renderInspector() {
-	_, loading := h.snapshot()
+// Against the previous visit, not against this one: comparing with now would
+// unmark everything the moment the screen refreshed, ten seconds after opening.
+func (h *homeView) isNew(f store.Finding) bool {
+	if h.ui.markSince.IsZero() {
+		// No previous visit recorded. Marking every finding on a first run
+		// would mark the whole queue, which marks nothing.
+		return false
+	}
+	return f.CreatedAt.After(h.ui.markSince)
+}
+
+// renderEmptyQueue is a first run, or a database with nothing in it yet.
+//
+// The instruction has to name something that exists. It used to say "Press 3 to
+// import events" — 3 is Cases, and there is no import destination at all, so
+// the one direction the screen gave a new install sent them nowhere useful.
+//
+// The two routes that do exist are the drop folder and the command line, and
+// the drop folder is named rather than described: "put files where the watcher
+// is looking" is not an instruction anybody can follow.
+func (h *homeView) renderEmptyQueue() {
+	d, _ := h.snapshot()
 	t := h.ui.theme
 
-	if loading[panelQueue] {
-		h.inspector.SetText(" " + loadingState("", t))
-		return
+	h.queue.SetCell(0, 0, tview.NewTableCell(fmt.Sprintf("\n  [%s]No findings yet.[-:-:-]",
+		t.TagTextPrimary)).SetSelectable(false))
+
+	drop := strings.TrimSpace(d.watcher.Dir)
+	if drop == "" {
+		drop = h.ui.watchedDir()
 	}
-	f := h.selectedFinding()
-	if f == nil {
-		h.inspector.SetText(fmt.Sprintf("\n [%s]Select a finding to see why it matters.[-:-:-]", t.TagMuted))
-		return
+	if drop != "" {
+		h.queue.SetCell(1, 0, tview.NewTableCell(fmt.Sprintf(
+			"  [%s]Drop OCSF JSON or JSONL into[-:-:-] [%s]%s[-:-:-]",
+			t.TagMuted, t.TagAccent, tview.Escape(shortenPath(drop, 48)))).SetSelectable(false))
 	}
-
-	var b strings.Builder
-	fmt.Fprintf(&b, " [%s:-:b]%s[-:-:-]\n", t.TagTextPrimary, tview.Escape(f.Title))
-	fmt.Fprintf(&b, " [%s]risk[-:-:-] %s   %s   [%s]%s[-:-:-]\n",
-		t.TagMuted, fmt.Sprintf("[%s]%d[-:-:-]", riskTag(f.RiskScore, t), f.RiskScore),
-		formatSeverityBadge(severityLabel(f.SeverityID), t),
-		t.TagTextPrimary, tview.Escape(orDash(f.Status)))
-
-	fmt.Fprintf(&b, " [%s]analytic[-:-:-] %s      [%s]first seen[-:-:-] %s   [%s]last seen[-:-:-] %s\n",
-		t.TagMuted, tview.Escape(orDash(f.AnalyticName)),
-		t.TagMuted, stamp(f.FirstSeen), t.TagMuted, stamp(f.LastSeen))
-
-	why := strings.TrimSpace(f.Message)
-	if why == "" {
-		why = "No description was supplied by the producer."
-	}
-	fmt.Fprintf(&b, "\n [%s]WHY IT MATTERS[-:-:-]  [%s]%s[-:-:-]\n",
-		t.TagMuted, t.TagTextPrimary, tview.Escape(truncate(why, 110)))
-
-	fmt.Fprintf(&b, " [%s]EVIDENCE[-:-:-] %d   [%s]CASE[-:-:-] %s        [%s]e[-:-:-] escalate   [%s]a[-:-:-] add to case   [%s]j[-:-:-] raw OCSF",
-		t.TagMuted, evidenceCount(f.EvidencesJSON),
-		t.TagMuted, tview.Escape(orNone(f.CaseID)),
-		t.TagAccent, t.TagAccent, t.TagAccent)
-
-	h.inspector.SetText(b.String())
+	h.queue.SetCell(2, 0, tview.NewTableCell(fmt.Sprintf(
+		"  [%s]or run[-:-:-] [%s]console-ir ingest <file>[-:-:-]",
+		t.TagMuted, t.TagAccent)).SetSelectable(false))
 }
 
 func orDash(s string) string {
@@ -709,21 +854,15 @@ func (h *homeView) relayout(width, height int) {
 // What disappears is specified and is not a judgement call: standard moves
 // recent cases below the queue, compact drops recent cases and the pulse
 // entirely, and a short screen drops the pulse first and then the cards. The
-// priority queue and the footer always survive — without them the screen has
-// nothing to act on.
+// priority queue always survives — without it the screen has nothing to act on.
+// The keys live on the one status bar at the foot of the application, which is
+// shared by every screen; Home used to carry a second bar of its own above it.
 func (h *homeView) rebuild(width, height int) {
 	h.mode, h.short = GetLayoutMode(width, height)
+	h.width = width
 
-	showPulse := h.mode != LayoutCompact && !h.short
-	showRecent := h.mode != LayoutCompact
-	// Compact and short screens lose the inspector: §5 gives the whole screen
-	// to the queue there, and an inspector that squeezes the queue to two rows
-	// costs more than it explains. It is one keystroke away in Triage.
 	showInspector := !h.short && h.mode != LayoutCompact
-	showCards := true
-	if h.short && height < homeShortCardsBelow {
-		showCards = false
-	}
+	showCards := !(h.short && height < homeShortCardsBelow)
 
 	h.cards.Clear()
 	h.cards.SetDirection(tview.FlexColumn)
@@ -734,118 +873,98 @@ func (h *homeView) rebuild(width, height int) {
 		h.cards.AddItem(c, 0, 1, false)
 	}
 
-	h.body.Clear()
-	bodyRows := homeQueueRows
-	switch {
-	case showRecent && h.mode == LayoutWide:
-		h.body.SetDirection(tview.FlexColumn)
-		h.body.AddItem(h.queue, 0, 2, true)
-		h.body.AddItem(h.recent, 0, 1, false)
-		bodyRows = max(homeQueueRows, homeRecentRows)
-	case showRecent:
-		// Stacked. The queue keeps its full height and recent cases absorbs the
-		// squeeze, because the queue is the panel with something to act on.
-		h.body.SetDirection(tview.FlexRow)
-		h.body.AddItem(h.queue, homeQueueRows, 0, true)
-		h.body.AddItem(h.recent, 0, 1, false)
-		bodyRows = homeQueueRows + homeRecentRows
-	default:
-		h.body.SetDirection(tview.FlexRow)
-		h.body.AddItem(h.queue, 0, 1, true)
-	}
-
-	// Does everything fit at its natural height? If so the body is fixed and the
-	// slack goes below it, rather than inflating a queue that can never hold
-	// more than five rows. If not, the body flexes and there is no spacer at
-	// all — a proportional spacer beside a proportional body would take half the
-	// remaining space and halve the queue.
-	fixed := homeHeaderRows + homeFooterRows
+	// The queue takes whatever is left.
+	//
+	// It used to be pinned to five rows while the panel beside it held three
+	// cases in seventeen, so a tall terminal showed five findings and eleven
+	// blank lines. It is the one panel with something to act on; the slack is
+	// its by right.
+	fixed := homeHeaderRows
 	if showCards {
 		fixed += h.cardRows()
-	}
-	if showPulse {
-		fixed += homePulseRows
 	}
 	if showInspector {
 		fixed += homeInspectorRows
 	}
-	// Strictly less than: the body is only pinned to its natural height when
-	// there is room to spare. Fitting exactly leaves nothing for rounding, and
-	// what gets squeezed is whatever comes after — which is the pulse, losing
-	// its bottom border and the row carrying "last event".
-	roomy := fixed+bodyRows < height
+	// Under the mutex: the loaders read this to size their query, and the
+	// layout writes it on the UI goroutine.
+	h.mu.Lock()
+	h.queueRows = clamp(height-fixed, homeQueueFloor+2, homeQueueCeiling+2)
+	h.mu.Unlock()
 
 	h.root.Clear()
 	h.root.AddItem(h.header, homeHeaderRows, 0, false)
 	if showCards {
 		h.root.AddItem(h.cards, h.cardRows(), 0, false)
 	}
-	// Slack goes to the list, not to the inspector. A list with room to spare
-	// is what every list looks like; an inspector with eighteen blank rows
-	// under four lines of text looks broken.
-	//
-	// It must go somewhere, though: a nil item in a tview Flex paints nothing,
-	// so leftover space showed whatever had been on screen before it.
-	if showInspector || !roomy {
-		h.root.AddItem(h.body, 0, 1, true)
-	} else {
-		h.root.AddItem(h.body, bodyRows, 0, true)
-		h.root.AddItem(homeFiller(h.ui.theme), 0, 1, false)
-	}
+	h.root.AddItem(h.queue, 0, 1, true)
 	if showInspector {
 		h.root.AddItem(h.inspector, homeInspectorRows, 0, false)
 	}
-	if showPulse {
-		h.root.AddItem(h.pulse, homePulseRows, 0, false)
-	}
-	h.root.AddItem(h.footer, homeFooterRows, 0, false)
 
 	h.renderCards()
+	h.renderQueue()
 	h.built = true
+}
+
+// queueWant is how many findings to ask the database for: what the panel can
+// show, within bounds, so the query follows the window rather than a constant.
+// queueWant is how many findings the queue panel asks for.
+//
+// Locked, because it is read from the loader's goroutine and written by the
+// layout on the UI goroutine — the same split as the data it is sizing.
+func (h *homeView) queueWant() int {
+	h.mu.Lock()
+	rows := h.queueRows
+	h.mu.Unlock()
+
+	if rows <= 0 {
+		return homeQueueFloor
+	}
+	return clamp(rows-2, homeQueueFloor, homeQueueCeiling)
+}
+
+func clamp(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // Row budget.
 const (
-	homeHeaderRows = 2
-	homeFooterRows = 1
-	homePulseRows  = 4
+	homeHeaderRows = 1
 	homeCardRows   = 4
 
-	// The inspector's minimum: title, the risk line, the analytic line, a blank,
-	// why it matters, the action line, and a border.
-	homeInspectorRows = 8
+	// The inspector's height. It reads a finding in full — the narrative, the
+	// indicators worth pivoting on, the technique, and the record's own
+	// metadata — which is what the rows freed by dropping the recent-cases
+	// panel were spent on.
+	homeInspectorRows = 15
 
 	// Compact stacks the three cards, so three two-line cards would be half the
 	// screen. One line each, and the second line's content moves into the first.
 	homeCardRowsCompact = 3
 
-	// The queue holds homeQueueSize rows plus its border. "ranked by risk" is
-	// on the panel title, not a table row: as a row the cursor could land on it.
-	homeQueueRows  = homeQueueSize + 2
-	homeRecentRows = homeRecentCases*2 + 3
-
-	// Below this height the metric cards go, after the pulse. Their numbers are
-	// repeated in the pulse and the queue speaks for itself.
+	// Below this height the metric cards go. The queue speaks for itself.
 	homeShortCardsBelow = 20
+
+	// homeVolumeHours is the sparkline's window: a day, so the shape covers a
+	// shift handover as well as the hour just gone.
+	homeVolumeHours = 24
+
+	// homeSparkWidth and homeSeverityBarWidth are drawn widths. Both sit inside
+	// a card that is a third of the screen, so they are fixed rather than
+	// elastic — a chart that changes resolution with the window is a chart you
+	// cannot compare against the one you saw a minute ago.
+	homeSparkWidth       = 16
+	homeSeverityBarWidth = 14
 )
 
 // cardRows is the height of the metric row, which stacks when compact.
-// homeFiller is a painted blank. tview draws nothing where a Flex holds a nil
-// item, so slack has to be an actual widget or the previous frame shows
-// through it.
-func homeFiller(theme Theme) *tview.Box {
-	b := tview.NewBox()
-	b.SetBackgroundColor(theme.Bg)
-	return b
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 func (h *homeView) cardRows() int {
 	if h.mode == LayoutCompact {
 		return homeCardRowsCompact * len(h.cardBox)
@@ -857,17 +976,65 @@ func (h *homeView) cardRows() int {
 // Input
 // ---------------------------------------------------------------------------
 
-// handleKey handles the keys Home owns. Global navigation is handled upstream.
+// handleKey handles the keys Home owns.
+//
+// It is called from the application-wide capture before any global binding
+// applies — see UI.screenKeys. Returning nil claims the key; returning the
+// event lets navigation, the palette and the rest of the globals have it.
+//
+// Every key here would otherwise mean something else. j and k are the global
+// move-selection pair, Tab is cycleFocus, r refreshes the Cases screen, and e
+// and v are guarded by showFindings, which Home clears on the way in.
 func (h *homeView) handleKey(ev *tcell.EventKey) *tcell.EventKey {
-	if ev.Key() != tcell.KeyRune {
-		return ev
-	}
-	switch ev.Rune() {
-	case 'r':
-		h.refresh()
+	switch ev.Key() {
+	case tcell.KeyTab, tcell.KeyBacktab:
+		// Claimed and dropped. Unclaimed it reaches cycleFocus, which cycles
+		// the sidebar, the event list and the event detail — none of which are
+		// in Home's tree, so focus lands on a primitive that is not on screen
+		// and the status bar announces a panel nobody can see.
 		return nil
+
+	case tcell.KeyEnter:
+		h.openSelected()
+		return nil
+
+	case tcell.KeyRune:
+		switch ev.Rune() {
+		case 'j':
+			h.moveQueue(1)
+			return nil
+		case 'k':
+			h.moveQueue(-1)
+			return nil
+		case 'r':
+			h.refresh()
+			return nil
+		case 'e':
+			h.ui.escalateFindingToCase()
+			return nil
+		case 'v':
+			h.ui.showFindingVerdictModal()
+			return nil
+		}
 	}
 	return ev
+}
+
+// moveQueue steps the queue cursor, which j and k would otherwise never reach.
+func (h *homeView) moveQueue(delta int) {
+	rows := h.queue.GetRowCount()
+	if rows == 0 {
+		return
+	}
+	row, col := h.queue.GetSelection()
+	row += delta
+	if row < 0 {
+		row = 0
+	}
+	if row >= rows {
+		row = rows - 1
+	}
+	h.queue.Select(row, col)
 }
 
 // refresh reloads every panel, returning each to its loading state so the
@@ -879,7 +1046,7 @@ func (h *homeView) refresh() {
 	}
 	h.mu.Unlock()
 	h.renderAll()
-	go h.load()
+	h.reload()
 }
 
 // selectedFinding returns the finding under the cursor, if any.
@@ -913,22 +1080,15 @@ func humanCount(n int) string {
 	return string(out)
 }
 
-// shortenPath keeps the tail of a path, which is the part that identifies it.
-func shortenPath(p string) string {
-	const max = 24
-	if len([]rune(p)) <= max {
-		return p
-	}
-	r := []rune(p)
-	return "…" + string(r[len(r)-max+1:])
-}
-
 func plural(n int, noun string) string {
 	if n == 1 {
 		return fmt.Sprintf("%d %s", n, noun)
 	}
 	return fmt.Sprintf("%d %ss", n, noun)
 }
+
+// homeWatcherPathWidth is how much of the drop folder the evidence pulse shows.
+const homeWatcherPathWidth = 24
 
 // riskTag picks the colour band for a risk score.
 func riskTag(score int, theme Theme) string {

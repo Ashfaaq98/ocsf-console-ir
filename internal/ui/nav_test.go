@@ -20,14 +20,18 @@ func newNavUI(t *testing.T) *UI {
 }
 
 // The keys are specified. Changing one is a product decision, not a refactor.
+//
+// The order follows the work — triage a finding, escalate it into a case, work
+// the case — so Cases sits at 2 and Events, which is the corroboration surface
+// you reach from a finding or a case, sits behind it.
 func TestDestinationsMatchTheSpecifiedKeymap(t *testing.T) {
 	want := []struct {
 		key  rune
 		name string
 	}{
 		{'1', "Triage"},
-		{'2', "Events"},
-		{'3', "Cases"},
+		{'2', "Cases"},
+		{'3', "Events"},
 		{'4', "Indicators"},
 		{'5', "Reports"},
 	}

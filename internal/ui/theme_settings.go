@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"sort"
+	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/paths"
 )
@@ -57,6 +58,11 @@ type uiSettings struct {
 	Theme        string   `json:"theme"`
 	RecentCases  []string `json:"recent_cases,omitempty"`
 	RecentPivots []string `json:"recent_pivots,omitempty"`
+
+	// LastVisit is when the dashboard was last opened, so it can mark what has
+	// arrived since. A dashboard you check ten times a shift is only useful if
+	// it can say which of these you have already seen.
+	LastVisit time.Time `json:"last_visit,omitempty"`
 }
 
 const uiSettingsName = "ui_settings.json"
@@ -110,6 +116,7 @@ func (ui *UI) saveUISettings() {
 		Theme:        ui.themeName,
 		RecentCases:  ui.recentCases,
 		RecentPivots: ui.recentPivots,
+		LastVisit:    ui.lastVisit,
 	}
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {

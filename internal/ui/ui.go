@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -425,7 +426,6 @@ type UI struct {
 	// Layout components
 	layout       *tview.Flex
 	leftCol      *tview.Flex
-	appTitle     *tview.TextView
 	allCasesInfo *tview.TextView
 	sidebar      *tview.List
 	mainPanel    *tview.Flex
@@ -442,17 +442,77 @@ type UI struct {
 	selectedEventIDs map[string]bool
 
 	// map of selected finding IDs for multi-select actions
-	loadingEvents int32                       // atomic flag to prevent concurrent event loads
-	lastLoadStart int64                       // unix nano timestamp of last load start (for watchdog)
-	showAll       bool                        // when true, sidebar selection is "ALL EVENTS"
-	queryStates   map[string]*EventQueryState // per-context (ALL or caseID) filter+pagination
+
+	// eventsLoad and findingsLoad guard their own collections. One flag served
+	// both, so entering Triage and then Events in quick succession left the
+	// events load a no-op while the findings load repainted the shared table.
+	eventsLoad   loadGuard
+	findingsLoad loadGuard
+	showAll      bool                        // when true, sidebar selection is "ALL EVENTS"
+	queryStates  map[string]*EventQueryState // per-context (ALL or caseID) filter+pagination
+	// triageSearchBar is the findings search field while it is open, and
+	// triageSearchGen discards results for a query the analyst has moved on from.
+	triageSearchBar *tview.InputField
+	triageSearchGen int
+
+	// indicators is the cross-database Indicators screen.
+	indicators *indicatorsView
+
+	// activeModal is whatever is currently rooted over the main layout. Set by
+	// showModal and friends, cleared when the layout is restored.
+	activeModal tview.Primitive
+
+	// termWidth is the terminal's width from the last frame's preamble.
+	//
+	// Panels that wrap text need a width before they draw, and tview's
+	// GetInnerRect reports the *previous* frame's rect — zero on the first
+	// paint, so a pane that asked the widget wrapped to a fallback width and
+	// corrected itself one repaint later.
+	termWidth int
+
+	// findingAsset is the host or user each loaded finding fired on, keyed by
+	// finding id and filled once per page rather than once per row.
+	findingAsset map[string]string
+	// findingCase is the title of each case the loaded findings belong to,
+	// keyed by case id.
+	findingCase map[string]string
+	// filterModal is Triage's filter panel while it is open, so a reload can
+	// refresh the count it shows.
+	filterModal *triageFilterModal
+
+	// findingInspect holds the selected finding's context — its indicators and
+	// their prevalence, and the name of the case it belongs to — loaded off the
+	// UI goroutine behind a debounce.
+	findingInspect inspectorContext
+
+	// loads counts the screen loads started and not yet finished.
+	loads sync.WaitGroup
+
+	// queryStatesMu guards the map itself, not the states in it.
+	//
+	// Load goroutines reach it through setStatus → buildStatusMain →
+	// activeFilterTag while the UI goroutine is reading the same map to lay out
+	// the status bar. The map was unsynchronised; the race was invisible only
+	// because those goroutines used to deadlock on the update queue before they
+	// got this far.
+	queryStatesMu sync.Mutex
 
 	// Findings triage queue. Findings are the analyst's unit of work; ALL EVENTS
 	// remains available alongside it for raw-log triage.
 	showFindings      bool
 	findings          []store.Finding
 	selectedFindingID string
-	findingsOpenOnly  bool
+
+	// lastVisit and markSince drive the dashboard's new-since-you-looked mark.
+	// lastVisit is persisted; markSince is what it held when this visit began.
+	lastVisit time.Time
+	markSince time.Time
+
+	// pendingFindingID is a finding to select once the Triage list has loaded.
+	// It carries a selection across a screen change — Home's Enter, for one —
+	// and is cleared as soon as it is honoured or found to be missing.
+	pendingFindingID string
+	findingsOpenOnly bool
 	// findingsTotal is the unfiltered count from the last load, kept so the
 	// queue can be repainted (e.g. on a theme change) without re-querying.
 	findingsTotal int
@@ -464,9 +524,12 @@ type UI struct {
 	// Copilot drawer state
 
 	// Theme state
-	theme          Theme
-	themeName      string
-	hasTrueColor   bool
+	theme        Theme
+	themeName    string
+	hasTrueColor bool
+	// screenAdopted records that the palette has been settled against the real
+	// terminal, which can only happen once one exists.
+	screenAdopted  bool
 	themeApplying  int32
 	filterApplying int32
 
@@ -566,9 +629,6 @@ type UI struct {
 	globalInputCapture func(*tcell.EventKey) *tcell.EventKey
 
 	// Multi-key shortcut state
-	shortcutBuffer  string
-	shortcutTimer   *time.Timer
-	shortcutTimeout time.Duration
 
 	// Context for cancellation
 	ctx    context.Context
@@ -612,6 +672,9 @@ func (ui *UI) getContextID() string {
 
 // getOrInitState returns the per-context state, initializing defaults if missing.
 func (ui *UI) getOrInitState(id string) *EventQueryState {
+	ui.queryStatesMu.Lock()
+	defer ui.queryStatesMu.Unlock()
+
 	if ui.queryStates == nil {
 		ui.queryStates = make(map[string]*EventQueryState)
 	}
@@ -692,13 +755,12 @@ func NewUI(ctx context.Context, store *store.Store, llmProvider llm.LLMProvider,
 		cancel:           cancel,
 		hasTrueColor:     detectTrueColor(),
 		selectedEventIDs: make(map[string]bool),
-		shortcutBuffer:   "",
-		shortcutTimeout:  750 * time.Millisecond, // 750ms timeout for multi-key input
 		version:          version,
 		// Buffered so an enrichment worker never waits on the UI. Arrivals for the
 		// open event are rare (its own lookups), so this is generous.
 		enrichNotify: make(chan string, 32),
 	}
+	ui.findingInspect.ui = ui
 	ui.openEventID.Store("")
 
 	// Enrichment is asynchronous, so without this the detail pane shows whatever
@@ -732,6 +794,7 @@ func NewUI(ctx context.Context, store *store.Store, llmProvider llm.LLMProvider,
 	ui.themeName = uiSettings.Theme
 	ui.recentCases = uiSettings.RecentCases
 	ui.recentPivots = uiSettings.RecentPivots
+	ui.lastVisit = uiSettings.LastVisit
 	if !ui.hasTrueColor {
 		ui.theme = themeBasic()
 	} else {
@@ -767,7 +830,7 @@ func (ui *UI) watchEnrichments() {
 		case <-ui.ctx.Done():
 			return
 		case eventID := <-ui.enrichNotify:
-			ui.app.QueueUpdateDraw(func() {
+			ui.queueUpdate(func() {
 				// Re-check on the UI goroutine: the selection may have moved
 				// between the notification and this redraw.
 				if ui.selectedEventID == eventID {
@@ -782,6 +845,15 @@ func (ui *UI) watchEnrichments() {
 func (ui *UI) Start(ctx context.Context) error {
 	ui.logger.Println("Starting TUI application")
 
+	// Live before any goroutine below can queue against the application.
+	//
+	// ui.queueUpdate runs its function inline when this is false, which is what
+	// makes the UI drivable from tests. Setting it here rather than beside
+	// app.Run means the startup goroutines cannot read "not running", decide to
+	// mutate widgets inline, and then race the event loop that started between
+	// the two. They queue instead, and the queue drains as soon as Run does.
+	ui.running.Store(true)
+
 	go ui.watchEnrichments()
 
 	// Show UI immediately, then load data asynchronously
@@ -792,7 +864,7 @@ func (ui *UI) Start(ctx context.Context) error {
 		ui.logger.Println("Loading initial data...")
 		if err := ui.refreshCases(); err != nil {
 			ui.logger.Printf("Failed to load cases: %v", err)
-			ui.app.QueueUpdate(func() {
+			ui.queueUpdate(func() {
 				ui.setStatusDirect("[red]Error loading cases: %v", err)
 			})
 		} else {
@@ -808,8 +880,8 @@ func (ui *UI) Start(ctx context.Context) error {
 			// then cases, then events. It meant the first screen an analyst saw
 			// changed with the contents of the database, so there was no screen
 			// to learn and no stable place to return to.
-			ui.app.QueueUpdate(func() {
-				ui.showAnalystHome()
+			ui.queueUpdate(func() {
+				ui.enterScreen(destHome)
 			})
 		}
 	}()
@@ -837,17 +909,58 @@ func (ui *UI) Start(ctx context.Context) error {
 				ui.logger.Printf("UI_AUTOCYCLE_THEME=1 enabled: scheduling theme cycles")
 			}
 			time.Sleep(1200 * time.Millisecond)
-			ui.app.QueueUpdate(func() { ui.cycleTheme() })
+			ui.queueUpdate(func() { ui.cycleTheme() })
 			time.Sleep(1200 * time.Millisecond)
-			ui.app.QueueUpdate(func() { ui.cycleTheme() })
+			ui.queueUpdate(func() { ui.cycleTheme() })
 		}()
 	}
 
-	ui.running.Store(true)
 	err := ui.app.Run()
 	ui.running.Store(false)
 	ui.logger.Printf("app.Run() returned with error: %v", err)
 	return err
+}
+
+// adoptScreen settles the palette against the terminal that is actually there.
+//
+// Two things are only knowable once a screen exists, and both were decided
+// before there was one.
+//
+// The theme's background becomes the screen's default style. tcell clears with
+// that style — at Init, and on every screen switch here — and it starts as the
+// terminal's own colours, so the application showed the terminal's background
+// until the first panel painted over it and kept it anywhere no panel reached.
+// On a light terminal profile that reads as the application starting light
+// whichever theme is set.
+//
+// And the colour depth comes from the terminal rather than from a guess at the
+// environment. detectTrueColor reads COLORTERM and TERM before the screen is
+// open, and terminals that set neither — kitty, alacritty and screen among them
+// — were told they had no colour, so the analyst's chosen theme was silently
+// replaced by the sixteen-colour fallback. tcell downsamples a full palette to
+// whatever the terminal can show, so the fallback is only for terminals that
+// genuinely cannot manage 256.
+func (ui *UI) adoptScreen(screen tcell.Screen) {
+	if screen == nil {
+		return
+	}
+
+	if !ui.screenAdopted {
+		ui.screenAdopted = true
+		if !ui.hasTrueColor && screen.Colors() >= 256 {
+			ui.hasTrueColor = true
+			if build, ok := themeBuilders[ui.themeName]; ok {
+				ui.theme = build()
+				// Restyling walks every widget and repaints the screen, which
+				// is not something to do part-way through a draw — it queues
+				// updates, and this is running on the loop those updates wait
+				// for. It goes back to the loop as an update of its own.
+				go ui.queueUpdate(ui.applyTheme)
+			}
+		}
+	}
+
+	screen.SetStyle(tcell.StyleDefault.Background(ui.theme.Canvas))
 }
 
 // setupLayout creates the main layout
@@ -865,6 +978,7 @@ func (ui *UI) setupLayout() {
 	ui.eventList.SetSelectable(true, false)
 	// Pin header row so it stays visible when selecting/scrolling.
 	ui.eventList.SetFixed(1, 0)
+	attachTableScrollbar(ui.eventList, 1, &ui.theme)
 
 	ui.eventDetail = tview.NewTextView()
 	ui.eventDetail.SetTitle(" Event Details ")
@@ -873,6 +987,10 @@ func (ui *UI) setupLayout() {
 	ui.eventDetail.SetDynamicColors(true)
 	ui.eventDetail.SetWordWrap(true)
 	ui.eventDetail.SetScrollable(true)
+	// A pane that scrolls with no mark on it gives no way to know there is
+	// anything below the fold. The theme is passed by pointer so the bar
+	// follows a theme change without rebuilding the widget.
+	attachScrollbar(ui.eventDetail, &ui.theme)
 
 	ui.statusBar = tview.NewTextView()
 	ui.statusBar.SetDynamicColors(true)
@@ -883,15 +1001,6 @@ func (ui *UI) setupLayout() {
 		SetDirection(tview.FlexRow).
 		AddItem(ui.eventList, 0, 2, true).
 		AddItem(ui.eventDetail, 0, 1, false)
-
-	// App title header with owl logo (non-selectable)
-	ui.appTitle = tview.NewTextView().
-		SetDynamicColors(true).
-		SetTextAlign(tview.AlignLeft).
-		SetWordWrap(true)
-	ui.appTitle.SetBorder(false)
-	ui.appTitle.SetBackgroundColor(ui.theme.Surface)
-	ui.renderHeader()
 
 	// The navigation rail. Its contents come from the destination table in
 	// nav.go, so the rail cannot advertise a screen the keys do not reach.
@@ -917,10 +1026,12 @@ func (ui *UI) setupLayout() {
 	// The left column is the rail and nothing else. It used to carry the app
 	// title and the Cases list too, which is why it needed 45 columns and had
 	// to be hidden on Home.
+	// The rail alone. The version block that used to sit under it said
+	// "Console-IR" a second time and spent two of twenty-two columns saying it;
+	// both facts are in the status bar, which every screen has anyway.
 	ui.leftCol = tview.NewFlex().
 		SetDirection(tview.FlexRow).
-		AddItem(ui.navRail, 0, 1, false).
-		AddItem(ui.appTitle, 2, 0, false)
+		AddItem(ui.navRail, 0, 1, false)
 
 	// Create main layout - wider left column for better display
 	ui.layout = tview.NewFlex().
@@ -943,6 +1054,8 @@ func (ui *UI) setupLayout() {
 	// Responsive layout handling, plus the rail's visibility, which depends on
 	// the destination as well as on the width.
 	ui.app.SetBeforeDrawFunc(func(screen tcell.Screen) bool {
+		ui.adoptScreen(screen)
+		ui.termWidth, _ = screen.Size()
 		ui.updateLayoutMode(screen)
 		ui.applyRailVisibility()
 		// tview does not clear between frames, so a panel that shrinks or
@@ -969,16 +1082,10 @@ func (ui *UI) setupLayout() {
 				return nil
 			}
 		case tcell.KeyRune:
-			// Handle number keys for case selection (multi-key support)
-			if ev.Rune() >= '1' && ev.Rune() <= '9' {
-				ui.handleShortcutKey(ev.Rune())
-				return nil
-			}
-			// Handle 0 key (only if buffer is not empty)
-			if ev.Rune() == '0' && ui.shortcutBuffer != "" {
-				ui.handleShortcutKey(ev.Rune())
-				return nil
-			}
+			// The digits belong to navigation. They used to be intercepted here
+			// for "type a case number", which the global capture claimed first
+			// for 1 to 5 — so it worked from the sixth case onwards and was
+			// discoverable by nobody. Arrowing the list swaps the briefing now.
 		}
 		return ev
 	})
@@ -1016,7 +1123,9 @@ func (ui *UI) setupEventHandlers() {
 	// Event list selection change
 	ui.eventList.SetSelectionChangedFunc(func(row, col int) {
 		if ui.showFindings {
-			ui.showFindingDetails()
+			// Debounced: this fires once per row while an arrow key is held,
+			// and the inspector's context costs a query per indicator.
+			ui.findingSelectionChanged()
 			return
 		}
 		if row > 0 && row-1 < len(ui.events) { // Skip header row
@@ -1107,71 +1216,221 @@ func (ui *UI) copyToClipboard(text string) {
 	ui.setStatusDirect("[%s]Copied to clipboard[-:-:-]", ui.theme.TagSuccess)
 }
 
-// onSidebarSelect handles user selection from the case list
-func (ui *UI) onSidebarSelect(index int) {
-	ui.logger.Printf("Sidebar selected (cases list): index=%d, cases=%d", index, len(ui.cases))
-
-	// On the Cases screen the list sits beside a briefing, and selecting a case
-	// swaps that briefing. The path below loads the case's events into
-	// ui.eventList, which is not on screen here — it would have written to a
-	// widget nobody can see.
-	if ui.onCases() {
-		if index >= 0 && index < len(ui.cases) {
-			ui.selectedCaseID = ui.cases[index].ID
-			ui.showCaseBriefing(ui.cases[index])
+// screenKeys is the current screen's own key handler, or nil where the screen
+// owns no keys.
+//
+// Adding a screen here is how it gets keys of its own. Returning nil from the
+// handler claims the key; returning the event passes it on to the global
+// bindings below.
+func (ui *UI) screenKeys() func(*tcell.EventKey) *tcell.EventKey {
+	switch ui.destination {
+	case destHome:
+		if ui.home != nil {
+			return ui.home.handleKey
 		}
+	case destTriage:
+		return ui.triageKeys
+	case destEvents:
+		return ui.eventsKeys
+	case destCases:
+		return ui.casesKeys
+	case destIndicators:
+		return ui.indicatorKeys
+	}
+	return nil
+}
+
+// Each screen's own key handler.
+//
+// Returning the event passes it on to the global bindings below; returning nil
+// claims it. They start empty and are filled in per screen, which is what makes
+// each screen's repair revertable on its own — a handler that claims nothing
+// leaves that screen behaving exactly as it did before.
+//
+// Reports is deliberately absent: it is a static panel with no keys of its own.
+
+// triageKeys are the queue's own.
+//
+// Everything here would otherwise be handled globally against the wrong state:
+// c, a and Ctrl+A/Ctrl+D read the events selection map, so they answered "No
+// events selected" with findings marked; s and v acted on the cursor row only
+// while the strip above them advertised them as bulk actions.
+func (ui *UI) triageKeys(ev *tcell.EventKey) *tcell.EventKey {
+	switch ev.Key() {
+	case tcell.KeyTab, tcell.KeyBacktab:
+		// Between the two panels this screen has.
+		//
+		// Unclaimed it reached cycleFocus, which cycles the case sidebar, the
+		// events list and the event detail — and the sidebar is not in Triage's
+		// tree, so one of the three stops was invisible and the status line
+		// announced "Focus: Cases" on the findings queue.
+		ui.cycleTriageFocus()
+		return nil
+
+	case tcell.KeyEnter:
+		// Nothing. It called showFindingDetails, which repaints what moving the
+		// cursor has already painted — so Enter looked bound and did nothing.
+		// Reading the detail is Tab; escalating is e.
+		return nil
+
+	case tcell.KeyCtrlA:
+		ui.selectAllFindings()
+		return nil
+	case tcell.KeyCtrlD:
+		ui.triageSelection().clear()
+		ui.updateFindingsList(ui.findingsTotal)
+		ui.repaintTriageChrome()
+		return nil
+	case tcell.KeyRune:
+		switch ev.Rune() {
+		case 'e':
+			// One key. Escalation already offers "create a new case" beside
+			// every existing one, so c and a were the same form under two more
+			// names — three keys for one action.
+			ui.escalateFindings(ui.triageTargets())
+			return nil
+		case 's', 'S':
+			ui.showFindingStatusModal()
+			return nil
+		case 'v':
+			ui.showFindingVerdictModal()
+			return nil
+		case 'f':
+			// The chip menu. Globally f opens the events filter modal, and on
+			// Triage it printed a sentence listing keys instead.
+			ui.showTriageFilter()
+			return nil
+		case '/':
+			// Findings, not events. Globally / opens the events full-text
+			// search, which repainted this queue as an events list.
+			ui.showTriageSearch()
+			return nil
+		}
+	}
+	return ev
+}
+
+// cycleTriageFocus moves between the queue and the detail pane.
+func (ui *UI) cycleTriageFocus() {
+	if ui.app == nil || ui.eventList == nil || ui.eventDetail == nil {
 		return
 	}
-
-	// Prepare UI to show a loading state immediately and focus the Events table.
-	showLoading := func(title string) {
-		ui.eventList.Clear()
-		headers := []string{"Time", "Type", "Severity", "Host", "Source", "Message"}
-		for col, header := range headers {
-			ui.eventList.SetCell(0, col, tview.NewTableCell(header).
-				SetTextColor(ui.theme.TableHeader).
-				SetBackgroundColor(ui.theme.TableHeaderBg).
-				SetAttributes(tcell.AttrBold))
-		}
-		ui.eventList.SetCell(1, 0, tview.NewTableCell("Loading...").
-			SetTextColor(ui.theme.TableRowMuted))
+	if ui.app.GetFocus() == ui.eventDetail {
 		ui.app.SetFocus(ui.eventList)
-		ui.setStatusDirect("[%s]%s[-:-:-]", ui.theme.TagWarning, title)
-	}
-
-	// Cases list indexes map directly to ui.cases
-	if index < 0 || index >= len(ui.cases) {
-		ui.logger.Printf("Invalid case index: %d (cases: %d)", index, len(ui.cases))
+		ui.highlightFocus(ui.eventList)
+		ui.setStatusDirect("[%s]Queue[-:-:-]", ui.theme.TagAccent)
 		return
 	}
+	ui.app.SetFocus(ui.eventDetail)
+	ui.highlightFocus(ui.eventDetail)
+	ui.setStatusDirect("[%s]Selected finding[-:-:-] · ↑↓ scrolls", ui.theme.TagAccent)
+}
 
-	ui.showAll = false
-	ui.showFindings = false
-	ui.selectedCaseID = ui.cases[index].ID
-	// Reset pagination for this case context
-	{
-		s := ui.getOrInitState(ui.selectedCaseID)
-		s.pageIndex = 0
+// selectAllFindings marks every finding currently loaded.
+func (ui *UI) selectAllFindings() {
+	sel := ui.triageSelection()
+	for _, f := range ui.findings {
+		sel.ids[f.FindingUID] = true
 	}
-	ui.logger.Printf("Selected case ID: %s", ui.selectedCaseID)
-	showLoading("Loading events for selected case...")
+	ui.updateFindingsList(ui.findingsTotal)
+	ui.repaintTriageChrome()
+	ui.setStatusDirect("[%s]%s selected[-:-:-]", ui.theme.TagAccent, plural(sel.count(), "finding"))
+}
 
-	// If a previous load appears stuck, clear the flag to allow a new load.
-	if atomic.LoadInt32(&ui.loadingEvents) == 1 {
-		started := time.Unix(0, atomic.LoadInt64(&ui.lastLoadStart))
-		if started.IsZero() || time.Since(started) > 3*time.Second {
-			if ui.logger != nil {
-				ui.logger.Printf("onSidebarSelect: load flag stuck since %v, resetting", started)
+// eventsKeys are the events list's own — including a case's event list, which
+// is the same table over a narrower query.
+func (ui *UI) eventsKeys(ev *tcell.EventKey) *tcell.EventKey {
+	switch ev.Key() {
+	case tcell.KeyTab, tcell.KeyBacktab:
+		ui.cycleTriageFocus()
+		return nil
+	case tcell.KeyEnter:
+		// Expand or collapse the cluster under the cursor.
+		if c := ui.clusterAtRow(rowOf(ui.eventList)); c != nil {
+			ui.toggleCluster(c.Label)
+			return nil
+		}
+	case tcell.KeyRune:
+		switch ev.Rune() {
+		case 'z':
+			// Cycle the grouping. Guarded globally on showAll, but
+			// updateEventsList clusters a case's event list too — so inside a
+			// case only the first cluster ever opened and the rest of the
+			// events could not be reached at all.
+			if len(ui.eventClusters) > 0 {
+				ui.cycleEventGrouping()
+				return nil
 			}
-			atomic.StoreInt32(&ui.loadingEvents, 0)
-		} else if ui.logger != nil {
-			ui.logger.Printf("onSidebarSelect: load already in progress (%v ago)", time.Since(started))
+		case 'p':
+			// Pivot on an observable of the event under the cursor.
+			//
+			// Handled globally it had no screen guard and read ui.events, which
+			// Triage does not clear — so p on a findings row mapped that row
+			// through a stale row-to-event map and opened a menu for an
+			// unrelated event.
+			if e := ui.eventForRow(rowOf(ui.eventList)); e != nil {
+				ui.showPivotMenu(*e)
+			}
+			return nil
 		}
 	}
-	if ui.logger != nil {
-		ui.logger.Printf("onSidebarSelect: starting loadCaseEvents (caseID=%s, filterStart=%v, filterEnd=%v)", ui.selectedCaseID, ui.filterStart, ui.filterEnd)
+	return ev
+}
+
+// rowOf is the selected row of a table, or -1 when there is none.
+func rowOf(t *tview.Table) int {
+	if t == nil {
+		return -1
 	}
-	go ui.loadCaseEvents()
+	row, _ := t.GetSelection()
+	return row
+}
+
+// casesKeys are the Cases screen's own.
+func (ui *UI) casesKeys(ev *tcell.EventKey) *tcell.EventKey {
+	if ev.Key() != tcell.KeyRune {
+		return ev
+	}
+	switch ev.Rune() {
+	case 'f':
+		// The case filter, whatever has focus. Globally f picks between the
+		// case filter and the events filter by asking which widget is focused,
+		// so on this screen it opened the events filter whenever focus had
+		// moved off the list.
+		ui.showCaseFilterModal()
+		return nil
+	case 'c':
+		// A new case, straight to the form.
+		//
+		// The global c is the events flow — mark events, then file them into a
+		// new case — so on this screen, where there are no events to mark, the
+		// key the footer advertises as "new case" answered "No events
+		// selected. Use Space to select events first."
+		ui.showCreateCaseModal()
+		return nil
+	case 'r':
+		// The case list, and only that. Globally r also schedules an events
+		// reload, which on this screen queries a table that is not on screen.
+		ui.reloadCases()
+		return nil
+	}
+	return ev
+}
+
+// reloadCases re-reads the case list without blocking the event loop.
+func (ui *UI) reloadCases() {
+	ui.setStatusDirect("[%s]Refreshing cases…[-:-:-]", ui.theme.TagAccent)
+	ui.spawnLoad(func() {
+		if err := ui.refreshCases(); err != nil {
+			ui.queueUpdate(func() {
+				ui.setStatusDirect("[%s]Could not refresh cases: %v[-:-:-]", ui.theme.TagError, err)
+			})
+			return
+		}
+		ui.queueUpdate(func() {
+			ui.setStatusDirect("[%s]Cases refreshed[-:-:-]", ui.theme.TagSuccess)
+		})
+	})
 }
 
 // setupKeybindings sets up global keybindings
@@ -1180,6 +1439,20 @@ func (ui *UI) setupKeybindings() {
 		// While a modal or form is active, allow it to handle all keys (avoid global shortcuts like q/h/Tab).
 		if ui.isDialogActive() {
 			return event
+		}
+
+		// The screen showing gets first refusal on every key.
+		//
+		// tview runs this application-wide capture before any primitive's own,
+		// so a screen cannot own a key by binding it to one of its widgets:
+		// whatever this handler claims never reaches the screen below. Asking
+		// the screen first is the only way it can own anything — and until it
+		// did, Home's handler was unreachable code and Tab on the dashboard
+		// reached cycleFocus, which cycles widgets Home does not contain.
+		if screen := ui.screenKeys(); screen != nil {
+			if screen(event) == nil {
+				return nil
+			}
 		}
 
 		// A case owns Tab and Shift+Tab, which move between its seven tabs.
@@ -1213,15 +1486,9 @@ func (ui *UI) setupKeybindings() {
 			ui.app.Stop()
 			return nil
 		case tcell.KeyEnter:
-			// A cluster header is not an event. Enter on one expands it.
-			if ui.showAll && !ui.showFindings && ui.app.GetFocus() == ui.eventList {
-				row, _ := ui.eventList.GetSelection()
-				if c := ui.clusterAtRow(row); c != nil {
-					ui.toggleCluster(c.Label)
-					return nil
-				}
-			}
-			// Let the focused primitive handle Enter. The sidebar's own input capture will manage selection.
+			// Expanding a cluster is the Events screen's, and eventsKeys has it.
+			// Let the focused primitive handle Enter otherwise — the sidebar's
+			// own capture manages selection.
 			return event
 		case tcell.KeyEsc:
 			// Esc moves one level out. Modals consume it before it reaches here,
@@ -1231,7 +1498,7 @@ func (ui *UI) setupKeybindings() {
 				ui.setStatusDirect("[%s]Ready[-:-:-]", ui.theme.TagAccent)
 				return nil
 			}
-			ui.showAnalystHome()
+			ui.enterScreen(destHome)
 			return nil
 		case tcell.KeyTab:
 			ui.cycleFocus()
@@ -1247,11 +1514,11 @@ func (ui *UI) setupKeybindings() {
 				ui.setStatusDirect("[%s]Refreshing...[-:-:-]", ui.theme.TagAccent)
 				go func() {
 					if err := ui.refreshCases(); err != nil {
-						ui.app.QueueUpdate(func() {
+						ui.queueUpdate(func() {
 							ui.setStatusDirect("[%s]Error refreshing cases: %v[-:-:-]", ui.theme.TagError, err)
 						})
 					} else {
-						ui.app.QueueUpdate(func() {
+						ui.queueUpdate(func() {
 							ui.setStatusDirect("[%s]Cases refreshed[-:-:-]", ui.theme.TagSuccess)
 						})
 					}
@@ -1279,15 +1546,11 @@ func (ui *UI) setupKeybindings() {
 				ui.showHelp()
 				return nil
 			case 'z':
-				// §8 assigns `g` to cycle the grouping, but §7 assigns `g`/`G`
-				// to top/bottom, and that idiom is already bound and already
-				// documented on both screens. §6 forbids one key meaning two
-				// things, so grouping takes `z` — vim's fold prefix, which is
-				// what a cluster is. Recorded as a deviation in the spec.
-				if ui.showAll && !ui.showFindings {
-					ui.cycleEventGrouping()
-					return nil
-				}
+				// Grouping is the Events screen's, and eventsKeys has it — §8
+				// assigns `g`, but §7 already binds `g`/`G` to top and bottom,
+				// so grouping took `z`: vim's fold prefix, which is what a
+				// cluster is. Recorded as a deviation in the spec.
+				return nil
 			case 'l':
 				ui.focusRight()
 				return nil
@@ -1329,7 +1592,7 @@ func (ui *UI) setupKeybindings() {
 					if s.pageIndex+1 < maxPages {
 						s.pageIndex++
 						ui.setStatusDirect("[%s]Next page (%d/%d)[-:-:-]", ui.theme.TagAccent, s.pageIndex+1, maxPages)
-						go ui.scheduleEventsReload("page:Next")
+						ui.spawnLoad(func() { ui.scheduleEventsReload("page:Next") })
 					} else {
 						ui.setStatusDirect("[%s]Already at last page (%d/%d)[-:-:-]", ui.theme.TagMuted, s.pageIndex+1, maxPages)
 					}
@@ -1355,7 +1618,7 @@ func (ui *UI) setupKeybindings() {
 							}
 						}
 						ui.setStatusDirect("[%s]Prev page (%d/%d)[-:-:-]", ui.theme.TagAccent, s.pageIndex+1, maxPages)
-						go ui.scheduleEventsReload("page:Prev")
+						ui.spawnLoad(func() { ui.scheduleEventsReload("page:Prev") })
 					} else {
 						ui.setStatusDirect("[%s]Already at first page (1/?) [-:-:-]", ui.theme.TagMuted)
 					}
@@ -1370,17 +1633,18 @@ func (ui *UI) setupKeybindings() {
 				ui.cycleTheme()
 				return nil
 			case 'f':
-				if ui.showFindings {
-					ui.setStatusDirect("[%s]Findings: o toggles open/all • s status • v verdict[-:-:-]", ui.theme.TagAccent)
-					return nil
+				// Whose filter this is follows the screen, not the focus.
+				//
+				// It used to ask which widget had focus: the case sidebar meant
+				// the case filter and anything else meant the events filter. So
+				// the events filter opened on Indicators, on Reports, and on
+				// Cases whenever the cursor had moved off the list — filtering
+				// a table that screen does not show. Triage, Cases and
+				// Indicators each claim f before this handler is reached.
+				if !ui.hasEventsContext() {
+					return event
 				}
-				// Gated by focus: Cases sidebar opens CASE filter, otherwise open Events filter
-				if ui.app.GetFocus() == ui.sidebar {
-					ui.showCaseFilterModal()
-				} else {
-					// Open combined filter modal (time + severity + type)
-					ui.showCombinedFilterModal()
-				}
+				ui.showCombinedFilterModal()
 				return nil
 			case 'F':
 				if !ui.showFindings && ui.searchQuery != "" {
@@ -1397,40 +1661,41 @@ func (ui *UI) setupKeybindings() {
 					ui.clearTriageFilters()
 					return nil
 				}
-				// Gated by focus: Cases sidebar clears CASE filters, otherwise clear Events filters
-				if ui.app.GetFocus() == ui.sidebar {
+				// By screen, for the same reason f is: clearing the events
+				// filters from Indicators cleared filters on a list that
+				// screen does not show.
+				if ui.onCases() {
 					ui.clearCaseFilters()
-				} else {
-					// Clear filters for current context (time, severity, type)
-					ui.clearCurrentContextFilters()
+					return nil
 				}
+				if !ui.hasEventsContext() {
+					return event
+				}
+				ui.clearCurrentContextFilters()
 				return nil
 			// Case creation shortcuts
-			case 'c':
-				if ui.logger != nil {
-					ui.logger.Printf("GLOBAL KEY 'c' pressed: selectedEventIDs=%d, events=%d", len(ui.selectedEventIDs), len(ui.events))
+			case 'c', 'a':
+				// Both act on marked events, so both are the events screen's.
+				//
+				// Handled everywhere, they answered on screens that have no
+				// events to mark: pressing a on the dashboard replied "No
+				// events selected. Use Space to select events first", naming a
+				// key that does nothing there either. Left unclaimed here, a
+				// screen that has its own meaning for the key gets it — which
+				// is how c on Cases opens the new-case form.
+				if !ui.hasEventsContext() {
+					return event
 				}
-				if len(ui.selectedEventIDs) > 0 {
-					ui.setStatusDirect("[%s]Opening case creation modal...[-:-:-]", ui.theme.TagAccent)
+				if len(ui.selectedEventIDs) == 0 {
+					ui.setStatusDirect("[%s]No events selected — Space marks the row under the cursor[-:-:-]",
+						ui.theme.TagWarning)
+					return nil
+				}
+				if event.Rune() == 'c' {
 					ui.showCreateCaseModal()
 				} else {
-					ui.setStatusDirect("[%s]No events selected. Use Space to select events first. (Events: %d)[-:-:-]", ui.theme.TagWarning, len(ui.events))
-				}
-				return nil
-			case 'a':
-				if ui.logger != nil {
-					ui.logger.Printf("GLOBAL KEY 'a' pressed: selectedEventIDs=%d, events=%d", len(ui.selectedEventIDs), len(ui.events))
-				}
-				if len(ui.selectedEventIDs) > 0 {
-					ui.setStatusDirect("[%s]Opening add to case modal...[-:-:-]", ui.theme.TagAccent)
 					ui.showAddToExistingCaseModal()
-				} else {
-					ui.setStatusDirect("[%s]No events selected. Use Space to select events first. (Events: %d)[-:-:-]", ui.theme.TagWarning, len(ui.events))
 				}
-				return nil
-			case 'D':
-				// Quick-jump to the findings (detections) triage queue.
-				ui.jumpToFindings()
 				return nil
 			case 'v':
 				if ui.showFindings {
@@ -1474,27 +1739,8 @@ func (ui *UI) setupKeybindings() {
 				ui.showFilterBar()
 				return nil
 			case 'p':
-				if len(ui.events) > 0 {
-					row, _ := ui.eventList.GetSelection()
-					if row > 0 && row-1 < len(ui.events) {
-						if e := ui.eventForRow(row); e != nil {
-							ui.showPivotMenu(*e)
-						}
-					}
-				}
-				return nil
-			case 'A':
-				// Quick-jump to ALL EVENTS from anywhere (overview panel is non-selectable)
-				ui.switchToAllEvents()
-				return nil
-			case 'C':
-				ui.switchToCases()
-				return nil
-			case 'I':
-				ui.switchToIndicators()
-				return nil
-			case 'R':
-				ui.switchToReports()
+				// Events owns this key — see eventsKeys. Reaching here means
+				// no screen claimed it, so there is nothing to pivot on.
 				return nil
 			case 'd':
 				// Context-sensitive delete:
@@ -1564,11 +1810,33 @@ func (ui *UI) refreshCases() error {
 	filtered := cases
 
 	ui.logger.Printf("Loaded %d cases from database", len(cases))
-	// Store source list and apply CASE filters
-	ui.allCases = filtered
+
+	// The all-events filters, read on the UI goroutine, for the overview total.
+	var plan eventQueryPlan
+	ui.queueUpdate(func() { plan = ui.planEventQuery(contextAll, "") })
+	eventsTotal, _ := ui.store.CountEventsFiltered(ctx, "",
+		plan.start, plan.end, plan.severities, plan.types)
+
+	// Everything that touches the screen, on the screen's goroutine.
+	ui.queueUpdate(func() { ui.applyCases(filtered, eventsTotal) })
+
+	ui.setStatus("[%s]Loaded %d cases[-:-:-]", ui.theme.TagSuccess, len(filtered))
+
+	return nil
+}
+
+// applyCases records a freshly read case list.
+//
+// It must run on the UI goroutine. refreshCases used to do all of this from
+// whichever goroutine called it — assigning ui.cases, clearing the selection,
+// repainting the list — while the key handler was writing the same fields on
+// the event loop.
+func (ui *UI) applyCases(cases []store.Case, eventsTotal int) {
+	ui.allCases = cases
 	ui.cases = ui.applyCaseFilters(ui.allCases)
 
-	// Selection stability: if current selected case is filtered out, clear selection and switch to ALL EVENTS
+	// Selection stability: a case the filters removed is no longer the
+	// selection, and the events list falls back to all events.
 	if ui.selectedCaseID != "" {
 		found := false
 		for _, c := range ui.cases {
@@ -1583,10 +1851,8 @@ func (ui *UI) refreshCases() error {
 		}
 	}
 
-	ui.updateCasesList()
+	ui.renderCasesList()
 
-	// Compute ALL CASES stats (OPEN, INVESTIGATING, CLOSED)
-	totalCases := len(ui.cases)
 	var openN, invN, closeN int
 	for _, c := range ui.cases {
 		switch strings.ToLower(strings.TrimSpace(c.Status)) {
@@ -1598,96 +1864,115 @@ func (ui *UI) refreshCases() error {
 			closeN++
 		}
 	}
-
-	// Compute ALL EVENTS total with current ALL-context filters
-	sAll := ui.getOrInitState(contextAll)
-	start := sAll.filterStart
-	if start.IsZero() && !ui.filterStart.IsZero() {
-		start = ui.filterStart
-	}
-	end := sAll.filterEnd
-	if end.IsZero() && !ui.filterEnd.IsZero() {
-		end = ui.filterEnd
-	}
-	sev := keysFromMap(sAll.filterSeverities)
-	typ := keysFromMap(sAll.filterTypes)
-	eventsTotal, _ := ui.store.CountEventsFiltered(ctx, "", start, end, sev, typ)
-
-	ui.updateOverview(eventsTotal, totalCases, openN, invN, closeN)
-
-	ui.setStatus("[%s]Loaded %d cases[-:-:-]", ui.theme.TagSuccess, len(filtered))
-
-	return nil
+	ui.updateOverview(eventsTotal, len(ui.cases), openN, invN, closeN)
 }
 
 // updateCasesList updates the cases sidebar
+// updateCasesList repaints the case list from off the UI goroutine.
+//
+// The two halves are separate deliberately. queueUpdate blocks until the event
+// loop drains it, so calling this from a key handler — which runs *on* that
+// loop — deadlocks the application. Anything already on the UI goroutine calls
+// renderCasesList instead.
 func (ui *UI) updateCasesList() {
-	ui.app.QueueUpdate(func() {
-		ui.sidebar.Clear()
+	ui.queueUpdate(ui.renderCasesList)
+}
 
-		if len(ui.cases) == 0 {
+// renderCasesList paints the rows. It must already be on the UI goroutine.
+func (ui *UI) renderCasesList() {
+	// Which case the cursor was on, before the list is torn down. A
+	// refresh used to send it back to the first case, so pressing r while
+	// reading case four put case one's briefing on screen.
+	wasOn := ui.selectedCaseID
+	if i := ui.sidebar.GetCurrentItem(); i >= 0 && i < len(ui.cases) {
+		wasOn = ui.cases[i].ID
+	}
+
+	ui.sidebar.Clear()
+
+	if len(ui.cases) == 0 {
+		return
+	}
+
+	// The title has whatever the list's width leaves after the number.
+	room := casesListWidth(ui.termWidth) - 10
+
+	for i, case_ := range ui.cases {
+		title := truncate(case_.Title, room)
+
+		severity := strings.ToUpper(case_.Severity)
+		severityColor := ui.getSeverityColor(case_.Severity)
+
+		// Include case number in the display (1-based) using the same visual style as tview "(n)"
+		caseNumber := i + 1
+		mainText := fmt.Sprintf("[%s](%d)[-] [%s]%s[-]", ui.theme.TagAccent, caseNumber, ui.theme.TagTextPrimary, title)
+		secondaryText := fmt.Sprintf("[%s]%s[-] | %s | %d events",
+			severityColor,
+			severity,
+			strings.ToLower(strings.TrimSpace(case_.Status)),
+			case_.EventCount,
+		)
+
+		// Do not pass tview shortcut runes at all, to avoid duplicate "(1)" style labels.
+		// Multi-digit number selection is handled by our input-capture buffer.
+		var shortcut rune = 0
+		ui.sidebar.AddItem(mainText, secondaryText, shortcut, nil)
+	}
+
+	ui.selectCaseByID(wasOn)
+}
+
+// selectCaseByID puts the cursor on a case, falling back to the first.
+//
+// By identity rather than by index: a refresh can add or remove a case, and an
+// index survives neither.
+func (ui *UI) selectCaseByID(id string) {
+	if ui.sidebar.GetItemCount() == 0 {
+		return
+	}
+	for i, c := range ui.cases {
+		if c.ID == id && i < ui.sidebar.GetItemCount() {
+			ui.sidebar.SetCurrentItem(i)
 			return
 		}
-
-		for i, case_ := range ui.cases {
-			// Format case display - allow longer titles with wider sidebar
-			title := case_.Title
-			if len(title) > 40 {
-				title = title[:37] + "..."
-			}
-
-			severity := strings.ToUpper(case_.Severity)
-			severityColor := ui.getSeverityColor(case_.Severity)
-
-			// Include case number in the display (1-based) using the same visual style as tview "(n)"
-			caseNumber := i + 1
-			mainText := fmt.Sprintf("[%s](%d)[-] [%s]%s[-]", ui.theme.TagAccent, caseNumber, ui.theme.TagTextPrimary, title)
-			secondaryText := fmt.Sprintf("[%s]%s[-] | %s | %d events",
-				severityColor,
-				severity,
-				strings.ToLower(strings.TrimSpace(case_.Status)),
-				case_.EventCount,
-			)
-
-			// Do not pass tview shortcut runes at all, to avoid duplicate "(1)" style labels.
-			// Multi-digit number selection is handled by our input-capture buffer.
-			var shortcut rune = 0
-			ui.sidebar.AddItem(mainText, secondaryText, shortcut, nil)
-		}
-
-		// Default focus to ALL EVENTS item
-		ui.sidebar.SetCurrentItem(0)
-	})
+	}
+	ui.sidebar.SetCurrentItem(0)
 }
 
 // loadCaseEvents loads events for the selected case
 func (ui *UI) loadCaseEvents() {
-	// Prevent concurrent loads (can happen if both per-item and selected handlers fire)
-	if !atomic.CompareAndSwapInt32(&ui.loadingEvents, 0, 1) {
+	// Prevent concurrent loads (can happen if both per-item and selected handlers fire).
+	// A case's event list and the all-events list are the same collection, so
+	// they share a guard; the findings queue does not.
+	if !ui.eventsLoad.begin() {
 		ui.logger.Println("loadCaseEvents: already loading, skipping")
 		return
 	}
-	atomic.StoreInt64(&ui.lastLoadStart, time.Now().UnixNano())
-	defer func() {
-		atomic.StoreInt32(&ui.loadingEvents, 0)
-		atomic.StoreInt64(&ui.lastLoadStart, 0)
-	}()
+	defer ui.eventsLoad.end()
 
 	defer func() {
 		if r := recover(); r != nil {
 			if ui.logger != nil {
 				ui.logger.Printf("panic in loadCaseEvents: %v", r)
 			}
-			ui.setStatusDirect("[%s]Error loading events (recovered)[-:-:-]", ui.theme.TagError)
+			ui.setStatus("[%s]Error loading events (recovered)[-:-:-]", ui.theme.TagError)
 		}
 	}()
 
-	if ui.selectedCaseID == "" {
+	// Which case, and its filters, read on the UI goroutine.
+	var plan eventQueryPlan
+	ui.queueUpdate(func() {
+		if ui.selectedCaseID == "" {
+			return
+		}
+		plan = ui.planEventQuery(ui.selectedCaseID, ui.selectedCaseID)
+	})
+	if plan.caseID == "" {
 		ui.logger.Println("loadCaseEvents: no case selected")
 		return
 	}
 
-	ui.logger.Printf("Loading events for case: %s", ui.selectedCaseID)
+	ui.logger.Printf("Loading events for case: %s", plan.caseID)
 	// Show loading status immediately on the UI thread
 	ui.setStatus("[%s]Loading events...[-:-:-]", ui.theme.TagWarning)
 
@@ -1695,25 +1980,13 @@ func (ui *UI) loadCaseEvents() {
 	ctx, cancel := context.WithTimeout(ui.ctx, 4*time.Second)
 	defer cancel()
 
-	// Per-context query state and filters/pagination
-	s := ui.getOrInitState(ui.selectedCaseID)
-	// Bridge legacy time fields if set
-	if s.filterStart.IsZero() && !ui.filterStart.IsZero() {
-		s.filterStart = ui.filterStart
-	}
-	if s.filterEnd.IsZero() && !ui.filterEnd.IsZero() {
-		s.filterEnd = ui.filterEnd
-	}
-	sev := keysFromMap(s.filterSeverities)
-	typ := keysFromMap(s.filterTypes)
-
 	// Count total first to clamp page index
-	total, err := ui.store.CountEventsFiltered(ctx, ui.selectedCaseID, s.filterStart, s.filterEnd, sev, typ)
+	total, err := ui.store.CountEventsFiltered(ctx, plan.caseID, plan.start, plan.end, plan.severities, plan.types)
 	if err != nil {
-		ui.logger.Printf("Error counting events for case %s: %v", ui.selectedCaseID, err)
+		ui.logger.Printf("Error counting events for case %s: %v", plan.caseID, err)
 		// Reset filter apply guard on failure
 		atomic.StoreInt32(&ui.filterApplying, 0)
-		ui.app.QueueUpdate(func() {
+		ui.queueUpdate(func() {
 			if ctx.Err() == context.DeadlineExceeded {
 				ui.setStatusDirect("[%s]Timed out counting events (database busy)[-:-:-]", ui.theme.TagError)
 			} else {
@@ -1722,35 +1995,15 @@ func (ui *UI) loadCaseEvents() {
 		})
 		return
 	}
-	s.totalCount = total
+	page, offset := pageOffset(total, plan.pageSize, plan.pageIndex)
 
-	// Clamp page index within bounds
-	maxPages := 1
-	if s.pageSize > 0 {
-		maxPages = (s.totalCount + s.pageSize - 1) / s.pageSize
-		if maxPages == 0 {
-			maxPages = 1
-		}
-		if s.pageIndex >= maxPages {
-			s.pageIndex = maxPages - 1
-		}
-		if s.pageIndex < 0 {
-			s.pageIndex = 0
-		}
-	}
-
-	limit := s.pageSize
-	offset := 0
-	if limit > 0 {
-		offset = s.pageIndex * limit
-	}
-
-	events, err := ui.store.GetEventsFiltered(ctx, ui.selectedCaseID, s.filterStart, s.filterEnd, sev, typ, limit, offset)
+	events, err := ui.store.GetEventsFiltered(ctx, plan.caseID,
+		plan.start, plan.end, plan.severities, plan.types, plan.pageSize, offset)
 	if err != nil {
-		ui.logger.Printf("Error loading events for case %s: %v", ui.selectedCaseID, err)
+		ui.logger.Printf("Error loading events for case %s: %v", plan.caseID, err)
 		// Reset filter apply guard on failure
 		atomic.StoreInt32(&ui.filterApplying, 0)
-		ui.app.QueueUpdate(func() {
+		ui.queueUpdate(func() {
 			if ctx.Err() == context.DeadlineExceeded {
 				ui.setStatusDirect("[%s]Timed out loading events (database busy)[-:-:-]", ui.theme.TagError)
 			} else {
@@ -1760,31 +2013,39 @@ func (ui *UI) loadCaseEvents() {
 		return
 	}
 
-	ui.logger.Printf("Loaded %d events for case %s", len(events), ui.selectedCaseID)
+	ui.logger.Printf("Loaded %d events for case %s", len(events), plan.caseID)
 	if ui.logger != nil {
-		started := time.Unix(0, atomic.LoadInt64(&ui.lastLoadStart))
-		if !started.IsZero() {
-			ui.logger.Printf("loadCaseEvents: query finished in %v; updating UI", time.Since(started))
+		if d := ui.eventsLoad.startedAgo(); d > 0 {
+			ui.logger.Printf("loadCaseEvents: query finished in %v; updating UI", d)
 		}
 	}
 
 	// Update UI in main thread
-	ui.app.QueueUpdateDraw(func() {
+	ui.queueUpdate(func() {
+		ui.recordEventQuery(plan, total, page)
 		// Clear any previous selections when data changes (avoid stale IDs across pages)
 		ui.selectedEventIDs = make(map[string]bool)
 		ui.events = events
 		ui.updateEventsList()
 
-		// Ensure the table is scrolled to the top and the first data row is selected.
+		// Ensure the table is scrolled to the top and the first *event* is
+		// selected — row 1 is a cluster header, not an event.
 		ui.eventList.SetOffset(0, 0)
 		if ui.eventList.GetRowCount() > 1 {
-			ui.eventList.Select(1, 0) // first data row (row 0 is header)
+			ui.selectFirstEvent()
 		} else {
 			ui.eventList.Select(0, 0) // header/no-data fallback
 		}
 
-		// Move focus to the Events panel so changes are immediately visible
-		ui.app.SetFocus(ui.eventList)
+		// Focus follows the events table only where it is on screen.
+		//
+		// This load runs on the Cases screen too — r refreshes there — and the
+		// case list and briefing are what is showing, not this table. Taking
+		// focus anyway put it on a widget nobody could see, and the arrow keys
+		// stopped moving the case list.
+		if ui.eventsListOnScreen() {
+			ui.app.SetFocus(ui.eventList)
+		}
 
 		// Find the case title for status message
 		var caseTitle string
@@ -2156,22 +2417,43 @@ func (ui *UI) showCaseSummary() {
 	}
 
 	if selectedCase == nil {
-		ui.setStatus("[%s]Selected case not found[-:-:-]", ui.theme.TagError)
+		ui.setStatusDirect("[%s]Selected case not found[-:-:-]", ui.theme.TagError)
 		return
 	}
 
-	ui.setStatus("[%s]Generating case summary...[-:-:-]", ui.theme.TagWarning)
+	// The constructor falls back to a local stub, so this is normally set — but
+	// it is also assigned from the provider settings modal, and a summary is
+	// not worth a nil dereference on the one path that could clear it.
+	if ui.llm == nil {
+		ui.setStatusDirect("[%s]No LLM provider configured — press L to set one up[-:-:-]", ui.theme.TagWarning)
+		return
+	}
 
+	ui.setStatusDirect("[%s]Generating case summary...[-:-:-]", ui.theme.TagWarning)
+
+	caseID := selectedCase.ID
 	go func() {
-		summary, err := ui.llm.SummarizeCase(ui.ctx, *selectedCase, ui.events)
+		// The case's own events, not whatever the events screen last loaded.
+		// ui.events belongs to a different screen, is empty on the one this key
+		// is pressed from, and is cleared outright when a screen changes — so
+		// the summary was written from either nothing or the wrong evidence.
+		events, err := ui.store.GetCaseEventMembers(ui.ctx, caseID)
 		if err != nil {
-			ui.app.QueueUpdate(func() {
+			ui.queueUpdate(func() {
+				ui.setStatusDirect("[%s]Could not read the case's events: %v[-:-:-]", ui.theme.TagError, err)
+			})
+			return
+		}
+
+		summary, err := ui.llm.SummarizeCase(ui.ctx, *selectedCase, events)
+		if err != nil {
+			ui.queueUpdate(func() {
 				ui.setStatusDirect("[%s]Error generating summary: %v[-:-:-]", ui.theme.TagError, err)
 			})
 			return
 		}
 
-		ui.app.QueueUpdate(func() {
+		ui.queueUpdate(func() {
 			ui.showModal("Case Summary", summary)
 			ui.setStatusDirect("[%s]Case summary generated[-:-:-]", ui.theme.TagSuccess)
 		})
@@ -2398,8 +2680,7 @@ func (ui *UI) showHelp() {
 		return ev
 	})
 
-	ui.lastFocus = ui.app.GetFocus()
-	ui.app.SetRoot(centered, true)
+	ui.rootModal(centered)
 	ui.app.SetFocus(table)
 }
 
@@ -2451,15 +2732,14 @@ func (ui *UI) showModal(title, text string) {
 		return event
 	})
 
-	ui.lastFocus = ui.app.GetFocus()
-	ui.app.SetRoot(modal, true)
-	// Set focus to the modal to ensure it receives key events
-	ui.app.SetFocus(modal)
+	ui.overlayPrimitive(modal)
 }
 
 // restoreMainLayout restores the main TUI layout after closing a modal/help view
 func (ui *UI) restoreMainLayout() {
 	ui.helpActive = false
+	ui.activeModal = nil
+	ui.filterModal = nil
 
 	// Clear reference to Case Management when returning to main UI
 	ui.activeCM = nil
@@ -2477,11 +2757,20 @@ func (ui *UI) restoreMainLayout() {
 	// Restore focus to the previously focused component if available
 	target := ui.lastFocus
 	if target == nil {
-		target = ui.sidebar
+		target = ui.screenFocus()
 	}
+	ui.lastFocus = nil
 	ui.app.SetFocus(target)
 	ui.highlightFocus(target)
-	ui.setStatusDirect("[%s]Help closed[-:-:-]", ui.theme.TagSuccess)
+
+	// Say where you now are, not what you just closed. This announced "Help
+	// closed" unconditionally — after a pivot menu, after a form, and after
+	// leaving a case, none of which involved the help screen.
+	if d, ok := lookupDestinationByID(ui.destination); ok {
+		ui.setStatusDirect("[%s]%s[-:-:-]", ui.theme.TagAccent, d.name)
+		return
+	}
+	ui.setStatusDirect("[%s]Ready[-:-:-]", ui.theme.TagAccent)
 }
 
 // cycleFocus cycles focus between UI components
@@ -2644,8 +2933,72 @@ func (ui *UI) startRedrawHeartbeat() {
 }
 
 // isDialogActive returns true when a dialog or the help view is focused to bypass global shortcuts.
+// rootModal puts a modal over the main layout and records that one is up.
+//
+// The global key handler stands down while a modal is rooted — see
+// isDialogActive. Recording it explicitly rather than inferring it from what
+// has focus is what lets a modal built from a List suppress keys: the pivot
+// menu is one, and q used to quit the application straight through it.
+func (ui *UI) rootModal(p tview.Primitive) {
+	// Remember what to give focus back to, here rather than at each call site.
+	//
+	// Eight of the eighteen callers set ui.lastFocus by hand and the rest
+	// forgot, so closing one of those left focus wherever the previous modal
+	// had put it — or, when there had been none, on the navigation rail. That
+	// is what made the arrow keys stop scrolling the findings queue after
+	// choosing a filter: the keys were moving an unfocused rail instead.
+	//
+	// Guarded against nesting, so a modal opened over a modal does not record
+	// the outer modal as the thing to return to.
+	if ui.activeModal == nil && ui.app != nil {
+		ui.lastFocus = ui.app.GetFocus()
+	}
+	ui.activeModal = p
+	ui.app.SetRoot(p, true)
+}
+
+// screenFocus is the widget an analyst works in on the current screen.
+//
+// The fallback when nothing was recorded. It used to be the case sidebar
+// unconditionally, which is the working widget on exactly one of the six
+// screens.
+func (ui *UI) screenFocus() tview.Primitive {
+	switch ui.destination {
+	case destHome:
+		if ui.home != nil && ui.home.root != nil {
+			return ui.home.root
+		}
+	case destCases:
+		if ui.sidebar != nil {
+			return ui.sidebar
+		}
+	case destIndicators:
+		if ui.indicators != nil && ui.indicators.table != nil {
+			return ui.indicators.table
+		}
+	case destTriage, destEvents:
+		if ui.eventList != nil {
+			return ui.eventList
+		}
+	}
+	if ui.eventList != nil {
+		return ui.eventList
+	}
+	return ui.sidebar
+}
+
 func (ui *UI) isDialogActive() bool {
 	if ui.helpActive {
+		return true
+	}
+	// What is rooted, not what has focus.
+	//
+	// The type switch below cannot see a modal built from a List — and the
+	// pivot menu is one, so every global key reached straight through it: q
+	// quit the application, the digits navigated away, j and k moved the table
+	// behind it. Adding *tview.List to the switch would be wrong, because the
+	// case sidebar is a List too and must not suppress anything.
+	if ui.activeModal != nil {
 		return true
 	}
 	if ui.app == nil {
@@ -2668,31 +3021,54 @@ func (ui *UI) isDialogActive() bool {
 	}
 }
 
-// setStatus updates the status bar
+// composeStatus builds the one bar at the foot of the screen.
+//
+// It is the only status bar there is. Home used to carry a second row of its
+// own beneath this one — two bars, four hints repeated between them, and the
+// two disagreed about which key opened the filter.
+//
+// The product name lives here and nowhere else. It used to be under the
+// navigation rail as well, and in every screen's header, so a single screen
+// said "Console-IR" three times and the rail spent two of its twenty-two
+// columns on a version string.
+func (ui *UI) composeStatus(message string) string {
+	t := ui.theme
+	brand := fmt.Sprintf("[%s:-:b]Console-IR[-:-:-] [%s]%s · OCSF %s[-:-:-]",
+		t.TagAccent, t.TagMuted, buildinfo.Display(ui.version), ocsf.SchemaVersion())
+
+	return fmt.Sprintf("%s  [%s]│[-:-:-] %s  [%s]│[-:-:-] %s",
+		brand,
+		t.TagMuted, ui.buildStatusMain(message),
+		t.TagMuted, ui.buildShortcutHints())
+}
+
+// setStatus updates the status bar from anywhere.
+//
+// Composed on the UI goroutine and posted without waiting for it. Both halves
+// of that are fixes:
+//
+// Composing at the call site read ui.destination, the theme and the screen's
+// flags off whatever goroutine called — a data race against the key handler
+// that writes them while a loader is announcing itself.
+//
+// And waiting was worse. QueueUpdate blocks until the event loop drains it, so
+// any caller already on that loop froze the entire application — which is what
+// pressing s on a case did, through showCaseSummary.
+//
+// The cost is ordering: two callers racing can land out of order and the bar
+// shows the loser. A momentarily stale line beats a dead application, and
+// anything already on the UI goroutine calls setStatusDirect, which keeps both.
 func (ui *UI) setStatus(format string, args ...interface{}) {
 	message := fmt.Sprintf(format, args...)
-	timestamp := time.Now().Format("15:04:05")
 
-	// Build main message with badges and dynamic shortcut hints
-	main := ui.buildStatusMain(message)
-	hints := ui.buildShortcutHints()
-
-	statusText := fmt.Sprintf("[%s]%s[-] [%s]|[-] %s [%s]|[-] %s",
-		ui.theme.TagMuted, timestamp,
-		ui.theme.TagTextPrimary,
-		main,
-		ui.theme.TagMuted,
-		hints)
-
-	if ui.running.Load() {
-		// Use non-blocking QueueUpdate to avoid potential re-entrancy stalls during input handling
-		ui.app.QueueUpdate(func() {
-			ui.statusBar.SetText(statusText)
-		})
-	} else {
-		// When the app is not running (e.g., unit tests), set directly.
-		ui.statusBar.SetText(statusText)
+	if !ui.running.Load() {
+		// No loop to post to (unit tests).
+		ui.statusBar.SetText(ui.composeStatus(message))
+		return
 	}
+	go ui.app.QueueUpdate(func() {
+		ui.statusBar.SetText(ui.composeStatus(message))
+	})
 }
 
 // getSeverityColor returns the color tag for a severity level (for text markup)
@@ -2716,19 +3092,7 @@ func (ui *UI) getSeverityColor(severity string) string {
 // setStatusDirect updates the status bar immediately without QueueUpdate/QueueUpdateDraw.
 // Use this only from the UI goroutine (e.g., within input handlers, selection callbacks, or QueueUpdate closures).
 func (ui *UI) setStatusDirect(format string, args ...interface{}) {
-	message := fmt.Sprintf(format, args...)
-	timestamp := time.Now().Format("15:04:05")
-
-	// Build main message with badges and dynamic shortcut hints
-	main := ui.buildStatusMain(message)
-	hints := ui.buildShortcutHints()
-
-	statusText := fmt.Sprintf("[%s]%s[-] [%s]|[-] %s [%s]|[-] %s",
-		ui.theme.TagMuted, timestamp,
-		ui.theme.TagTextPrimary,
-		main,
-		ui.theme.TagMuted,
-		hints)
+	statusText := ui.composeStatus(fmt.Sprintf(format, args...))
 
 	if ui.statusBar != nil {
 		ui.statusBar.SetText(statusText)
@@ -2798,16 +3162,9 @@ func (ui *UI) applyTheme() {
 	// replaced rewrote the rail's first item to "ALL EVENTS" on every theme
 	// change, advertising a destination that key 1 does not go to.
 	if ui.navRail != nil {
-		stylePanel(ui.navRail.Box, "CONSOLE-IR", PanelRoleRail, ui.theme)
+		stylePanel(ui.navRail.Box, "NAVIGATION", PanelRoleRail, ui.theme)
 		ui.navRail.SetBackgroundColor(ui.theme.Bg)
 		ui.renderNavRail()
-	}
-
-	// App title header
-	if ui.appTitle != nil {
-		ui.appTitle.SetBackgroundColor(ui.theme.Surface)
-		ui.renderHeader()
-		ui.appTitle.SetTextColor(ui.theme.TextPrimary)
 	}
 
 	// OVERVIEW info block
@@ -2853,6 +3210,14 @@ func (ui *UI) applyTheme() {
 	if ui.statusBar != nil {
 		ui.statusBar.SetTextColor(ui.theme.TextPrimary)
 		ui.statusBar.SetBackgroundColor(ui.theme.Surface)
+	}
+
+	// The dashboard builds its own widgets from the theme it was constructed
+	// with, so nothing above reaches them. Without this, changing the theme on
+	// Home recoloured the rail and the status bar around a dashboard still
+	// drawn in the old palette.
+	if ui.home != nil {
+		ui.home.applyTheme()
 	}
 
 	// Re-render table and focus ring
@@ -2928,81 +3293,6 @@ func (ui *UI) GetStats() map[string]interface{} {
 		"selected_events":   len(ui.selectedEventIDs),
 		"theme":             ui.themeName,
 	}
-}
-
-// handleShortcutKey handles a number key press for case selection.
-// It supports multi-digit input with disambiguation:
-//   - If typing this digit could still form a larger valid number (e.g., "1" when there are >=10 cases),
-//     we start a short timer and wait for the next digit before selecting.
-//   - If no valid longer number can be formed (e.g., "7" when there are only 9 cases), we select immediately.
-func (ui *UI) handleShortcutKey(digit rune) {
-	// Cancel any existing timer
-	if ui.shortcutTimer != nil {
-		ui.shortcutTimer.Stop()
-		ui.shortcutTimer = nil
-	}
-
-	// Add digit to buffer
-	ui.shortcutBuffer += string(digit)
-
-	// Parse current buffer
-	caseNum, err := strconv.Atoi(ui.shortcutBuffer)
-	if err != nil || caseNum < 1 {
-		// Invalid prefix; reset
-		ui.shortcutBuffer = ""
-		return
-	}
-
-	max := len(ui.cases)
-	if max == 0 {
-		ui.shortcutBuffer = ""
-		return
-	}
-
-	// If current number is greater than max, no further digits can make it valid (numbers only grow).
-	if caseNum > max {
-		ui.shortcutBuffer = ""
-		return
-	}
-
-	// At this point, caseNum is within [1..max].
-	// Determine if a longer valid number could be formed by adding another digit.
-	// If caseNum*10 <= max, there exists at least one valid extension (e.g., 1 -> 10..19).
-	canExtendValid := (caseNum*10 <= max) && (len(ui.shortcutBuffer) < 3)
-
-	if canExtendValid {
-		// Wait briefly for an additional digit; on timeout, commit current caseNum.
-		ui.shortcutTimer = time.AfterFunc(ui.shortcutTimeout, func() {
-			ui.app.QueueUpdate(func() {
-				if num, err := strconv.Atoi(ui.shortcutBuffer); err == nil && num >= 1 && num <= len(ui.cases) {
-					ui.selectCaseByNumber(num)
-				}
-				ui.shortcutBuffer = ""
-				ui.shortcutTimer = nil
-			})
-		})
-		return
-	}
-
-	// No valid extension possible or buffer length cap reached; select immediately.
-	ui.selectCaseByNumber(caseNum)
-	ui.shortcutBuffer = ""
-}
-
-// selectCaseByNumber selects a case by its 1-based number
-func (ui *UI) selectCaseByNumber(caseNum int) {
-	if caseNum < 1 || caseNum > len(ui.cases) {
-		return
-	}
-
-	// Convert to 0-based index
-	caseIndex := caseNum - 1
-
-	// Select the case in the sidebar
-	ui.sidebar.SetCurrentItem(caseIndex)
-
-	// Trigger the selection
-	ui.onSidebarSelect(caseIndex)
 }
 
 // toggleEventSelection toggles selection state for the currently focused event or finding
@@ -3142,7 +3432,9 @@ func (ui *UI) showCreateCaseModal() {
 			ui.setStatusDirect("[%s]Title is required[-:-:-]", ui.theme.TagError)
 			return
 		}
-		ui.createCaseWithEvents(title, description, severity, assignedTo)
+		// The selection is read here, on the UI goroutine, rather than from
+		// the goroutine that does the work.
+		ui.createCase(title, description, severity, assignedTo, ui.selectedEventIDList())
 		ui.restoreMainLayout()
 	})
 	form.AddButton("Cancel", func() {
@@ -3158,9 +3450,7 @@ func (ui *UI) showCreateCaseModal() {
 		return event
 	})
 
-	ui.lastFocus = ui.app.GetFocus()
-	ui.app.SetRoot(form, true)
-	ui.app.SetFocus(form)
+	ui.overlayForm(form, 64)
 	// Brief hint for users on Description field navigation
 	ui.setStatusDirect("[%s]Description: Enter=newline, Tab/Shift+Tab move fields[-:-:-]", ui.theme.TagAccent)
 }
@@ -3181,8 +3471,7 @@ func (ui *UI) showAddToExistingCaseModal() {
 		modal.SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 			ui.restoreMainLayout()
 		})
-		ui.app.SetRoot(modal, true)
-		ui.app.SetFocus(modal)
+		ui.overlayPrimitive(modal)
 		return
 	}
 
@@ -3252,18 +3541,44 @@ func (ui *UI) showAddToExistingCaseModal() {
 		return ev
 	})
 
-	// Set root to the composed layout and focus the input field
-	ui.lastFocus = ui.app.GetFocus()
-	ui.app.SetRoot(layout, true)
+	// Over the events it is about to file, and focus the input field.
+	//
+	// Through the modal path, not SetRoot: rooted directly it never registered
+	// as a modal, so the global capture went on claiming 1-5 for navigation
+	// while a case number was being typed into the field.
+	ui.overlayModal(layout, 92, 20)
 	ui.app.SetFocus(form)
 
 	// Brief hint
 	ui.setStatusDirect("[%s]Enter the case number (1-%d) and press 'Add Events'. Esc to cancel.[-:-:-]", ui.theme.TagAccent, len(ui.cases))
 }
 
-// createCaseWithEvents creates a new case and assigns selected events to it
-func (ui *UI) createCaseWithEvents(title, description, severity, assignedTo string) {
-	ui.setStatusDirect("[%s]Creating case and assigning events...[-:-:-]", ui.theme.TagWarning)
+// selectedEventIDList is the marked events, as a stable slice.
+//
+// It must run on the UI goroutine. The map itself is replaced by the loaders,
+// so a background reader can find it changing underneath.
+func (ui *UI) selectedEventIDList() []string {
+	ids := make([]string, 0, len(ui.selectedEventIDs))
+	for id := range ui.selectedEventIDs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// createCase files a new case, with the events it was given.
+//
+// The events are a parameter rather than something read from the screen: this
+// is reached both from the events flow, where a selection is the point, and
+// from the Cases screen, where there is nothing selected and a case with no
+// evidence yet is exactly what is wanted.
+func (ui *UI) createCase(title, description, severity, assignedTo string, eventIDs []string) {
+	if len(eventIDs) == 0 {
+		ui.setStatusDirect("[%s]Creating case…[-:-:-]", ui.theme.TagWarning)
+	} else {
+		ui.setStatusDirect("[%s]Creating case and assigning %s…[-:-:-]",
+			ui.theme.TagWarning, plural(len(eventIDs), "event"))
+	}
 
 	go func() {
 		// Create the case
@@ -3277,7 +3592,7 @@ func (ui *UI) createCaseWithEvents(title, description, severity, assignedTo stri
 
 		caseID, err := ui.store.CreateOrUpdateCase(ui.ctx, newCase)
 		if err != nil {
-			ui.app.QueueUpdate(func() {
+			ui.queueUpdate(func() {
 				ui.setStatusDirect("[%s]Error creating case: %v[-:-:-]", ui.theme.TagError, err)
 			})
 			return
@@ -3285,7 +3600,7 @@ func (ui *UI) createCaseWithEvents(title, description, severity, assignedTo stri
 
 		// Assign selected events to the case
 		var successCount, errorCount int
-		for eventID := range ui.selectedEventIDs {
+		for _, eventID := range eventIDs {
 			if err := ui.store.AssignEventToCase(ui.ctx, eventID, caseID); err != nil {
 				errorCount++
 				if ui.logger != nil {
@@ -3305,19 +3620,19 @@ func (ui *UI) createCaseWithEvents(title, description, severity, assignedTo stri
 
 		// Refresh UI without blocking the UI goroutine on DB calls
 		// 1) Clear selections and show immediate status on UI thread
-		ui.app.QueueUpdate(func() {
+		ui.queueUpdate(func() {
 			ui.selectedEventIDs = make(map[string]bool)
 			ui.setStatusDirect("[%s]Case created; refreshing cases...[-:-:-]", ui.theme.TagWarning)
 		})
 
 		// 2) Refresh cases off the UI thread to avoid freezing the event loop
 		if err := ui.refreshCases(); err != nil {
-			ui.app.QueueUpdate(func() {
+			ui.queueUpdate(func() {
 				ui.setStatusDirect("[%s]Error refreshing cases after create: %v[-:-:-]", ui.theme.TagError, err)
 			})
 		} else {
 			// 3) Finalize UI updates and auto-select the newly created case
-			ui.app.QueueUpdateDraw(func() {
+			ui.queueUpdate(func() {
 				// Set selection to the new case
 				ui.selectedCaseID = caseID
 				// Find the sidebar index for the new case (cases list only; ALL EVENTS is separate)
@@ -3332,12 +3647,19 @@ func (ui *UI) createCaseWithEvents(title, description, severity, assignedTo stri
 					ui.sidebar.SetCurrentItem(targetIndex)
 				}
 				// Load events for the new case asynchronously
-				go ui.loadCaseEvents()
+				ui.spawnLoad(ui.loadCaseEvents)
 
-				if errorCount > 0 {
-					ui.setStatusDirect("[%s]Case created with %d events (%d errors)[-:-:-]", ui.theme.TagWarning, successCount, errorCount)
-				} else {
-					ui.setStatusDirect("[%s]Case created successfully with %d events[-:-:-]", ui.theme.TagSuccess, successCount)
+				switch {
+				case errorCount > 0:
+					ui.setStatusDirect("[%s]Case created with %s (%d could not be attached)[-:-:-]",
+						ui.theme.TagWarning, plural(successCount, "event"), errorCount)
+				case successCount == 0:
+					// Not "with 0 events", which reads as a failure. An empty
+					// case is what this key does on the Cases screen.
+					ui.setStatusDirect("[%s]Case created[-:-:-]", ui.theme.TagSuccess)
+				default:
+					ui.setStatusDirect("[%s]Case created with %s[-:-:-]",
+						ui.theme.TagSuccess, plural(successCount, "event"))
 				}
 			})
 		}
@@ -3379,19 +3701,19 @@ func (ui *UI) addEventsToCase(caseNumberStr string) {
 
 		// Refresh UI without blocking the UI goroutine on DB calls
 		// 1) Clear selections and show immediate status on UI thread
-		ui.app.QueueUpdate(func() {
+		ui.queueUpdate(func() {
 			ui.selectedEventIDs = make(map[string]bool)
 			ui.setStatusDirect("[%s]Updating cases...[-:-:-]", ui.theme.TagWarning)
 		})
 
 		// 2) Refresh cases off the UI thread
 		if err := ui.refreshCases(); err != nil {
-			ui.app.QueueUpdate(func() {
+			ui.queueUpdate(func() {
 				ui.setStatusDirect("[%s]Error refreshing cases after add: %v[-:-:-]", ui.theme.TagError, err)
 			})
 		} else {
 			// 3) Finalize UI updates; keep or reselect the target case and reload its events
-			ui.app.QueueUpdateDraw(func() {
+			ui.queueUpdate(func() {
 				// Ensure the selected case remains the target one
 				ui.selectedCaseID = selectedCase.ID
 				// Find and set the sidebar index for the selected case (+1 for ALL EVENTS)
@@ -3406,7 +3728,7 @@ func (ui *UI) addEventsToCase(caseNumberStr string) {
 					ui.sidebar.SetCurrentItem(targetIndex)
 				}
 				// Reload events for the selected case
-				go ui.loadCaseEvents()
+				ui.spawnLoad(ui.loadCaseEvents)
 
 				if errorCount > 0 {
 					ui.setStatusDirect("[%s]Added %d events to case (%d errors)[-:-:-]", ui.theme.TagWarning, successCount, errorCount)
@@ -3512,8 +3834,7 @@ func (ui *UI) showCombinedFilterModal() {
 			ui.showMultiSelectModal("Select Severities", []string{"critical", "high", "medium", "low", "informational"}, customSev, form, func(sel map[string]bool) {
 				customSev = sel
 				sevDD.SetCurrentOption(6)
-				ui.app.SetRoot(form, true)
-				ui.app.SetFocus(form)
+				ui.overlayForm(form, 64)
 			})
 		}
 	})
@@ -3560,8 +3881,7 @@ func (ui *UI) showCombinedFilterModal() {
 			ui.showMultiSelectModal("Select Categories", selectable, customType, form, func(sel map[string]bool) {
 				customType = sel
 				typeDD.SetCurrentOption(customTypeIdx)
-				ui.app.SetRoot(form, true)
-				ui.app.SetFocus(form)
+				ui.overlayForm(form, 64)
 			})
 		}
 	})
@@ -3671,7 +3991,7 @@ func (ui *UI) showCombinedFilterModal() {
 
 		ui.restoreMainLayout()
 		ui.setStatusDirect("[%s]Applying filters...[-:-:-]", ui.theme.TagAccent)
-		go ui.scheduleEventsReload("filter:ApplyCombinedDropdown")
+		ui.spawnLoad(func() { ui.scheduleEventsReload("filter:ApplyCombinedDropdown") })
 	})
 	form.AddButton("Clear", func() {
 		ui.restoreMainLayout()
@@ -3691,9 +4011,7 @@ func (ui *UI) showCombinedFilterModal() {
 		return ev
 	})
 
-	ui.lastFocus = ui.app.GetFocus()
-	ui.app.SetRoot(form, true)
-	ui.app.SetFocus(form)
+	ui.overlayForm(form, 64)
 	ui.setStatusDirect("[%s]Tab/Shift+Tab: navigate • Enter: open dropdown • Apply/Clear/Cancel at bottom[-:-:-]", ui.theme.TagAccent)
 }
 
@@ -3734,7 +4052,7 @@ func (ui *UI) clearCurrentContextFilters() {
 	ui.filterEnd = time.Time{}
 
 	ui.setStatusDirect("[%s]Filters cleared for current context[-:-:-]", ui.theme.TagAccent)
-	go ui.scheduleEventsReload("filter:ClearCombined")
+	ui.spawnLoad(func() { ui.scheduleEventsReload("filter:ClearCombined") })
 }
 
 // showMultiSelectModal opens a checkbox modal for multi-select and returns to a parent primitive on close.
@@ -3783,24 +4101,23 @@ func (ui *UI) showMultiSelectModal(title string, options []string, initial map[s
 		return ev
 	})
 
-	ui.app.SetRoot(form, true)
-	ui.app.SetFocus(form)
+	ui.overlayForm(form, 64)
 }
 
 // scheduleEventsReload coordinates safe event reloads after actions like filter Apply/Clear.
 // It resets a stuck loading flag, logs context, and dispatches the appropriate loader.
 func (ui *UI) scheduleEventsReload(source string) {
-	le := atomic.LoadInt32(&ui.loadingEvents)
-	last := atomic.LoadInt64(&ui.lastLoadStart)
-	var sinceStr string
-	if last != 0 {
-		sinceStr = time.Since(time.Unix(0, last)).String()
-	} else {
-		sinceStr = "n/a"
+	sinceStr := "n/a"
+	if d := ui.eventsLoad.startedAgo(); d > 0 {
+		sinceStr = d.String()
+	}
+	le := 0
+	if ui.eventsLoad.busyNow() {
+		le = 1
 	}
 
 	if ui.logger != nil {
-		ui.logger.Debug("scheduleEventsReload: source=%s showFindings=%v showAll=%v selectedCaseID=%s filterStart=%v filterEnd=%v loadingEvents=%d lastLoadAgo=%s filterApplying=%d",
+		ui.logger.Debug("scheduleEventsReload: source=%s showFindings=%v showAll=%v selectedCaseID=%s filterStart=%v filterEnd=%v eventsBusy=%d lastLoadAgo=%s filterApplying=%d",
 			source, ui.showFindings, ui.showAll, ui.selectedCaseID, ui.filterStart, ui.filterEnd, le, sinceStr, atomic.LoadInt32(&ui.filterApplying))
 	}
 
@@ -3810,19 +4127,16 @@ func (ui *UI) scheduleEventsReload(source string) {
 			ui.logger.Printf("scheduleEventsReload: deferring reload until current load completes")
 		}
 		go func() {
-			deadline := time.Now().Add(3 * time.Second)
-			for atomic.LoadInt32(&ui.loadingEvents) == 1 && time.Now().Before(deadline) {
+			deadline := time.Now().Add(loadWatchdog)
+			for ui.eventsLoad.busyNow() && time.Now().Before(deadline) {
 				time.Sleep(100 * time.Millisecond)
 			}
-			// If still busy after deadline, consider it stuck and reset.
-			if atomic.LoadInt32(&ui.loadingEvents) == 1 {
-				started := time.Unix(0, atomic.LoadInt64(&ui.lastLoadStart))
-				if started.IsZero() || time.Since(started) > 3*time.Second {
+			// If still busy after the deadline, consider it stuck and reclaim.
+			if ui.eventsLoad.busyNow() {
+				if ui.eventsLoad.reclaimIfStuck() {
 					if ui.logger != nil {
-						ui.logger.Printf("scheduleEventsReload: force-resetting stuck loadingEvents (since=%v)", started)
+						ui.logger.Printf("scheduleEventsReload: reclaimed a stuck events load")
 					}
-					atomic.StoreInt32(&ui.loadingEvents, 0)
-					atomic.StoreInt64(&ui.lastLoadStart, 0)
 				}
 			}
 			// Now dispatch
@@ -3830,12 +4144,12 @@ func (ui *UI) scheduleEventsReload(source string) {
 				if ui.logger != nil {
 					ui.logger.Printf("scheduleEventsReload: dispatching deferred loadCaseEvents")
 				}
-				go ui.loadCaseEvents()
+				ui.spawnLoad(ui.loadCaseEvents)
 			} else {
 				if ui.logger != nil {
 					ui.logger.Printf("scheduleEventsReload: dispatching deferred loadAllEvents")
 				}
-				go ui.loadAllEvents()
+				ui.spawnLoad(ui.loadAllEvents)
 			}
 		}()
 		return
@@ -3846,12 +4160,12 @@ func (ui *UI) scheduleEventsReload(source string) {
 		if ui.logger != nil {
 			ui.logger.Printf("scheduleEventsReload: dispatching immediate loadCaseEvents")
 		}
-		go ui.loadCaseEvents()
+		ui.spawnLoad(ui.loadCaseEvents)
 	} else {
 		if ui.logger != nil {
 			ui.logger.Printf("scheduleEventsReload: dispatching immediate loadAllEvents")
 		}
-		go ui.loadAllEvents()
+		ui.spawnLoad(ui.loadAllEvents)
 	}
 }
 
@@ -3910,62 +4224,48 @@ func parseFlexibleTime(input string, now time.Time) (time.Time, error) {
 // loadAllEvents loads all events across all cases (respects time filters if set)
 func (ui *UI) loadAllEvents() {
 	// Prevent concurrent loads
-	if !atomic.CompareAndSwapInt32(&ui.loadingEvents, 0, 1) {
+	if !ui.eventsLoad.begin() {
 		if ui.logger != nil {
 			ui.logger.Println("loadAllEvents: already loading, skipping")
 		}
 		return
 	}
-	atomic.StoreInt64(&ui.lastLoadStart, time.Now().UnixNano())
-	defer func() {
-		atomic.StoreInt32(&ui.loadingEvents, 0)
-		atomic.StoreInt64(&ui.lastLoadStart, 0)
-	}()
+	defer ui.eventsLoad.end()
 
 	defer func() {
 		if r := recover(); r != nil {
 			if ui.logger != nil {
 				ui.logger.Printf("panic in loadAllEvents: %v", r)
 			}
-			ui.setStatusDirect("[%s]Error loading all events (recovered)[-:-:-]", ui.theme.TagError)
+			ui.setStatus("[%s]Error loading all events (recovered)[-:-:-]", ui.theme.TagError)
 		}
 	}()
 
 	ui.logger.Println("Loading ALL events...")
-	if ui.logger != nil {
-		ui.logger.Printf("loadAllEvents: filterStart=%v filterEnd=%v", ui.filterStart, ui.filterEnd)
-	}
 	ui.setStatus("[%s]Loading ALL events...[-:-:-]", ui.theme.TagWarning)
 
 	// Run DB query with a short timeout to avoid UI freeze if DB is locked
 	ctx, cancel := context.WithTimeout(ui.ctx, 4*time.Second)
 	defer cancel()
 
-	var (
-		events []store.Event
-		err    error
-	)
+	// The query context, read once on the UI goroutine.
+	var plan eventQueryPlan
+	ui.queueUpdate(func() { plan = ui.planEventQuery(contextAll, "") })
+	if ui.logger != nil {
+		ui.logger.Printf("loadAllEvents: filterStart=%v filterEnd=%v", plan.start, plan.end)
+	}
 
-	// Resolve per-context query state for ALL and bridge time filters from legacy fields
-	s := ui.getOrInitState(contextAll)
-	if s.filterStart.IsZero() && !ui.filterStart.IsZero() {
-		s.filterStart = ui.filterStart
-	}
-	if s.filterEnd.IsZero() && !ui.filterEnd.IsZero() {
-		s.filterEnd = ui.filterEnd
-	}
-	sev := keysFromMap(s.filterSeverities)
-	typ := keysFromMap(s.filterTypes)
+	var events []store.Event
 
 	// Count total to compute pagination/clamp page index
-	total, err := ui.store.CountEventsFiltered(ctx, "", s.filterStart, s.filterEnd, sev, typ)
+	total, err := ui.store.CountEventsFiltered(ctx, "", plan.start, plan.end, plan.severities, plan.types)
 	if err != nil {
 		if ui.logger != nil {
 			ui.logger.Printf("Error counting ALL events: %v", err)
 		}
 		// Reset filter apply guard on failure
 		atomic.StoreInt32(&ui.filterApplying, 0)
-		ui.app.QueueUpdate(func() {
+		ui.queueUpdate(func() {
 			if ctx.Err() == context.DeadlineExceeded {
 				ui.setStatusDirect("[%s]Timed out counting ALL events (database busy)[-:-:-]", ui.theme.TagError)
 			} else {
@@ -3974,37 +4274,17 @@ func (ui *UI) loadAllEvents() {
 		})
 		return
 	}
-	s.totalCount = total
+	page, offset := pageOffset(total, plan.pageSize, plan.pageIndex)
 
-	// Clamp page index based on total
-	maxPages := 1
-	if s.pageSize > 0 {
-		maxPages = (s.totalCount + s.pageSize - 1) / s.pageSize
-		if maxPages == 0 {
-			maxPages = 1
-		}
-		if s.pageIndex >= maxPages {
-			s.pageIndex = maxPages - 1
-		}
-		if s.pageIndex < 0 {
-			s.pageIndex = 0
-		}
-	}
-
-	limit := s.pageSize
-	offset := 0
-	if limit > 0 {
-		offset = s.pageIndex * limit
-	}
-
-	events, err = ui.store.GetEventsFiltered(ctx, "", s.filterStart, s.filterEnd, sev, typ, limit, offset)
+	events, err = ui.store.GetEventsFiltered(ctx, "",
+		plan.start, plan.end, plan.severities, plan.types, plan.pageSize, offset)
 	if err != nil {
 		if ui.logger != nil {
 			ui.logger.Printf("Error loading ALL events: %v", err)
 		}
 		// Reset filter apply guard on failure
 		atomic.StoreInt32(&ui.filterApplying, 0)
-		ui.app.QueueUpdate(func() {
+		ui.queueUpdate(func() {
 			if ctx.Err() == context.DeadlineExceeded {
 				ui.setStatusDirect("[%s]Timed out loading ALL events (database busy)[-:-:-]", ui.theme.TagError)
 			} else {
@@ -4016,22 +4296,23 @@ func (ui *UI) loadAllEvents() {
 
 	if ui.logger != nil {
 		ui.logger.Printf("Loaded %d ALL events", len(events))
-		started := time.Unix(0, atomic.LoadInt64(&ui.lastLoadStart))
-		if !started.IsZero() {
-			ui.logger.Printf("loadAllEvents: query finished in %v; updating UI", time.Since(started))
+		if d := ui.eventsLoad.startedAgo(); d > 0 {
+			ui.logger.Printf("loadAllEvents: query finished in %v; updating UI", d)
 		}
 	}
 
 	// Update UI in main thread
-	ui.app.QueueUpdateDraw(func() {
+	ui.queueUpdate(func() {
+		ui.recordEventQuery(plan, total, page)
 		ui.selectedEventIDs = make(map[string]bool)
 		ui.events = events
 		ui.updateEventsList()
 
-		// Ensure the table is scrolled to the top and the first data row is selected.
+		// Ensure the table is scrolled to the top and the first *event* is
+		// selected — row 1 is a cluster header, not an event.
 		ui.eventList.SetOffset(0, 0)
 		if ui.eventList.GetRowCount() > 1 {
-			ui.eventList.Select(1, 0) // first data row (row 0 is header)
+			ui.selectFirstEvent()
 		} else {
 			ui.eventList.Select(0, 0) // header/no-data fallback
 		}
@@ -4052,7 +4333,7 @@ func (ui *UI) loadAllEvents() {
 				closeN++
 			}
 		}
-		ui.updateOverview(s.totalCount, totalCases, openN, invN, closeN)
+		ui.updateOverview(total, totalCases, openN, invN, closeN)
 
 		ui.setStatusDirect("[%s]Loaded %d events[-:-:-] (ALL EVENTS)", ui.theme.TagSuccess, len(events))
 		// Re-enable Apply after load completes
@@ -4106,7 +4387,7 @@ func (ui *UI) showDeleteCaseConfirm() {
 				ui.logger.Printf("DeleteCase: deleting caseID=%s (unassigning events)", caseID)
 			}
 			if err := ui.store.DeleteCaseAndUnassign(ui.ctx, caseID); err != nil {
-				ui.app.QueueUpdate(func() {
+				ui.queueUpdate(func() {
 					ui.restoreMainLayout()
 					ui.setStatusDirect("[%s]Error deleting case: %v[-:-:-]", ui.theme.TagError, err)
 				})
@@ -4115,7 +4396,7 @@ func (ui *UI) showDeleteCaseConfirm() {
 
 			// Refresh cases off the UI goroutine
 			if err := ui.refreshCases(); err != nil {
-				ui.app.QueueUpdate(func() {
+				ui.queueUpdate(func() {
 					ui.restoreMainLayout()
 					ui.setStatusDirect("[%s]Error refreshing cases after delete: %v[-:-:-]", ui.theme.TagError, err)
 				})
@@ -4123,12 +4404,12 @@ func (ui *UI) showDeleteCaseConfirm() {
 			}
 
 			// Finalize UI: select ALL EVENTS and reload
-			ui.app.QueueUpdateDraw(func() {
+			ui.queueUpdate(func() {
 				ui.restoreMainLayout()
 				ui.selectedCaseID = ""
 				ui.showAll = true
 				ui.app.SetFocus(ui.eventList)
-				go ui.loadAllEvents()
+				ui.spawnLoad(ui.loadAllEvents)
 				ui.setStatusDirect("[%s]Case deleted. Events moved to ALL EVENTS.[-:-:-]", ui.theme.TagSuccess)
 			})
 		}()
@@ -4143,138 +4424,50 @@ func (ui *UI) showDeleteCaseConfirm() {
 		return event
 	})
 
-	ui.lastFocus = ui.app.GetFocus()
-	ui.app.SetRoot(modal, true)
-	ui.app.SetFocus(modal)
+	ui.overlayPrimitive(modal)
 }
 
-// buildShortcutHints returns a colored, space-separated list of the most relevant
-// shortcuts based on current focus and UI state. It caps the list to a small,
-// readable set to avoid clutter. Ensures `?:help` is always shown and omits
-// `A:all events` when already in ALL EVENTS to free a slot.
+// buildShortcutHints is the right-hand half of the status bar: the keys the
+// screen you are on actually has.
+//
+// It used to choose them from which widget held focus, with a six-token cap and
+// a dead flag that made one branch unreachable. On Triage, Cases and Indicators
+// no relevant widget has focus, so all three fell through to the same six —
+// "Tab:panels" and "A:all events" on screens with neither, and nothing about
+// what those screens could do. The list now comes from the destination table,
+// beside the rail's label, so a key can only be advertised by naming the screen
+// that handles it.
 func (ui *UI) buildShortcutHints() string {
-	accent := ui.theme.TagAccent
+	hints := ui.screenHints()
 
-	// Snapshot focus safely
-	var focused tview.Primitive
-	if ui.app != nil {
-		focused = ui.app.GetFocus()
-	}
-	inEvents := focused == ui.eventList
-	inSidebar := focused == ui.sidebar
-	// The navigation rail is not focusable, so no hint is scoped to it. The
-	// digits work from every screen and are listed on the rail itself.
-	inAll := false
-
-	// Snapshot state
-	selectionCount := len(ui.selectedEventIDs)
-	caseSelected := ui.selectedCaseID != "" && !ui.showAll
-	id := ui.getContextID()
-	s := ui.getOrInitState(id)
-	filterActive := ui.activeFilterTag() != "" || len(s.filterSeverities) > 0 || len(s.filterTypes) > 0
-
-	type kv struct{ key, label string }
-	base := make([]kv, 0, 16)
-
-	// 1) Context-critical by focus/state
-	if inEvents {
-		base = append(base,
-			kv{"Space", "toggle"},
-			kv{"Ctrl+A", "all"},
-			kv{"Ctrl+D", "none"},
-		)
-		if selectionCount > 0 {
-			base = append(base,
-				kv{"d", "delete"},
-				kv{"c", "new case"},
-				kv{"a", "add to case"},
-			)
+	// What is true right now rather than always, appended after the screen's
+	// own keys so the fixed part of the bar does not move as state changes.
+	if ui.hasEventsContext() {
+		if len(ui.selectedEventIDs) > 0 {
+			hints = append(hints,
+				keyHint{"d", "delete"},
+				keyHint{"c", "new case"},
+				keyHint{"a", "add to case"})
 		}
-		base = append(base,
-			kv{"N", "next"},
-			kv{"P", "prev"},
-		)
-	}
-	if inSidebar && caseSelected {
-		base = append(base,
-			kv{"Enter", "open"},
-			kv{"d", "delete"},
-		)
-	}
-	if inAll {
-		base = append(base, kv{"Enter", "load"})
-	}
-
-	// 2) Filters
-	base = append(base, kv{"f", "filter"})
-	if filterActive {
-		base = append(base, kv{"F", "clear"})
-	}
-	// Also surface clear when Cases sidebar filters are active
-	if inSidebar {
-		caseFilterActive := ui.caseFilterName != "" || len(ui.caseFilterStatuses) > 0 || len(ui.caseFilterSeverities) > 0
-		if caseFilterActive {
-			base = append(base, kv{"F", "clear"})
+		if ui.activeFilterTag() != "" {
+			hints = append(hints, keyHint{"F", "clear"})
 		}
 	}
-
-	// 3) Global essentials (without help; help will be pinned)
-	base = append(base,
-		kv{"Tab", "panels"},
-		kv{"A", "all events"},
-		kv{"r", "refresh"},
-		kv{"q", "quit"},
-	)
-
-	// 4) Theme (lowest priority)
-	base = append(base,
-		kv{"t", "theme"},
-	)
-
-	// Post-process:
-	// - Omit "A" when already in ALL EVENTS to free a slot.
-	// - Pin help so it's always visible.
-	final := make([]kv, 0, 16)
-	seen := map[string]bool{}
-
-	// Always start with help, under the key the rail and every screen footer
-	// advertise. This strip said "h:help" while the footer beside it said
-	// "? Help" — two answers to the same question, on screen at once.
-	final = append(final, kv{"?", "help"})
-	seen["?"] = true
-
-	for _, h := range base {
-		if h.key == "A" && ui.showAll {
-			continue
-		}
-		if seen[h.key] {
-			continue
-		}
-		final = append(final, h)
-		seen[h.key] = true
-	}
-
-	// Cap to 6 tokens
-	const maxTokens = 6
-	if len(final) > maxTokens {
-		final = final[:maxTokens]
-	}
-
-	var sb strings.Builder
-	for i, h := range final {
-		if i > 0 {
-			sb.WriteString(" ")
-		}
-		sb.WriteString(fmt.Sprintf("[%s]%s[-]:%s", accent, h.key, h.label))
-	}
-	return sb.String()
+	return actionBar(ui.theme, hints...)
 }
 
-// buildStatusMain augments the base message with compact badges such as Case title,
-// selection count, time filter, severity/type filters, and pagination. It returns a single inline string.
 func (ui *UI) buildStatusMain(message string) string {
 	accent := ui.theme.TagAccent
 	parts := []string{message}
+
+	// Every badge below describes an events context: which case is open, how
+	// many events are selected, which page of them is showing. Only the Events
+	// screen has one. They were drawn everywhere — "Page:1/1 Tot:25" under the
+	// Cases list, and "Tot:0" under a Triage queue holding two hundred findings,
+	// because the findings context's total is never written.
+	if !ui.hasEventsContext() {
+		return message
+	}
 
 	// Case badge
 	if !ui.showAll && ui.selectedCaseID != "" {
@@ -4410,7 +4603,7 @@ func (ui *UI) showDeleteEventsConfirm(ids []string) {
 		// Run deletion in background
 		go func(idsCopy []string) {
 			if err := ui.store.DeleteEvents(ui.ctx, idsCopy); err != nil {
-				ui.app.QueueUpdate(func() {
+				ui.queueUpdate(func() {
 					ui.restoreMainLayout()
 					ui.setStatusDirect("[%s]Error deleting events: %v[-:-:-]", ui.theme.TagError, err)
 				})
@@ -4421,11 +4614,11 @@ func (ui *UI) showDeleteEventsConfirm(ids []string) {
 			_ = ui.refreshCases()
 
 			// Finalize UI: clear selections and reload current context
-			ui.app.QueueUpdateDraw(func() {
+			ui.queueUpdate(func() {
 				ui.restoreMainLayout()
 				ui.selectedEventIDs = make(map[string]bool)
 				// Reload events for current context
-				go ui.scheduleEventsReload("delete:events")
+				ui.spawnLoad(func() { ui.scheduleEventsReload("delete:events") })
 				ui.setStatusDirect("[%s]Deleted %d event(s)[-:-:-]", ui.theme.TagSuccess, len(idsCopy))
 			})
 		}(append([]string(nil), ids...))
@@ -4440,9 +4633,7 @@ func (ui *UI) showDeleteEventsConfirm(ids []string) {
 		return ev
 	})
 
-	ui.lastFocus = ui.app.GetFocus()
-	ui.app.SetRoot(modal, true)
-	ui.app.SetFocus(modal)
+	ui.overlayPrimitive(modal)
 }
 
 // Case Filter modal: filter cases by name (Title), status, and severity.
@@ -4573,7 +4764,7 @@ func (ui *UI) showCaseFilterModal() {
 
 		// Update UI in background to avoid deadlock
 		go func() {
-			ui.app.QueueUpdateDraw(func() {
+			ui.queueUpdate(func() {
 				ui.sidebar.Clear()
 				if len(ui.cases) > 0 {
 					for i, case_ := range ui.cases {
@@ -4617,9 +4808,7 @@ func (ui *UI) showCaseFilterModal() {
 		return ev
 	})
 
-	ui.lastFocus = ui.app.GetFocus()
-	ui.app.SetRoot(form, true)
-	ui.app.SetFocus(form)
+	ui.overlayForm(form, 64)
 	ui.setStatusDirect("[%s]Tab/Shift+Tab: navigate • Enter: open dropdown • Apply/Cancel at bottom[-:-:-]", ui.theme.TagAccent)
 }
 
@@ -4636,7 +4825,7 @@ func (ui *UI) clearCaseFilters() {
 	// Perform UI mutations in a single batch from a background goroutine to avoid deadlock
 	// when invoked from key handlers (e.g., Shift+F).
 	go func() {
-		ui.app.QueueUpdateDraw(func() {
+		ui.queueUpdate(func() {
 			// Rebuild sidebar directly (avoid nested QueueUpdate calls)
 			ui.sidebar.Clear()
 			if len(ui.cases) > 0 {
@@ -4724,26 +4913,7 @@ func (ui *UI) RefreshAllEventsAsync(source string) {
 		source = "live:auto"
 	}
 	// scheduleEventsReload handles re-entrancy, context, and dispatching the correct loader.
-	go ui.scheduleEventsReload(source)
-}
-
-// renderHeader draws the title bar. It is the single implementation: the header
-// used to be written out in full in two places, so a change to one silently
-// reverted the moment a theme was applied.
-func (ui *UI) renderHeader() {
-	if ui.appTitle == nil {
-		return
-	}
-	// The version block sits at the foot of the navigation rail, which is 22
-	// columns wide. Two lines, and the build date is gone: it did not fit beside
-	// the schema version, and of the three it is the one nobody reads. It is
-	// still in `console-ir version`.
-	ui.appTitle.SetText(fmt.Sprintf(
-		" [%s]Console-IR[-] [%s]%s[-]\n [%s]OCSF %s[-]",
-		ui.theme.TagAccent,
-		ui.theme.TagMuted, buildinfo.Display(ui.version),
-		ui.theme.TagMuted, ocsf.SchemaVersion(),
-	))
+	ui.spawnLoad(func() { ui.scheduleEventsReload(source) })
 }
 
 // SetIngestDir records the drop folder being watched, so empty-state hints name
@@ -4813,6 +4983,29 @@ func (ui *UI) applyRailVisibility() {
 // event loop picks the update up. Called before app.Run() has started — or from
 // a test, which never starts it — that is a deadlock, not a slow path. Running
 // fn directly in that case is safe precisely because nothing is drawing yet.
+// spawnLoad runs a load off the UI goroutine, tracked so a caller that needs
+// the result — or that is about to take the database away — can wait for it.
+//
+// Every screen entry starts a load and returns before it has run. Without a
+// handle on those goroutines a test cannot tell "the load has not started yet"
+// from "the load has finished", and the two look identical from outside.
+func (ui *UI) spawnLoad(fn func()) {
+	ui.loads.Add(1)
+	go func() {
+		defer ui.loads.Done()
+		fn()
+	}()
+}
+
+// waitForLoads blocks until no screen load is in flight.
+//
+// It is not called by the application: a load part-way through queueing a
+// repaint is waiting for the UI goroutine, so waiting on one from there would
+// deadlock. Tests call it before they let a store go away.
+func (ui *UI) waitForLoads() {
+	ui.loads.Wait()
+}
+
 func (ui *UI) queueUpdate(fn func()) {
 	if !ui.running.Load() {
 		fn()
@@ -4908,23 +5101,22 @@ func (ui *UI) triageStrip() *tview.TextView {
 
 func (ui *UI) renderTriageStrip() string {
 	t := ui.theme
-	if n := ui.triageSelection().count(); n > 0 {
-		return fmt.Sprintf("  [%s:-:b]%d selected[-:-:-]  %s", t.TagAccent, n, actionBar(t,
-			keyHint{"c", "Create case"},
-			keyHint{"a", "Add to case"},
-			keyHint{"s", "Status"},
-			keyHint{"v", "Verdict"},
-			keyHint{"x", "Clear"},
-		))
+
+	// Only the selection. The screen's keys are on the status bar, and this
+	// listed them a second time — two bars, one above the other, that between
+	// them offered "/" for a filter the other did not mention and disagreed
+	// about whether s and v were bulk actions.
+	n := ui.triageSelection().count()
+	if n == 0 {
+		return ""
 	}
-	return "  " + actionBar(t,
-		keyHint{"Enter", "Open"},
-		keyHint{"Space", "Select"},
-		keyHint{"s", "Status"},
-		keyHint{"v", "Verdict"},
-		keyHint{"e", "Escalate"},
-		keyHint{"/", "Filter"},
-	)
+	return fmt.Sprintf("  [%s:-:b]%s selected[-:-:-]  %s",
+		t.TagAccent, plural(n, "finding"), actionBar(t,
+			keyHint{"e", "escalate"},
+			keyHint{"s", "status"},
+			keyHint{"v", "verdict"},
+			keyHint{"x", "clear"},
+		))
 }
 
 // triageFilterState returns the filter, creating it on first use.
@@ -4954,9 +5146,6 @@ func (ui *UI) repaintTriageChrome() {
 }
 
 func (ui *UI) switchToAllEvents() {
-	ui.showFindings = false
-	ui.showAll = true
-	ui.selectedCaseID = ""
 	ui.restoreEventsView()
 
 	s := ui.getOrInitState(contextAll)
@@ -4974,19 +5163,11 @@ func (ui *UI) switchToAllEvents() {
 		SetTextColor(ui.theme.TableRowMuted))
 	ui.setStatusDirect("[%s]Loading ALL events...[-:-:-]", ui.theme.TagWarning)
 
-	if atomic.LoadInt32(&ui.loadingEvents) == 1 {
-		started := time.Unix(0, atomic.LoadInt64(&ui.lastLoadStart))
-		if started.IsZero() || time.Since(started) > 3*time.Second {
-			atomic.StoreInt32(&ui.loadingEvents, 0)
-			atomic.StoreInt64(&ui.lastLoadStart, 0)
-		}
-	}
-	go ui.loadAllEvents()
+	ui.eventsLoad.reclaimIfStuck()
+	ui.spawnLoad(ui.loadAllEvents)
 }
 
 func (ui *UI) switchToCases() {
-	ui.showFindings = false
-	ui.showAll = false
 	if len(ui.cases) == 0 {
 		// An empty Cases screen, not a bounce to Home. Sending the analyst
 		// somewhere else makes the key look broken — and now that the rail
@@ -5005,34 +5186,74 @@ func (ui *UI) switchToCases() {
 	// screen it is the content, and everywhere else it was furniture.
 	ui.casesPane = tview.NewFlex().SetDirection(tview.FlexColumn)
 	ui.casesPane.SetBackgroundColor(ui.theme.Bg)
-	ui.casesPane.AddItem(ui.sidebar, casesListWidth, 0, true)
+	ui.casesPane.AddItem(ui.sidebar, casesListWidth(ui.termWidth), 0, true)
 	ui.casesPane.AddItem(ui.buildCaseBriefingTab(ui.cases[0]), 0, 1, false)
+	ui.selectedCaseID = ui.cases[0].ID
+
+	// Moving down the list changes the briefing beside it.
+	//
+	// The list had no changed-handler at all, so the briefing was pinned to the
+	// first case. Its only swap path was a digit typed into the list — and the
+	// global capture claims 1 to 5 for navigation, so it worked for the sixth
+	// case onwards and for nothing anyone would find.
+	ui.sidebar.SetChangedFunc(func(index int, _, _ string, _ rune) {
+		// Guarded: updateCasesList calls Clear, which fires this with -1.
+		if !ui.onCases() || index < 0 || index >= len(ui.cases) {
+			return
+		}
+		ui.showCaseBriefing(ui.cases[index])
+	})
 
 	ui.setMainView(ui.casesPane)
 	ui.app.SetFocus(ui.sidebar)
 	if ui.sidebar.GetItemCount() > 0 {
 		ui.sidebar.SetCurrentItem(0)
 	}
+	// Rebuild the rows for the width in force now.
+	//
+	// The list is filled once at start-up, when the terminal's width is not yet
+	// known, and the titles are cut to fit it — so a wide terminal showed
+	// titles trimmed to the narrowest layout until something else refreshed
+	// the list.
+	//
+	// Rendered directly: this runs on the UI goroutine, and the queued form
+	// waits for a loop that is currently executing this function.
+	ui.renderCasesList()
 	ui.setStatusDirect("[%s]Cases • Enter opens a case · c creates one[-:-:-]", ui.theme.TagAccent)
 }
 
-// casesListWidth is the case list's width on the Cases screen.
-const casesListWidth = 38
+// The case list's width on the Cases screen.
+//
+// It was a fixed 38, which truncated "Suspected account compromise — m.chen"
+// mid-word — and the title is what the list is for. A third of the terminal,
+// bounded at both ends so a narrow terminal keeps a readable briefing beside
+// it and a very wide one does not hand the list half the screen.
+const (
+	casesListMin = 38
+	casesListMax = 64
+)
+
+func casesListWidth(termWidth int) int {
+	w := termWidth / 3
+	if w < casesListMin {
+		return casesListMin
+	}
+	if w > casesListMax {
+		return casesListMax
+	}
+	return w
+}
 
 // showCaseBriefing swaps the briefing pane to a different case, keeping the
 // list beside it. Without this the list could select a case it could not open.
 func (ui *UI) showCaseBriefing(c store.Case) {
+	ui.selectedCaseID = c.ID
 	if ui.casesPane == nil || ui.casesPane.GetItemCount() < 2 {
 		ui.setMainView(ui.buildCaseBriefingTab(c))
 		return
 	}
 	ui.casesPane.RemoveItem(ui.casesPane.GetItem(1))
 	ui.casesPane.AddItem(ui.buildCaseBriefingTab(c), 0, 1, false)
-}
-
-func (ui *UI) switchToIndicators() {
-	ui.setMainView(ui.buildCaseIndicatorsTab(ui.events))
-	ui.setStatusDirect("[%s]Indicators View • Cross-case observables & watchlists[-:-:-]", ui.theme.TagAccent)
 }
 
 func (ui *UI) switchToReports() {

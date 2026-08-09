@@ -30,7 +30,29 @@ func newTestHome(t *testing.T) (*homeView, *store.Store) {
 
 	ui := NewUI(ctx, st, nil, logging.New(io.Discard, logging.LevelError, "test"), "test")
 	h := newHomeView(ui)
-	t.Cleanup(h.close)
+	// As showAnalystHome does. Without it the application does not know the
+	// dashboard exists, and anything that reaches for the showing screen — the
+	// key router, applyTheme, currentFinding — silently skips it.
+	ui.home = h
+	ui.destination = destHome
+	// Close whichever view is live at cleanup, not this one.
+	//
+	// showAnalystHome replaces ui.home with a fresh view and starts its clock
+	// and refresh tickers; closing the original leaves the replacement querying
+	// a store whose temporary directory is being deleted out from under it.
+	t.Cleanup(func() {
+		if ui.home != nil {
+			ui.home.close()
+			ui.home.wait()
+		}
+		h.close()
+		h.wait()
+		// Anything the test triggered that entered another screen started a
+		// load there too. Left running, it writes through a store and a config
+		// directory that are about to be removed, and lands in whichever test
+		// set one up next.
+		ui.waitForLoads()
+	})
 	return h, st
 }
 
@@ -69,8 +91,6 @@ func TestHomeEmptyStates(t *testing.T) {
 
 	for _, want := range []string{
 		"No findings yet.",
-		"Press 3 to import events, or : then demo.",
-		"No active investigations.",
 		"no events yet",
 	} {
 		if !strings.Contains(joined, want) {
@@ -79,8 +99,31 @@ func TestHomeEmptyStates(t *testing.T) {
 	}
 
 	// The cards read zero rather than blank.
-	if !strings.Contains(joined, "00") {
+	if !strings.Contains(joined, "0") {
 		t.Errorf("metric cards do not show a zero count\n%s", joined)
+	}
+}
+
+// The empty queue has to name something that exists.
+//
+// It used to say "Press 3 to import events" — and 3 is Cases. There is no
+// import destination at all, so the one instruction the screen gave a new
+// install sent them somewhere that could not help.
+func TestHomeEmptyQueuePointsSomewhereReal(t *testing.T) {
+	h, _ := newTestHome(t)
+	h.loadAndRender(t)
+
+	joined := strings.Join(renderPrimitive(t, h.root, 140, 40), "\n")
+
+	if strings.Contains(joined, "Press 3 to import") {
+		t.Errorf("the empty queue still sends the analyst to Cases to import:\n%s", joined)
+	}
+	// Both routes that actually exist: the drop folder, named, and the command.
+	if !strings.Contains(joined, "console-ir ingest") {
+		t.Errorf("the empty queue does not name the ingest command:\n%s", joined)
+	}
+	if !strings.Contains(joined, "Drop OCSF") {
+		t.Errorf("the empty queue does not name the drop folder:\n%s", joined)
 	}
 }
 
@@ -96,7 +139,7 @@ func TestHomeCardsRenderTheirNumbers(t *testing.T) {
 	lines := renderPrimitive(t, h.root, 140, 40)
 	joined := strings.Join(lines, "\n")
 
-	if !strings.Contains(joined, "03") {
+	if !strings.Contains(joined, "3") {
 		t.Errorf("open findings card does not show the total\n%s", joined)
 	}
 	if !strings.Contains(joined, "2 critical · 1 high") {
@@ -164,7 +207,7 @@ func TestHomeOneFailingPanelDoesNotBlankTheScreen(t *testing.T) {
 		t.Errorf("the failing panel offers no retry\n%s", joined)
 	}
 	// The cards answered, so they still show their numbers.
-	if !strings.Contains(joined, "01") {
+	if !strings.Contains(joined, "1") {
 		t.Errorf("a failing queue blanked the metric cards\n%s", joined)
 	}
 	if !strings.Contains(joined, "EVIDENCE PULSE") {
@@ -172,9 +215,13 @@ func TestHomeOneFailingPanelDoesNotBlankTheScreen(t *testing.T) {
 	}
 }
 
-// The evidence pulse repeats the counts the evidence card shows. They come from
-// one query, and whichever panel painted last used to decide what each said.
-func TestHomePulseAgreesWithTheEvidenceCard(t *testing.T) {
+// The evidence numbers are stated once.
+//
+// They used to be on a card and again in a pulse panel four rows below it —
+// "0 events / 0 indicators" beside "events today 0   indicators 0" — fed by one
+// query, so whichever panel painted last decided what each said. The pulse is
+// now the card.
+func TestHomeStatesTheEvidenceCountsOnce(t *testing.T) {
 	h, st := newTestHome(t)
 
 	ev := &ocsf.Event{
@@ -195,19 +242,16 @@ func TestHomePulseAgreesWithTheEvidenceCard(t *testing.T) {
 	}
 
 	lines := renderPrimitive(t, h.root, 140, 40)
-	card, ok := findLine(lines, "indicators")
-	if !ok {
-		t.Fatal("no indicator count on screen")
-	}
-	pulse, ok := findLine(lines, "events today")
-	if !ok {
-		t.Fatal("no pulse on screen")
-	}
 
-	count := strings.TrimSpace(strings.Split(card, "indicators")[0])
-	count = count[strings.LastIndexAny(count, " │")+1:]
-	if !strings.Contains(pulse, count) {
-		t.Errorf("card says %q indicators, pulse line is %q", count, pulse)
+	var indicatorRows int
+	for _, l := range lines {
+		if strings.Contains(l, "indicators") {
+			indicatorRows++
+		}
+	}
+	if indicatorRows != 1 {
+		t.Errorf("the indicator count is on screen %d times, want once:\n%s",
+			indicatorRows, strings.Join(lines, "\n"))
 	}
 }
 
@@ -261,13 +305,12 @@ func TestHomeResponsiveTiers(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		width, height int
-		wantRecent    bool
-		wantPulse     bool
+		wantInspector bool
 	}{
-		{"wide", 140, 40, true, true},
-		{"standard", 100, 30, true, true},
-		{"compact", 79, 24, false, false},
-		{"short", 100, 20, true, false},
+		{"wide", 140, 40, true},
+		{"standard", 100, 30, true},
+		{"compact", 79, 24, false},
+		{"short", 100, 20, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, st := newTestHome(t)
@@ -280,12 +323,12 @@ func TestHomeResponsiveTiers(t *testing.T) {
 			lines := renderPrimitive(t, h.root, tc.width, tc.height)
 			joined := strings.Join(lines, "\n")
 
-			// The queue and the footer survive every width.
+			// The queue survives every width — without it the screen has
+			// nothing to act on. The keys are no longer Home's to draw: they
+			// live on the one status bar the whole application shares, which
+			// TestStatusBarOnHomeShowsHomesKeys covers.
 			if !strings.Contains(joined, "PRIORITY QUEUE") {
 				t.Errorf("%s dropped the priority queue\n%s", tc.name, joined)
-			}
-			if _, ok := findLine(lines, "Enter Open"); !ok {
-				t.Errorf("%s dropped the action bar\n%s", tc.name, joined)
 			}
 			// All five findings stay readable.
 			for _, uid := range []string{"finding a", "finding e"} {
@@ -294,11 +337,8 @@ func TestHomeResponsiveTiers(t *testing.T) {
 				}
 			}
 
-			if got := strings.Contains(joined, "RECENT CASES"); got != tc.wantRecent {
-				t.Errorf("%s recent cases shown = %v, want %v", tc.name, got, tc.wantRecent)
-			}
-			if got := strings.Contains(joined, "EVIDENCE PULSE"); got != tc.wantPulse {
-				t.Errorf("%s evidence pulse shown = %v, want %v", tc.name, got, tc.wantPulse)
+			if got := strings.Contains(joined, "SELECTED FINDING"); got != tc.wantInspector {
+				t.Errorf("%s inspector shown = %v, want %v", tc.name, got, tc.wantInspector)
 			}
 
 			// Nothing overflows its terminal.
@@ -312,9 +352,9 @@ func TestHomeResponsiveTiers(t *testing.T) {
 }
 
 // A panel whose bottom border is off screen is a panel that has lost a row of
-// content. The pulse is the one that gets squeezed, and the row it loses is the
-// one carrying the last event time.
-func TestHomePulseIsNeverClipped(t *testing.T) {
+// content. The pulse card is two rows and the second one carries the pipeline
+// state, which is the half worth having.
+func TestHomePulseCardIsNeverClipped(t *testing.T) {
 	for _, size := range [][2]int{{140, 40}, {120, 32}, {100, 30}, {100, 29}, {90, 26}} {
 		h, st := newTestHome(t)
 		if _, err := st.SaveEvent(context.Background(), &ocsf.Event{
@@ -332,8 +372,8 @@ func TestHomePulseIsNeverClipped(t *testing.T) {
 		if !strings.Contains(joined, "EVIDENCE PULSE") {
 			continue // legitimately dropped at this size
 		}
-		if !strings.Contains(joined, "last event") {
-			t.Errorf("%dx%d: the pulse is clipped and lost its second row\n%s",
+		if !strings.Contains(joined, "last") && !strings.Contains(joined, "watching") {
+			t.Errorf("%dx%d: the pulse card is clipped and lost its second row\n%s",
 				size[0], size[1], joined)
 		}
 	}
@@ -350,5 +390,129 @@ func TestHumanCount(t *testing.T) {
 		if got := humanCount(tc.in); got != tc.want {
 			t.Errorf("humanCount(%d) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// A dashboard checked ten times a shift has to say which findings are new since
+// the last look — otherwise every glance re-reads the same queue.
+func TestHomeMarksFindingsSinceTheLastVisit(t *testing.T) {
+	h, st := newTestHome(t)
+
+	// The previous visit was an hour ago; this finding arrived just now.
+	h.ui.markSince = time.Now().Add(-time.Hour)
+	seedTestFinding(t, st, "fresh", 90, ocsf.SeverityCritical, ocsf.FindingStatusNew)
+	h.loadAndRender(t)
+
+	joined := strings.Join(renderPrimitive(t, h.root, 140, 40), "\n")
+	if !strings.Contains(joined, "•") {
+		t.Errorf("a finding newer than the last visit is not marked:\n%s", joined)
+	}
+}
+
+// Against the previous visit, not against now: comparing with now would unmark
+// everything ten seconds after opening, when the first refresh landed.
+func TestHomeDoesNotMarkOlderFindings(t *testing.T) {
+	h, st := newTestHome(t)
+
+	seedTestFinding(t, st, "old", 90, ocsf.SeverityCritical, ocsf.FindingStatusNew)
+	h.ui.markSince = time.Now().Add(time.Hour) // everything predates this visit
+	h.loadAndRender(t)
+
+	joined := strings.Join(renderPrimitive(t, h.root, 140, 40), "\n")
+	if strings.Contains(joined, "•") {
+		t.Errorf("a finding older than the last visit is marked as new:\n%s", joined)
+	}
+}
+
+// A first run has no previous visit. Marking the whole queue marks nothing.
+func TestHomeMarksNothingOnAFirstRun(t *testing.T) {
+	h, st := newTestHome(t)
+	seedTestFinding(t, st, "a", 90, ocsf.SeverityCritical, ocsf.FindingStatusNew)
+	h.ui.markSince = time.Time{}
+	h.loadAndRender(t)
+
+	joined := strings.Join(renderPrimitive(t, h.root, 140, 40), "\n")
+	if strings.Contains(joined, "•") {
+		t.Errorf("a first run marked findings as new:\n%s", joined)
+	}
+}
+
+// Opening Home banks the clock: what was new this visit is not new the next.
+func TestOpeningHomeAdvancesTheVisitClock(t *testing.T) {
+	h, _ := newTestHome(t)
+	before := time.Now()
+
+	h.ui.showAnalystHome()
+
+	if h.ui.lastVisit.Before(before) {
+		t.Errorf("lastVisit = %v, want it moved to now", h.ui.lastVisit)
+	}
+	// And the persisted copy survives a reload, or the mark resets every launch.
+	if got := loadUISettings().LastVisit; got.IsZero() {
+		t.Error("the visit clock was not persisted")
+	}
+}
+
+// Changing the theme must recolour the dashboard, not just the chrome round it.
+//
+// Home builds its own widgets from the theme it was constructed with, so the
+// application's applyTheme never reached them: pressing the theme key on the
+// dashboard recoloured the navigation rail and the status bar around a
+// dashboard still drawn in the old palette.
+func TestHomeFollowsAThemeChange(t *testing.T) {
+	h, st := newTestHome(t)
+	// Otherwise every theme resolves to themeBasic and the test compares a
+	// palette with itself.
+	h.ui.hasTrueColor = true
+	h.ui.setTheme("gruvbox")
+	seedTestFinding(t, st, "a", 90, ocsf.SeverityCritical, ocsf.FindingStatusNew)
+	h.loadAndRender(t)
+
+	before := h.queue.GetBackgroundColor()
+
+	h.ui.setTheme("light")
+
+	if h.queue.GetBackgroundColor() == before {
+		t.Errorf("the queue kept its old background through a theme change: %v", before)
+	}
+	if got := h.inspector.GetBackgroundColor(); got != h.ui.theme.Surface {
+		t.Errorf("the inspector background = %v, want the new theme's %v", got, h.ui.theme.Surface)
+	}
+}
+
+// And it must not cost the analyst their place. Recolouring is not a reason to
+// lose the cursor, the selected finding, or the record of what was new.
+func TestAThemeChangeKeepsTheSelection(t *testing.T) {
+	h, st := newTestHome(t)
+	for i, uid := range []string{"a", "b", "c"} {
+		seedTestFinding(t, st, uid, 90-i*10, ocsf.SeverityCritical, ocsf.FindingStatusNew)
+	}
+	h.loadAndRender(t)
+	h.queue.Select(2, 0)
+	want := h.selectedFinding()
+	h.ui.markSince = time.Now().Add(-time.Hour)
+	h.ui.hasTrueColor = true
+
+	h.ui.setTheme("light")
+
+	if row, _ := h.queue.GetSelection(); row != 2 {
+		t.Errorf("the cursor moved to row %d during a theme change", row)
+	}
+	if got := h.selectedFinding(); got == nil || want == nil || got.ID != want.ID {
+		t.Error("the selected finding was lost to a theme change")
+	}
+	if h.ui.markSince.IsZero() {
+		t.Error("a theme change cleared the record of what was new")
+	}
+}
+
+// The key has to be on screen. It was bound, it worked, and the only place it
+// was written down was a description inside the command palette.
+func TestStatusBarAdvertisesTheThemeKey(t *testing.T) {
+	h, _ := newTestHome(t)
+	h.ui.showAnalystHome()
+
+	if got := stripTags(h.ui.composeStatus("Analyst Home")); !strings.Contains(got, "t theme") {
+		t.Errorf("the theme key is not advertised:\n%s", got)
 	}
 }
