@@ -8,6 +8,7 @@ import (
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
+	"github.com/gdamore/tcell/v2"
 )
 
 // seedTriageFinding writes a finding carrying everything the inspector reads,
@@ -194,5 +195,97 @@ func TestTriageInspectorPaintsBeforeItsContextArrives(t *testing.T) {
 	}
 	if !strings.Contains(got, "…") {
 		t.Errorf("the pending indicators are not marked as still loading:\n%s", got)
+	}
+}
+
+// Marked findings are what the bulk keys act on.
+//
+// Space marks findings in ui.triageSelection, keyed by finding uid so a mark
+// survives a refilter. But c, a, d, Ctrl+A and Ctrl+D all read
+// ui.selectedEventIDs — the *events* screen's map — so with three findings
+// marked the strip said "3 selected" and c answered "No events selected. Use
+// Space to select events first."
+func TestTriageBulkKeysActOnTheMarkedFindings(t *testing.T) {
+	ui, st := newTestUI(t)
+	for _, uid := range []string{"a", "b", "c"} {
+		seedTriageFinding(t, st, uid, "")
+	}
+	ui.enterScreen(destTriage)
+	awaitIdle(t, ui)
+	if len(ui.findings) != 3 {
+		t.Fatalf("loaded %d findings, want 3", len(ui.findings))
+	}
+
+	sel := ui.triageSelection()
+	for _, f := range ui.findings[:2] {
+		sel.toggle(f.FindingUID)
+	}
+
+	got := ui.triageTargets()
+	if len(got) != 2 {
+		t.Fatalf("the bulk keys would act on %d findings, want the 2 marked", len(got))
+	}
+	// And it is the marked ones, not the first two rows by accident.
+	marked := map[string]bool{ui.findings[0].FindingUID: true, ui.findings[1].FindingUID: true}
+	for _, f := range got {
+		if !marked[f.FindingUID] {
+			t.Errorf("target %q was not marked", f.FindingUID)
+		}
+	}
+}
+
+// With nothing marked, the bulk keys act on the cursor row — so a key does
+// something useful without a selection first.
+func TestTriageBulkKeysFallBackToTheCursor(t *testing.T) {
+	ui, st := newTestUI(t)
+	seedTriageFinding(t, st, "only", "")
+	ui.enterScreen(destTriage)
+	awaitIdle(t, ui)
+	ui.eventList.Select(1, 0)
+
+	got := ui.triageTargets()
+	if len(got) != 1 {
+		t.Fatalf("with nothing marked the keys act on %d findings, want the cursor's one", len(got))
+	}
+	if got[0].FindingUID != "only" {
+		t.Errorf("acted on %q, want the finding under the cursor", got[0].FindingUID)
+	}
+}
+
+// Ctrl+A marks everything loaded; Ctrl+D clears it. Both used to reach into the
+// events map and report nothing selected.
+func TestTriageSelectAllAndClear(t *testing.T) {
+	ui, st := newTestUI(t)
+	for _, uid := range []string{"a", "b", "c"} {
+		seedTriageFinding(t, st, uid, "")
+	}
+	ui.enterScreen(destTriage)
+	awaitIdle(t, ui)
+
+	ui.triageKeys(tcell.NewEventKey(tcell.KeyCtrlA, 0, tcell.ModNone))
+	if got := ui.triageSelection().count(); got != 3 {
+		t.Errorf("Ctrl+A marked %d findings, want 3", got)
+	}
+
+	ui.triageKeys(tcell.NewEventKey(tcell.KeyCtrlD, 0, tcell.ModNone))
+	if got := ui.triageSelection().count(); got != 0 {
+		t.Errorf("Ctrl+D left %d findings marked, want none", got)
+	}
+}
+
+// Triage claims its keys, and passes on what it does not own.
+func TestTriageOwnsItsBulkKeys(t *testing.T) {
+	ui, _ := newTestUI(t)
+	ui.destination = destTriage
+
+	for _, r := range []rune{'c', 'a', 'e', 's', 'v'} {
+		if ui.triageKeys(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone)) != nil {
+			t.Errorf("Triage did not claim %q, so a global binding takes it", r)
+		}
+	}
+	for _, r := range []rune{'1', '2', '3', ':', '?', 'q'} {
+		if ui.triageKeys(tcell.NewEventKey(tcell.KeyRune, r, tcell.ModNone)) == nil {
+			t.Errorf("Triage swallowed %q, which belongs to global navigation", r)
+		}
 	}
 }

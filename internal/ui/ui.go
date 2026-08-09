@@ -1250,7 +1250,54 @@ func (ui *UI) screenKeys() func(*tcell.EventKey) *tcell.EventKey {
 //
 // Reports is deliberately absent: it is a static panel with no keys of its own.
 
-func (ui *UI) triageKeys(ev *tcell.EventKey) *tcell.EventKey { return ev }
+// triageKeys are the queue's own.
+//
+// Everything here would otherwise be handled globally against the wrong state:
+// c, a and Ctrl+A/Ctrl+D read the events selection map, so they answered "No
+// events selected" with findings marked; s and v acted on the cursor row only
+// while the strip above them advertised them as bulk actions.
+func (ui *UI) triageKeys(ev *tcell.EventKey) *tcell.EventKey {
+	switch ev.Key() {
+	case tcell.KeyCtrlA:
+		ui.selectAllFindings()
+		return nil
+	case tcell.KeyCtrlD:
+		ui.triageSelection().clear()
+		ui.updateFindingsList(ui.findingsTotal)
+		ui.repaintTriageChrome()
+		return nil
+	case tcell.KeyRune:
+		switch ev.Rune() {
+		case 'c', 'a':
+			// One flow, not two. Escalation already offers "create a new case"
+			// beside every existing one, so a separate add-to-case key would be
+			// the same form with one option removed.
+			ui.escalateFindings(ui.triageTargets())
+			return nil
+		case 'e':
+			ui.escalateFindings(ui.triageTargets())
+			return nil
+		case 's', 'S':
+			ui.showFindingStatusModal()
+			return nil
+		case 'v':
+			ui.showFindingVerdictModal()
+			return nil
+		}
+	}
+	return ev
+}
+
+// selectAllFindings marks every finding currently loaded.
+func (ui *UI) selectAllFindings() {
+	sel := ui.triageSelection()
+	for _, f := range ui.findings {
+		sel.ids[f.FindingUID] = true
+	}
+	ui.updateFindingsList(ui.findingsTotal)
+	ui.repaintTriageChrome()
+	ui.setStatusDirect("[%s]%s selected[-:-:-]", ui.theme.TagAccent, plural(sel.count(), "finding"))
+}
 
 func (ui *UI) eventsKeys(ev *tcell.EventKey) *tcell.EventKey { return ev }
 

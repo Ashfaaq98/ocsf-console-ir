@@ -494,13 +494,18 @@ func (ui *UI) appendFindingDetail(b *strings.Builder, f store.Finding) {
 	}
 }
 
-// showFindingStatusModal lets the analyst move a finding through triage.
+// showFindingStatusModal lets the analyst move findings through triage.
+//
+// It acts on the marked findings when any are marked, and on the cursor row
+// otherwise — which is what the selection strip above the queue has always
+// advertised, and what it never did.
 func (ui *UI) showFindingStatusModal() {
-	f, ok := ui.currentFinding()
-	if !ok {
+	targets := ui.triageTargets()
+	if len(targets) == 0 {
 		ui.setStatusDirect("[%s]No finding selected[-:-:-]", ui.theme.TagWarning)
 		return
 	}
+	f := targets[0]
 
 	statuses := ocsf.FindingStatuses(f.ClassUID)
 	labels := make([]string, len(statuses))
@@ -513,7 +518,7 @@ func (ui *UI) showFindingStatusModal() {
 	}
 
 	form := tview.NewForm()
-	form.SetTitle(" Set Finding Status ").SetBorder(true)
+	form.SetTitle(fmt.Sprintf(" Set Status · %s ", plural(len(targets), "finding"))).SetBorder(true)
 	ui.applyFormTheme(form)
 
 	selected := current
@@ -525,15 +530,29 @@ func (ui *UI) showFindingStatusModal() {
 		}
 		statusID := statuses[selected]
 		go func() {
-			if err := ui.store.UpdateFindingStatus(ui.ctx, f.ID, statusID); err != nil {
-				ui.queueUpdate(func() {
-					ui.setStatusDirect("[%s]Failed to set status: %v[-:-:-]", ui.theme.TagError, err)
-				})
-				return
+			done, failed := 0, 0
+			for _, target := range targets {
+				if err := ui.store.UpdateFindingStatus(ui.ctx, target.ID, statusID); err != nil {
+					failed++
+					continue
+				}
+				done++
 			}
 			ui.queueUpdate(func() {
-				ui.setStatusDirect("[%s]Status set to %s[-:-:-]",
-					ui.theme.TagSuccess, ocsf.FindingStatusName(f.ClassUID, statusID))
+				if done == 0 {
+					ui.setStatusDirect("[%s]Failed to set status on %s[-:-:-]",
+						ui.theme.TagError, plural(failed, "finding"))
+					return
+				}
+				ui.triageSelection().clear()
+				name := ocsf.FindingStatusName(f.ClassUID, statusID)
+				if failed > 0 {
+					ui.setStatusDirect("[%s]%s set to %s, %d could not be[-:-:-]",
+						ui.theme.TagWarning, plural(done, "finding"), name, failed)
+					return
+				}
+				ui.setStatusDirect("[%s]%s set to %s[-:-:-]",
+					ui.theme.TagSuccess, plural(done, "finding"), name)
 			})
 			ui.loadFindings()
 		}()
@@ -545,13 +564,15 @@ func (ui *UI) showFindingStatusModal() {
 	ui.app.SetFocus(form)
 }
 
-// showFindingVerdictModal records the analyst's true/false-positive judgement.
+// showFindingVerdictModal records the analyst's true/false-positive judgement,
+// on the marked findings or on the cursor row.
 func (ui *UI) showFindingVerdictModal() {
-	f, ok := ui.currentFinding()
-	if !ok {
+	targets := ui.triageTargets()
+	if len(targets) == 0 {
 		ui.setStatusDirect("[%s]No finding selected[-:-:-]", ui.theme.TagWarning)
 		return
 	}
+	f := targets[0]
 
 	verdicts := ocsf.Verdicts()
 	labels := make([]string, len(verdicts))
@@ -564,7 +585,7 @@ func (ui *UI) showFindingVerdictModal() {
 	}
 
 	form := tview.NewForm()
-	form.SetTitle(" Set Verdict ").SetBorder(true)
+	form.SetTitle(fmt.Sprintf(" Set Verdict · %s ", plural(len(targets), "finding"))).SetBorder(true)
 	ui.applyFormTheme(form)
 
 	selected := current
@@ -576,15 +597,29 @@ func (ui *UI) showFindingVerdictModal() {
 		}
 		verdictID := verdicts[selected]
 		go func() {
-			if err := ui.store.UpdateFindingVerdict(ui.ctx, f.ID, verdictID); err != nil {
-				ui.queueUpdate(func() {
-					ui.setStatusDirect("[%s]Failed to set verdict: %v[-:-:-]", ui.theme.TagError, err)
-				})
-				return
+			done, failed := 0, 0
+			for _, target := range targets {
+				if err := ui.store.UpdateFindingVerdict(ui.ctx, target.ID, verdictID); err != nil {
+					failed++
+					continue
+				}
+				done++
 			}
 			ui.queueUpdate(func() {
-				ui.setStatusDirect("[%s]Verdict set to %s[-:-:-]",
-					ui.theme.TagSuccess, ocsf.VerdictName(verdictID))
+				if done == 0 {
+					ui.setStatusDirect("[%s]Failed to set a verdict on %s[-:-:-]",
+						ui.theme.TagError, plural(failed, "finding"))
+					return
+				}
+				ui.triageSelection().clear()
+				name := ocsf.VerdictName(verdictID)
+				if failed > 0 {
+					ui.setStatusDirect("[%s]%s set to %s, %d could not be[-:-:-]",
+						ui.theme.TagWarning, plural(done, "finding"), name, failed)
+					return
+				}
+				ui.setStatusDirect("[%s]%s set to %s[-:-:-]",
+					ui.theme.TagSuccess, plural(done, "finding"), name)
 			})
 			ui.loadFindings()
 		}()
@@ -620,12 +655,43 @@ func (ui *UI) applyFormTheme(form *tview.Form) {
 // escalation makes it an investigation. The finding joins as a member — the
 // thing the case is *about* — while supporting events are attached separately
 // as evidence.
+// escalateFindingToCase escalates whatever the cursor is on.
 func (ui *UI) escalateFindingToCase() {
 	f, ok := ui.currentFinding()
 	if !ok {
 		ui.setStatusDirect("[%s]No finding selected[-:-:-]", ui.theme.TagWarning)
 		return
 	}
+	ui.escalateFindings([]store.Finding{f})
+}
+
+// triageTargets is what a bulk key should act on: the marked findings if any
+// are marked, otherwise the one under the cursor.
+//
+// The two were never connected. Space marks findings in ui.triageSelection,
+// keyed by finding uid so a mark survives a refilter — but c, a, d, Ctrl+A and
+// Ctrl+D all read ui.selectedEventIDs, which is the *events* screen's map. With
+// three findings marked, the strip said "3 selected" and c answered "No events
+// selected. Use Space to select events first."
+func (ui *UI) triageTargets() []store.Finding {
+	if sel := ui.triageSelection(); sel.count() > 0 {
+		if picked := sel.resolve(ui.findings); len(picked) > 0 {
+			return picked
+		}
+	}
+	if f, ok := ui.currentFinding(); ok {
+		return []store.Finding{f}
+	}
+	return nil
+}
+
+// escalateFindings attaches one or more findings to a case, new or existing.
+func (ui *UI) escalateFindings(findings []store.Finding) {
+	if len(findings) == 0 {
+		ui.setStatusDirect("[%s]No finding selected[-:-:-]", ui.theme.TagWarning)
+		return
+	}
+	f := findings[0]
 
 	existing, err := ui.store.ListCases(ui.ctx)
 	if err != nil {
@@ -634,7 +700,7 @@ func (ui *UI) escalateFindingToCase() {
 	}
 
 	form := tview.NewForm()
-	form.SetTitle(" Escalate Finding to Case ").SetBorder(true)
+	form.SetTitle(fmt.Sprintf(" Escalate %s to Case ", plural(len(findings), "finding"))).SetBorder(true)
 	ui.applyFormTheme(form)
 
 	// Offer the existing cases plus a new one, so a second detection in the same
@@ -687,22 +753,41 @@ func (ui *UI) escalateFindingToCase() {
 				caseID = id
 			}
 
-			if err := ui.store.AssignFindingToCase(ui.ctx, f.ID, caseID); err != nil {
+			// Attach every one of them, and report what did not land rather
+			// than stopping at the first failure with the rest unaccounted for.
+			attached, failed := 0, 0
+			for _, sel := range findings {
+				if err := ui.store.AssignFindingToCase(ui.ctx, sel.ID, caseID); err != nil {
+					failed++
+					continue
+				}
+				attached++
+				// Escalating means someone is working it.
+				if sel.StatusID == ocsf.FindingStatusNew {
+					_ = ui.store.UpdateFindingStatus(ui.ctx, sel.ID, ocsf.FindingStatusInProgress)
+				}
+			}
+			if attached == 0 {
 				ui.queueUpdate(func() {
-					ui.setStatusDirect("[%s]Failed to attach finding: %v[-:-:-]", ui.theme.TagError, err)
+					ui.setStatusDirect("[%s]Failed to attach %s[-:-:-]",
+						ui.theme.TagError, plural(failed, "finding"))
 				})
 				return
 			}
-
-			// Escalating means someone is working it.
-			if f.StatusID == ocsf.FindingStatusNew {
-				_ = ui.store.UpdateFindingStatus(ui.ctx, f.ID, ocsf.FindingStatusInProgress)
+			for _, sel := range findings {
+				_ = ui.store.LogCaseAction(ui.ctx, caseID, "finding_escalated", ui.currentAnalyst(),
+					map[string]interface{}{"finding_uid": sel.FindingUID, "title": sel.Title})
 			}
-			_ = ui.store.LogCaseAction(ui.ctx, caseID, "finding_escalated", ui.currentAnalyst(),
-				map[string]interface{}{"finding_uid": f.FindingUID, "title": f.Title})
 
 			ui.queueUpdate(func() {
-				ui.setStatusDirect("[%s]Finding attached to case[-:-:-]", ui.theme.TagSuccess)
+				ui.triageSelection().clear()
+				if failed > 0 {
+					ui.setStatusDirect("[%s]%s attached, %d could not be[-:-:-]",
+						ui.theme.TagWarning, plural(attached, "finding"), failed)
+					return
+				}
+				ui.setStatusDirect("[%s]%s attached to case[-:-:-]",
+					ui.theme.TagSuccess, plural(attached, "finding"))
 			})
 			ui.loadFindings()
 			_ = ui.refreshCases()
