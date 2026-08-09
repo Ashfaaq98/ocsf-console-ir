@@ -39,6 +39,17 @@ type destination struct {
 	// desc is one line, used by the command palette and the key reference.
 	desc string
 
+	// hints are the keys this screen owns, for the status bar. They live here
+	// with the rail's label and the palette's description so the three cannot
+	// drift — and so a key can only be advertised by naming the screen that
+	// handles it.
+	//
+	// Only keys that work. The bar used to pick its hints from which widget had
+	// focus, and on three of the five screens nothing relevant did, so it fell
+	// through to the same six every time — naming panels those screens do not
+	// have and a filter key they do not bind.
+	hints []keyHint
+
 	// showFindings and showAll are the two flags that decide what the shared
 	// events table is showing. They live here rather than being set by hand at
 	// the top of each switchTo* function, where four copies could and did
@@ -60,14 +71,21 @@ type destination struct {
 func destinations() []destination {
 	return []destination{
 		{destTriage, '1', "Triage", "Ranked queue of open findings",
+			[]keyHint{{"⏎", "open"}, {"Space", "select"}, {"e", "escalate"},
+				{"v", "verdict"}, {"s", "status"}, {"r", "refresh"}},
 			true, false, (*UI).jumpToFindings},
 		{destCases, '2', "Cases", "Investigations and briefings",
+			[]keyHint{{"⏎", "open"}, {"c", "new case"}, {"r", "refresh"}},
 			false, false, (*UI).switchToCases},
 		{destEvents, '3', "Events", "Corroborating OCSF events",
+			[]keyHint{{"⏎", "expand"}, {"p", "pivot"}, {"z", "group"},
+				{"N", "next"}, {"P", "prev"}},
 			false, true, (*UI).switchToAllEvents},
 		{destIndicators, '4', "Indicators", "Cross-case observables",
+			[]keyHint{{"↑↓", "move"}},
 			false, false, (*UI).switchToIndicators},
 		{destReports, '5', "Reports", "Exports and case bundles",
+			nil,
 			false, false, (*UI).switchToReports},
 	}
 }
@@ -89,6 +107,8 @@ func lookupDestinationByID(id destinationID) (destination, bool) {
 // the palette and the key reference so it is never an undocumented screen.
 func homeDestination() destination {
 	return destination{destHome, 0, "Home", "What needs attention now",
+		[]keyHint{{"↑↓", "move"}, {"⏎", "open"}, {"e", "escalate"},
+			{"v", "verdict"}, {"r", "refresh"}, {"t", "theme"}},
 		false, false, (*UI).showAnalystHome}
 }
 
@@ -320,4 +340,24 @@ func (ui *UI) onCases() bool {
 		return false
 	}
 	return ui.mainPanel.GetItemCount() > 0 && ui.mainPanel.GetItem(0) == ui.casesPane
+}
+
+// screenHints are the keys the current screen owns, plus help, which every
+// screen has and which is the way to find everything not listed.
+func (ui *UI) screenHints() []keyHint {
+	d, ok := lookupDestinationByID(ui.destination)
+	if !ok {
+		return []keyHint{{"?", "help"}}
+	}
+	return append(append([]keyHint{}, d.hints...), keyHint{"?", "help"})
+}
+
+// hasEventsContext reports whether the screen showing is paged, filtered and
+// selected over events. Only the Events screen is.
+//
+// The status bar's badges — the page counter, the total, the selection count —
+// all describe that context, and were drawn everywhere: "Page:1/1 Tot:25" under
+// the Cases list, and "Tot:0" under a Triage queue holding two hundred findings.
+func (ui *UI) hasEventsContext() bool {
+	return ui.destination == destEvents
 }

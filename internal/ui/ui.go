@@ -4248,154 +4248,45 @@ func (ui *UI) showDeleteCaseConfirm() {
 	ui.app.SetFocus(modal)
 }
 
-// buildShortcutHints returns a colored, space-separated list of the most relevant
-// shortcuts based on current focus and UI state. It caps the list to a small,
-// readable set to avoid clutter. Ensures `?:help` is always shown and omits
-// `A:all events` when already in ALL EVENTS to free a slot.
+// buildShortcutHints is the right-hand half of the status bar: the keys the
+// screen you are on actually has.
+//
+// It used to choose them from which widget held focus, with a six-token cap and
+// a dead flag that made one branch unreachable. On Triage, Cases and Indicators
+// no relevant widget has focus, so all three fell through to the same six —
+// "Tab:panels" and "A:all events" on screens with neither, and nothing about
+// what those screens could do. The list now comes from the destination table,
+// beside the rail's label, so a key can only be advertised by naming the screen
+// that handles it.
 func (ui *UI) buildShortcutHints() string {
-	accent := ui.theme.TagAccent
+	hints := ui.screenHints()
 
-	// The dashboard's keys, which are its own — see homeView.handleKey. The
-	// hints below are scoped by which events widget has focus, and on Home none
-	// of them does, so it fell through to a list naming panels Home does not
-	// have and a filter key it does not bind.
-	if ui.onHome() {
-		return actionBar(ui.theme,
-			keyHint{"↑↓", "move"},
-			keyHint{"⏎", "open"},
-			keyHint{"e", "escalate"},
-			keyHint{"v", "verdict"},
-			keyHint{"r", "refresh"},
-			keyHint{"t", "theme"},
-			keyHint{"?", "help"})
-	}
-
-	// Snapshot focus safely
-	var focused tview.Primitive
-	if ui.app != nil {
-		focused = ui.app.GetFocus()
-	}
-	inEvents := focused == ui.eventList
-	inSidebar := focused == ui.sidebar
-	// The navigation rail is not focusable, so no hint is scoped to it. The
-	// digits work from every screen and are listed on the rail itself.
-	inAll := false
-
-	// Snapshot state
-	selectionCount := len(ui.selectedEventIDs)
-	caseSelected := ui.selectedCaseID != "" && !ui.showAll
-	id := ui.getContextID()
-	s := ui.getOrInitState(id)
-	filterActive := ui.activeFilterTag() != "" || len(s.filterSeverities) > 0 || len(s.filterTypes) > 0
-
-	type kv struct{ key, label string }
-	base := make([]kv, 0, 16)
-
-	// 1) Context-critical by focus/state
-	if inEvents {
-		base = append(base,
-			kv{"Space", "toggle"},
-			kv{"Ctrl+A", "all"},
-			kv{"Ctrl+D", "none"},
-		)
-		if selectionCount > 0 {
-			base = append(base,
-				kv{"d", "delete"},
-				kv{"c", "new case"},
-				kv{"a", "add to case"},
-			)
+	// What is true right now rather than always, appended after the screen's
+	// own keys so the fixed part of the bar does not move as state changes.
+	if ui.hasEventsContext() {
+		if len(ui.selectedEventIDs) > 0 {
+			hints = append(hints,
+				keyHint{"d", "delete"},
+				keyHint{"c", "new case"},
+				keyHint{"a", "add to case"})
 		}
-		base = append(base,
-			kv{"N", "next"},
-			kv{"P", "prev"},
-		)
-	}
-	if inSidebar && caseSelected {
-		base = append(base,
-			kv{"Enter", "open"},
-			kv{"d", "delete"},
-		)
-	}
-	if inAll {
-		base = append(base, kv{"Enter", "load"})
-	}
-
-	// 2) Filters
-	base = append(base, kv{"f", "filter"})
-	if filterActive {
-		base = append(base, kv{"F", "clear"})
-	}
-	// Also surface clear when Cases sidebar filters are active
-	if inSidebar {
-		caseFilterActive := ui.caseFilterName != "" || len(ui.caseFilterStatuses) > 0 || len(ui.caseFilterSeverities) > 0
-		if caseFilterActive {
-			base = append(base, kv{"F", "clear"})
+		if ui.activeFilterTag() != "" {
+			hints = append(hints, keyHint{"F", "clear"})
 		}
 	}
-
-	// 3) Global essentials (without help; help will be pinned)
-	base = append(base,
-		kv{"Tab", "panels"},
-		kv{"A", "all events"},
-		kv{"r", "refresh"},
-		kv{"q", "quit"},
-	)
-
-	// 4) Theme (lowest priority)
-	base = append(base,
-		kv{"t", "theme"},
-	)
-
-	// Post-process:
-	// - Omit "A" when already in ALL EVENTS to free a slot.
-	// - Pin help so it's always visible.
-	final := make([]kv, 0, 16)
-	seen := map[string]bool{}
-
-	// Always start with help, under the key the rail and every screen footer
-	// advertise. This strip said "h:help" while the footer beside it said
-	// "? Help" — two answers to the same question, on screen at once.
-	final = append(final, kv{"?", "help"})
-	seen["?"] = true
-
-	for _, h := range base {
-		if h.key == "A" && ui.showAll {
-			continue
-		}
-		if seen[h.key] {
-			continue
-		}
-		final = append(final, h)
-		seen[h.key] = true
-	}
-
-	// Cap to 6 tokens
-	const maxTokens = 6
-	if len(final) > maxTokens {
-		final = final[:maxTokens]
-	}
-
-	var sb strings.Builder
-	for i, h := range final {
-		if i > 0 {
-			sb.WriteString(" ")
-		}
-		sb.WriteString(fmt.Sprintf("[%s]%s[-]:%s", accent, h.key, h.label))
-	}
-	return sb.String()
+	return actionBar(ui.theme, hints...)
 }
 
-// buildStatusMain augments the base message with compact badges such as Case title,
-// selection count, time filter, severity/type filters, and pagination. It returns a single inline string.
 func (ui *UI) buildStatusMain(message string) string {
 	accent := ui.theme.TagAccent
 	parts := []string{message}
 
-	// Every badge below describes the events context: which case is open, how
-	// many events are selected, which page of them is showing. None of that
-	// exists on the dashboard, which was nonetheless reporting "Page:1/15
-	// Tot:712" underneath a screen with no pager.
-	if ui.onHome() {
+	// Every badge below describes an events context: which case is open, how
+	// many events are selected, which page of them is showing. Only the Events
+	// screen has one. They were drawn everywhere — "Page:1/1 Tot:25" under the
+	// Cases list, and "Tot:0" under a Triage queue holding two hundred findings,
+	// because the findings context's total is never written.
+	if !ui.hasEventsContext() {
 		return message
 	}
 
