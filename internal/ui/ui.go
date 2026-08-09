@@ -446,6 +446,10 @@ type UI struct {
 	lastLoadStart int64                       // unix nano timestamp of last load start (for watchdog)
 	showAll       bool                        // when true, sidebar selection is "ALL EVENTS"
 	queryStates   map[string]*EventQueryState // per-context (ALL or caseID) filter+pagination
+	// activeModal is whatever is currently rooted over the main layout. Set by
+	// showModal and friends, cleared when the layout is restored.
+	activeModal tview.Primitive
+
 	// termWidth is the terminal's width from the last frame's preamble.
 	//
 	// Panels that wrap text need a width before they draw, and tview's
@@ -2565,7 +2569,7 @@ func (ui *UI) showHelp() {
 	})
 
 	ui.lastFocus = ui.app.GetFocus()
-	ui.app.SetRoot(centered, true)
+	ui.rootModal(centered)
 	ui.app.SetFocus(table)
 }
 
@@ -2618,7 +2622,7 @@ func (ui *UI) showModal(title, text string) {
 	})
 
 	ui.lastFocus = ui.app.GetFocus()
-	ui.app.SetRoot(modal, true)
+	ui.rootModal(modal)
 	// Set focus to the modal to ensure it receives key events
 	ui.app.SetFocus(modal)
 }
@@ -2626,6 +2630,7 @@ func (ui *UI) showModal(title, text string) {
 // restoreMainLayout restores the main TUI layout after closing a modal/help view
 func (ui *UI) restoreMainLayout() {
 	ui.helpActive = false
+	ui.activeModal = nil
 
 	// Clear reference to Case Management when returning to main UI
 	ui.activeCM = nil
@@ -2647,7 +2652,15 @@ func (ui *UI) restoreMainLayout() {
 	}
 	ui.app.SetFocus(target)
 	ui.highlightFocus(target)
-	ui.setStatusDirect("[%s]Help closed[-:-:-]", ui.theme.TagSuccess)
+
+	// Say where you now are, not what you just closed. This announced "Help
+	// closed" unconditionally — after a pivot menu, after a form, and after
+	// leaving a case, none of which involved the help screen.
+	if d, ok := lookupDestinationByID(ui.destination); ok {
+		ui.setStatusDirect("[%s]%s[-:-:-]", ui.theme.TagAccent, d.name)
+		return
+	}
+	ui.setStatusDirect("[%s]Ready[-:-:-]", ui.theme.TagAccent)
 }
 
 // cycleFocus cycles focus between UI components
@@ -2810,8 +2823,29 @@ func (ui *UI) startRedrawHeartbeat() {
 }
 
 // isDialogActive returns true when a dialog or the help view is focused to bypass global shortcuts.
+// rootModal puts a modal over the main layout and records that one is up.
+//
+// The global key handler stands down while a modal is rooted — see
+// isDialogActive. Recording it explicitly rather than inferring it from what
+// has focus is what lets a modal built from a List suppress keys: the pivot
+// menu is one, and q used to quit the application straight through it.
+func (ui *UI) rootModal(p tview.Primitive) {
+	ui.activeModal = p
+	ui.app.SetRoot(p, true)
+}
+
 func (ui *UI) isDialogActive() bool {
 	if ui.helpActive {
+		return true
+	}
+	// What is rooted, not what has focus.
+	//
+	// The type switch below cannot see a modal built from a List — and the
+	// pivot menu is one, so every global key reached straight through it: q
+	// quit the application, the digits navigated away, j and k moved the table
+	// behind it. Adding *tview.List to the switch would be wrong, because the
+	// case sidebar is a List too and must not suppress anything.
+	if ui.activeModal != nil {
 		return true
 	}
 	if ui.app == nil {
@@ -3323,7 +3357,7 @@ func (ui *UI) showCreateCaseModal() {
 	})
 
 	ui.lastFocus = ui.app.GetFocus()
-	ui.app.SetRoot(form, true)
+	ui.rootModal(form)
 	ui.app.SetFocus(form)
 	// Brief hint for users on Description field navigation
 	ui.setStatusDirect("[%s]Description: Enter=newline, Tab/Shift+Tab move fields[-:-:-]", ui.theme.TagAccent)
@@ -3345,7 +3379,7 @@ func (ui *UI) showAddToExistingCaseModal() {
 		modal.SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 			ui.restoreMainLayout()
 		})
-		ui.app.SetRoot(modal, true)
+		ui.rootModal(modal)
 		ui.app.SetFocus(modal)
 		return
 	}
@@ -3676,7 +3710,7 @@ func (ui *UI) showCombinedFilterModal() {
 			ui.showMultiSelectModal("Select Severities", []string{"critical", "high", "medium", "low", "informational"}, customSev, form, func(sel map[string]bool) {
 				customSev = sel
 				sevDD.SetCurrentOption(6)
-				ui.app.SetRoot(form, true)
+				ui.rootModal(form)
 				ui.app.SetFocus(form)
 			})
 		}
@@ -3724,7 +3758,7 @@ func (ui *UI) showCombinedFilterModal() {
 			ui.showMultiSelectModal("Select Categories", selectable, customType, form, func(sel map[string]bool) {
 				customType = sel
 				typeDD.SetCurrentOption(customTypeIdx)
-				ui.app.SetRoot(form, true)
+				ui.rootModal(form)
 				ui.app.SetFocus(form)
 			})
 		}
@@ -3856,7 +3890,7 @@ func (ui *UI) showCombinedFilterModal() {
 	})
 
 	ui.lastFocus = ui.app.GetFocus()
-	ui.app.SetRoot(form, true)
+	ui.rootModal(form)
 	ui.app.SetFocus(form)
 	ui.setStatusDirect("[%s]Tab/Shift+Tab: navigate • Enter: open dropdown • Apply/Clear/Cancel at bottom[-:-:-]", ui.theme.TagAccent)
 }
@@ -3947,7 +3981,7 @@ func (ui *UI) showMultiSelectModal(title string, options []string, initial map[s
 		return ev
 	})
 
-	ui.app.SetRoot(form, true)
+	ui.rootModal(form)
 	ui.app.SetFocus(form)
 }
 
@@ -4308,7 +4342,7 @@ func (ui *UI) showDeleteCaseConfirm() {
 	})
 
 	ui.lastFocus = ui.app.GetFocus()
-	ui.app.SetRoot(modal, true)
+	ui.rootModal(modal)
 	ui.app.SetFocus(modal)
 }
 
@@ -4519,7 +4553,7 @@ func (ui *UI) showDeleteEventsConfirm(ids []string) {
 	})
 
 	ui.lastFocus = ui.app.GetFocus()
-	ui.app.SetRoot(modal, true)
+	ui.rootModal(modal)
 	ui.app.SetFocus(modal)
 }
 
@@ -4696,7 +4730,7 @@ func (ui *UI) showCaseFilterModal() {
 	})
 
 	ui.lastFocus = ui.app.GetFocus()
-	ui.app.SetRoot(form, true)
+	ui.rootModal(form)
 	ui.app.SetFocus(form)
 	ui.setStatusDirect("[%s]Tab/Shift+Tab: navigate • Enter: open dropdown • Apply/Cancel at bottom[-:-:-]", ui.theme.TagAccent)
 }

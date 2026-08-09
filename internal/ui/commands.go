@@ -92,6 +92,6 @@ func (ui *UI) showCommandPalette() {
 			AddItem(nil, 0, 1, false), 60, 1, true).
 		AddItem(nil, 0, 1, false)
 
-	ui.app.SetRoot(centered, true)
+	ui.rootModal(centered)
 	ui.app.SetFocus(input)
 }

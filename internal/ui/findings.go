@@ -560,7 +560,7 @@ func (ui *UI) showFindingStatusModal() {
 	})
 	form.AddButton("Cancel", func() { ui.restoreMainLayout() })
 
-	ui.app.SetRoot(form, true)
+	ui.rootModal(form)
 	ui.app.SetFocus(form)
 }
 
@@ -627,7 +627,7 @@ func (ui *UI) showFindingVerdictModal() {
 	})
 	form.AddButton("Cancel", func() { ui.restoreMainLayout() })
 
-	ui.app.SetRoot(form, true)
+	ui.rootModal(form)
 	ui.app.SetFocus(form)
 }
 
@@ -795,7 +795,7 @@ func (ui *UI) escalateFindings(findings []store.Finding) {
 	})
 	form.AddButton("Cancel", func() { ui.restoreMainLayout() })
 
-	ui.app.SetRoot(form, true)
+	ui.rootModal(form)
 	ui.app.SetFocus(form)
 }
 

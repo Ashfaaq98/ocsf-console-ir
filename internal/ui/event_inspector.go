@@ -94,13 +94,18 @@ func (ui *UI) showPivotMenu(event store.Event) {
 			AddItem(nil, 0, 1, false), 60, 1, true).
 		AddItem(nil, 0, 1, false)
 
-	ui.app.SetRoot(centered, true)
+	ui.rootModal(centered)
 	ui.app.SetFocus(list)
 }
 
 // closeModal returns to the main layout.
 func (ui *UI) closeModal() {
-	ui.app.SetRoot(ui.layout, true)
+	// The whole root, not just the layout.
+	//
+	// SetRoot(ui.layout) drops the status bar, which lives in the flex above it
+	// — so cancelling or choosing from the pivot menu left the application
+	// without a status bar for the rest of the session.
+	ui.restoreMainLayout()
 }
 
 // pivotTo shows every event carrying an observable, and says how many findings
