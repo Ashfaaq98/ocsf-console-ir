@@ -2,7 +2,10 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
@@ -36,7 +39,80 @@ type indicatorsView struct {
 	filter store.IndicatorFilter
 
 	searchBar *tview.InputField
+
+	// context holds what carries the selected indicator, and its debounce.
+	context indicatorContext
 }
+
+// indicatorContext is what else in the database carries one observable.
+//
+// It is the answer this screen exists to give — "have I seen this before, and
+// where?" — and it is the one thing the table cannot show, because it is a
+// query per row rather than a column.
+type indicatorContext struct {
+	ui *UI
+
+	mu       sync.Mutex
+	key      string
+	findings []store.Finding
+	events   int
+	loaded   bool
+	timer    *time.Timer
+}
+
+// indicatorKey identifies an observable for the cache.
+func indicatorKey(typeID int, value string) string {
+	return fmt.Sprintf("%d|%s", typeID, value)
+}
+
+// schedule loads what carries an indicator, once the cursor has rested.
+func (c *indicatorContext) schedule(typeID int, value string, then func()) {
+	if c.ui == nil || value == "" {
+		return
+	}
+	key := indicatorKey(typeID, value)
+
+	c.mu.Lock()
+	if c.key == key && c.loaded {
+		c.mu.Unlock()
+		return
+	}
+	if c.timer != nil {
+		c.timer.Stop()
+	}
+	c.timer = time.AfterFunc(homeInspectorDebounce, func() {
+		c.load(typeID, value)
+		c.ui.queueUpdate(then)
+	})
+	c.mu.Unlock()
+}
+
+// load runs the two queries. It runs off the UI goroutine.
+func (c *indicatorContext) load(typeID int, value string) {
+	if c.ui == nil || c.ui.store == nil {
+		return
+	}
+	findings, _ := c.ui.store.FindFindingsByObservable(c.ui.ctx, typeID, value, indicatorCarriersShown+1)
+	events, _ := c.ui.store.CountEventsByObservable(c.ui.ctx, typeID, value)
+
+	c.mu.Lock()
+	c.key, c.findings, c.events, c.loaded = indicatorKey(typeID, value), findings, events, true
+	c.mu.Unlock()
+}
+
+// get returns what is known about an indicator, and whether it is this one.
+func (c *indicatorContext) get(typeID int, value string) ([]store.Finding, int, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.loaded || c.key != indicatorKey(typeID, value) {
+		return nil, 0, false
+	}
+	return c.findings, c.events, true
+}
+
+// indicatorCarriersShown is how many findings the panel names before it counts
+// the rest.
+const indicatorCarriersShown = 3
 
 // switchToIndicators opens the screen.
 func (ui *UI) switchToIndicators() {
@@ -67,7 +143,13 @@ func (ui *UI) buildIndicatorsView() *indicatorsView {
 	stylePanel(v.inspector.Box, "SELECTED INDICATOR", PanelRoleInspector, t)
 	v.inspector.SetBackgroundColor(t.Surface)
 
-	v.table.SetSelectionChangedFunc(func(int, int) { ui.renderIndicatorInspector() })
+	v.context.ui = ui
+	v.table.SetSelectionChangedFunc(func(int, int) {
+		ui.renderIndicatorInspector()
+		if ind := ui.selectedIndicator(); ind != nil {
+			v.context.schedule(ind.TypeID, ind.Value, ui.renderIndicatorInspector)
+		}
+	})
 	v.table.SetSelectedFunc(func(int, int) { ui.pivotSelectedIndicator() })
 
 	v.root = tview.NewFlex().SetDirection(tview.FlexRow)
@@ -159,7 +241,13 @@ func (ui *UI) selectedIndicator() *store.CaseIndicator {
 	return &v.rows[row-1]
 }
 
-// renderIndicatorInspector paints what carries the selected indicator.
+// renderIndicatorInspector names what carries the selected indicator.
+//
+// Not the row again. It used to repeat the type, the provenance, the sightings
+// and the seen range — every one of which is a column two lines above it — so
+// the panel cost eight rows to say what was already on screen. What the table
+// cannot show is the cross-reference: which findings carry this observable, and
+// how many events, both of which are a query per row.
 func (ui *UI) renderIndicatorInspector() {
 	v := ui.indicators
 	if v == nil {
@@ -169,34 +257,38 @@ func (ui *UI) renderIndicatorInspector() {
 
 	ind := ui.selectedIndicator()
 	if ind == nil {
-		v.inspector.SetText(fmt.Sprintf("\n [%s]Select an indicator to see where it appears.[-:-:-]", t.TagMuted))
+		v.inspector.SetText(fmt.Sprintf("\n [%s]Select an indicator to see what carries it.[-:-:-]", t.TagMuted))
 		return
 	}
 
-	glyph, colour, label := provenanceMark(ind.Source, t)
-	typeName := ind.Type
-	if strings.TrimSpace(typeName) == "" {
-		typeName = ocsf.ObservableTypeName(ind.TypeID)
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n [%s:-:b]%s[-:-:-]\n", t.TagTextPrimary, tview.Escape(truncate(ind.Value, 60)))
+
+	findings, events, ok := v.context.get(ind.TypeID, ind.Value)
+	if !ok {
+		fmt.Fprintf(&b, " [%s]looking for what carries it…[-:-:-]", t.TagMuted)
+		v.inspector.SetText(b.String())
+		return
 	}
 
-	var b strings.Builder
-	fmt.Fprintf(&b, " [%s:-:b]%s[-:-:-]   [%s]%s[-:-:-]   [%s]%s %s[-:-:-]\n\n",
-		t.TagTextPrimary, tview.Escape(ind.Value),
-		t.TagMuted, tview.Escape(typeName),
-		colour, glyph, label)
+	shown := findings
+	if len(shown) > indicatorCarriersShown {
+		shown = shown[:indicatorCarriersShown]
+	}
+	fmt.Fprintf(&b, " [%s]carried by[-:-:-] [%s]%s[-:-:-] · [%s]%s[-:-:-]\n",
+		t.TagMuted, t.TagAccent, plural(len(findings), "finding"),
+		t.TagAccent, plural(events, "event"))
 
-	fmt.Fprintf(&b, " [%s]%-10s[-:-:-] %s\n", t.TagMuted, "sightings",
-		fmt.Sprintf("%d", ind.Sightings))
-	fmt.Fprintf(&b, " [%s]%-10s[-:-:-] %s → %s\n", t.TagMuted, "seen",
-		stampOrDash(ind.FirstSeen), stampOrDash(ind.LastSeen))
-
-	// What carries it. This is the question the screen exists to answer, and
-	// the counts come from queries that already existed and had no caller here.
-	if ui.store != nil {
-		findings, _ := ui.store.CountFindingsByObservable(ui.ctx, ind.TypeID, ind.Value)
-		events, _ := ui.store.CountEventsByObservable(ui.ctx, ind.TypeID, ind.Value)
-		fmt.Fprintf(&b, " [%s]%-10s[-:-:-] %s · %s\n", t.TagMuted, "carried by",
-			plural(findings, "finding"), plural(events, "event"))
+	for _, f := range shown {
+		fmt.Fprintf(&b, "   %s  [%s]%s[-:-:-]\n",
+			formatSeverityBadge(f.Severity, t),
+			t.TagTextPrimary, tview.Escape(truncate(f.Title, 52)))
+	}
+	if extra := len(findings) - len(shown); extra > 0 {
+		fmt.Fprintf(&b, "   [%s]and %d more[-:-:-]\n", t.TagMuted, extra)
+	}
+	if len(findings) == 0 {
+		fmt.Fprintf(&b, "   [%s]No finding names it — it appears in events only.[-:-:-]\n", t.TagMuted)
 	}
 
 	fmt.Fprintf(&b, "\n [%s]⏎ pivot to the events carrying it[-:-:-]", t.TagAccent)
@@ -236,6 +328,19 @@ func (ui *UI) indicatorKeys(ev *tcell.EventKey) *tcell.EventKey {
 		case '/':
 			ui.showIndicatorSearch()
 			return nil
+		case 'f':
+			// This screen's own filter.
+			//
+			// Unclaimed, f reached the global handler, which opened the events
+			// filter — time, severity and event type, applied to a list of
+			// observables that has none of those. F cleared the same filters.
+			ui.showIndicatorTypeFilter()
+			return nil
+		case 'F':
+			if ui.clearIndicatorFilters() {
+				return nil
+			}
+			return ev
 		case 'r':
 			ui.spawnLoad(ui.loadIndicators)
 			return nil
@@ -286,4 +391,146 @@ func (ui *UI) showIndicatorSearch() {
 	v.root.AddItem(v.table, 0, 3, false)
 	v.root.AddItem(v.inspector, indicatorInspectorRows, 0, false)
 	ui.app.SetFocus(input)
+}
+
+// showIndicatorTypeFilter narrows the list to particular observable types.
+//
+// The types offered are the ones the database actually holds: a menu listing
+// every type OCSF defines would be mostly rows that match nothing here.
+func (ui *UI) showIndicatorTypeFilter() {
+	v := ui.indicators
+	if v == nil {
+		return
+	}
+	t := ui.theme
+
+	types := indicatorTypesPresent(v.rows)
+	if len(types) == 0 {
+		ui.setStatusDirect("[%s]Nothing to filter yet[-:-:-]", t.TagMuted)
+		return
+	}
+
+	active := map[int]bool{}
+	for _, id := range v.filter.TypeIDs {
+		active[id] = true
+	}
+
+	list := tview.NewList().ShowSecondaryText(false)
+	list.SetBackgroundColor(t.SurfaceRaised)
+	list.SetMainTextColor(t.TextPrimary)
+	list.SetShortcutColor(t.TextMuted)
+	list.SetSelectedBackgroundColor(t.SelectionBg)
+	list.SetSelectedTextColor(t.SelectionFg)
+
+	var refresh func()
+	apply := func() {
+		v.filter.TypeIDs = v.filter.TypeIDs[:0]
+		for _, ty := range types {
+			if active[ty.id] {
+				v.filter.TypeIDs = append(v.filter.TypeIDs, ty.id)
+			}
+		}
+		refresh()
+		ui.spawnLoad(ui.loadIndicators)
+	}
+
+	for _, ty := range types {
+		ty := ty
+		list.AddItem("", "", 0, func() {
+			active[ty.id] = !active[ty.id]
+			apply()
+		})
+	}
+	list.AddItem("", "", 'x', func() {
+		for id := range active {
+			active[id] = false
+		}
+		apply()
+	})
+
+	refresh = func() {
+		for i, ty := range types {
+			mark := "[ ]"
+			if active[ty.id] {
+				mark = fmt.Sprintf("[%s][✓][-:-:-]", t.TagSuccess)
+			}
+			list.SetItemText(i, fmt.Sprintf("%s  %s   [%s]%s[-:-:-]",
+				mark, ty.name, t.TagMuted, plural(ty.count, "indicator")), "")
+		}
+		list.SetItemText(len(types), fmt.Sprintf("[%s]every type[-:-:-]", t.TagMuted), "")
+	}
+	refresh()
+
+	list.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
+		if ev.Key() == tcell.KeyEscape {
+			ui.closeModal()
+			return nil
+		}
+		return ev
+	})
+
+	body := tview.NewFlex().SetDirection(tview.FlexRow)
+	body.AddItem(list, len(types)+1, 0, true)
+	footer := tview.NewTextView().SetDynamicColors(true)
+	footer.SetBackgroundColor(t.SurfaceRaised)
+	footer.SetText(fmt.Sprintf("  [%s]⏎[-:-:-] toggle   [%s]x[-:-:-] every type   [%s]esc[-:-:-] close",
+		t.TagAccent, t.TagAccent, t.TagAccent))
+	body.AddItem(blankRow(t.SurfaceRaised), 1, 0, false)
+	body.AddItem(footer, 1, 0, false)
+
+	ui.overlayModal(modalPanel(body, "Filter by type", t), 52, len(types)+7)
+	ui.app.SetFocus(list)
+}
+
+// clearIndicatorFilters drops the type filter and the search, and says whether
+// there was anything to drop.
+func (ui *UI) clearIndicatorFilters() bool {
+	v := ui.indicators
+	if v == nil {
+		return false
+	}
+	if len(v.filter.TypeIDs) == 0 && strings.TrimSpace(v.filter.Search) == "" {
+		return false
+	}
+	v.filter.TypeIDs = nil
+	v.filter.Search = ""
+	ui.spawnLoad(ui.loadIndicators)
+	return true
+}
+
+// indicatorType is one observable type and how much of the list it accounts
+// for.
+type indicatorType struct {
+	id    int
+	name  string
+	count int
+}
+
+// indicatorTypesPresent lists the types in the loaded page, most common first.
+func indicatorTypesPresent(rows []store.CaseIndicator) []indicatorType {
+	seen := map[int]*indicatorType{}
+	for _, r := range rows {
+		ty, ok := seen[r.TypeID]
+		if !ok {
+			name := strings.TrimSpace(r.Type)
+			if name == "" {
+				name = ocsf.ObservableTypeName(r.TypeID)
+			}
+			ty = &indicatorType{id: r.TypeID, name: name}
+			seen[r.TypeID] = ty
+		}
+		ty.count++
+	}
+
+	out := make([]indicatorType, 0, len(seen))
+	for _, ty := range seen {
+		out = append(out, *ty)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].count != out[j].count {
+			return out[i].count > out[j].count
+		}
+		return out[i].name < out[j].name
+	})
+	return out
 }

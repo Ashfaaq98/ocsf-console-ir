@@ -1587,17 +1587,18 @@ func (ui *UI) setupKeybindings() {
 				ui.cycleTheme()
 				return nil
 			case 'f':
-				if ui.showFindings {
-					ui.setStatusDirect("[%s]Findings: o toggles open/all • s status • v verdict[-:-:-]", ui.theme.TagAccent)
-					return nil
+				// Whose filter this is follows the screen, not the focus.
+				//
+				// It used to ask which widget had focus: the case sidebar meant
+				// the case filter and anything else meant the events filter. So
+				// the events filter opened on Indicators, on Reports, and on
+				// Cases whenever the cursor had moved off the list — filtering
+				// a table that screen does not show. Triage, Cases and
+				// Indicators each claim f before this handler is reached.
+				if !ui.hasEventsContext() {
+					return event
 				}
-				// Gated by focus: Cases sidebar opens CASE filter, otherwise open Events filter
-				if ui.app.GetFocus() == ui.sidebar {
-					ui.showCaseFilterModal()
-				} else {
-					// Open combined filter modal (time + severity + type)
-					ui.showCombinedFilterModal()
-				}
+				ui.showCombinedFilterModal()
 				return nil
 			case 'F':
 				if !ui.showFindings && ui.searchQuery != "" {
@@ -1614,40 +1615,41 @@ func (ui *UI) setupKeybindings() {
 					ui.clearTriageFilters()
 					return nil
 				}
-				// Gated by focus: Cases sidebar clears CASE filters, otherwise clear Events filters
-				if ui.app.GetFocus() == ui.sidebar {
+				// By screen, for the same reason f is: clearing the events
+				// filters from Indicators cleared filters on a list that
+				// screen does not show.
+				if ui.onCases() {
 					ui.clearCaseFilters()
-				} else {
-					// Clear filters for current context (time, severity, type)
-					ui.clearCurrentContextFilters()
+					return nil
 				}
+				if !ui.hasEventsContext() {
+					return event
+				}
+				ui.clearCurrentContextFilters()
 				return nil
 			// Case creation shortcuts
-			case 'c':
-				if ui.logger != nil {
-					ui.logger.Printf("GLOBAL KEY 'c' pressed: selectedEventIDs=%d, events=%d", len(ui.selectedEventIDs), len(ui.events))
+			case 'c', 'a':
+				// Both act on marked events, so both are the events screen's.
+				//
+				// Handled everywhere, they answered on screens that have no
+				// events to mark: pressing a on the dashboard replied "No
+				// events selected. Use Space to select events first", naming a
+				// key that does nothing there either. Left unclaimed here, a
+				// screen that has its own meaning for the key gets it — which
+				// is how c on Cases opens the new-case form.
+				if !ui.hasEventsContext() {
+					return event
 				}
-				if len(ui.selectedEventIDs) > 0 {
-					ui.setStatusDirect("[%s]Opening case creation modal...[-:-:-]", ui.theme.TagAccent)
+				if len(ui.selectedEventIDs) == 0 {
+					ui.setStatusDirect("[%s]No events selected — Space marks the row under the cursor[-:-:-]",
+						ui.theme.TagWarning)
+					return nil
+				}
+				if event.Rune() == 'c' {
 					ui.showCreateCaseModal()
 				} else {
-					ui.setStatusDirect("[%s]No events selected. Use Space to select events first. (Events: %d)[-:-:-]", ui.theme.TagWarning, len(ui.events))
-				}
-				return nil
-			case 'a':
-				if ui.logger != nil {
-					ui.logger.Printf("GLOBAL KEY 'a' pressed: selectedEventIDs=%d, events=%d", len(ui.selectedEventIDs), len(ui.events))
-				}
-				if len(ui.selectedEventIDs) > 0 {
-					ui.setStatusDirect("[%s]Opening add to case modal...[-:-:-]", ui.theme.TagAccent)
 					ui.showAddToExistingCaseModal()
-				} else {
-					ui.setStatusDirect("[%s]No events selected. Use Space to select events first. (Events: %d)[-:-:-]", ui.theme.TagWarning, len(ui.events))
 				}
-				return nil
-			case 'D':
-				// Quick-jump to the findings (detections) triage queue.
-				ui.enterScreen(destTriage)
 				return nil
 			case 'v':
 				if ui.showFindings {
@@ -1693,19 +1695,6 @@ func (ui *UI) setupKeybindings() {
 			case 'p':
 				// Events owns this key — see eventsKeys. Reaching here means
 				// no screen claimed it, so there is nothing to pivot on.
-				return nil
-			case 'A':
-				// Quick-jump to ALL EVENTS from anywhere (overview panel is non-selectable)
-				ui.enterScreen(destEvents)
-				return nil
-			case 'C':
-				ui.enterScreen(destCases)
-				return nil
-			case 'I':
-				ui.enterScreen(destIndicators)
-				return nil
-			case 'R':
-				ui.enterScreen(destReports)
 				return nil
 			case 'd':
 				// Context-sensitive delete:

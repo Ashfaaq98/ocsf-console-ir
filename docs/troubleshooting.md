@@ -4,7 +4,7 @@
 
 **No findings?** Your data may contain no detections. Findings come from OCSF Findings classes
 (`class_uid` 2001–2008) or events flagged `is_alert`. Plain telemetry produces events, not findings.
-Press `A` for all events, or run `console-ir demo` for a sample that includes several.
+Press `3` for all events, or run `console-ir demo` for a sample that includes several.
 
 Note the queue hides already-triaged findings by default; press `o` to show everything.
 

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
@@ -171,5 +172,64 @@ func TestTriageSelectsTheCarriedFinding(t *testing.T) {
 	}
 	if h.ui.pendingFindingID != "" {
 		t.Error("the carried selection was not cleared after being honoured")
+	}
+}
+
+// The dashboard does not answer for keys that belong to the events flow.
+//
+// c, a and d act on marked events. Handled globally, they answered on screens
+// with no events to mark: pressing a on Home replied "No events selected. Use
+// Space to select events first", naming a key that does nothing there either.
+func TestHomeDoesNotAnswerTheEventsKeys(t *testing.T) {
+	ui, st := newTestUI(t)
+	seedTriageFinding(t, st, "a", "")
+	ui.enterScreen(destHome)
+	awaitIdle(t, ui)
+
+	for _, key := range []rune{'a', 'c'} {
+		ui.setStatusDirect("[white]Analyst Home[-:-:-]")
+		ui.globalInputCapture(tcell.NewEventKey(tcell.KeyRune, key, tcell.ModNone))
+		awaitIdle(t, ui)
+
+		got := stripTags(ui.statusBar.GetText(true))
+		if strings.Contains(got, "No events selected") {
+			t.Errorf("%c on Home answered with the events selection: %s", key, got)
+		}
+		if ui.activeModal != nil {
+			t.Errorf("%c on Home opened a dialog", key)
+			ui.closeModal()
+		}
+	}
+}
+
+// On Events the same keys do answer, because there is a selection to make.
+func TestEventsStillAnswerTheirOwnKeys(t *testing.T) {
+	ui, _ := newTestUI(t)
+	seedEvents(t, ui, 3)
+	ui.enterScreen(destEvents)
+	awaitIdle(t, ui)
+
+	ui.globalInputCapture(tcell.NewEventKey(tcell.KeyRune, 'c', tcell.ModNone))
+	got := stripTags(ui.statusBar.GetText(true))
+	if !strings.Contains(got, "Space marks the row") {
+		t.Errorf("c on Events with nothing marked says: %s", got)
+	}
+}
+
+// f on Events opens the events filter, and the bar says so.
+func TestEventsAdvertiseTheirFilter(t *testing.T) {
+	ui, _ := newTestUI(t)
+	seedEvents(t, ui, 3)
+	ui.enterScreen(destEvents)
+	awaitIdle(t, ui)
+
+	if bar := stripTags(ui.statusBar.GetText(true)); !strings.Contains(bar, "f filter") {
+		t.Errorf("the Events bar does not offer the filter: %s", bar)
+	}
+	if ui.globalInputCapture(tcell.NewEventKey(tcell.KeyRune, 'f', tcell.ModNone)) != nil {
+		t.Fatal("f was not claimed on Events")
+	}
+	if ui.activeModal == nil {
+		t.Error("f on Events opened nothing")
 	}
 }

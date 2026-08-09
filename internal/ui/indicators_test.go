@@ -129,21 +129,66 @@ func TestIndicatorsEnterPivots(t *testing.T) {
 	}
 }
 
-// The inspector answers what the screen exists to answer: what carries this.
-func TestIndicatorInspectorCountsWhatCarriesIt(t *testing.T) {
+// The inspector answers what the screen exists to answer, and only that.
+//
+// It used to repeat the type, the provenance, the sightings and the seen range
+// — every one of them a column two lines above it — so eight rows of panel said
+// what was already on screen. What the table cannot show is the cross
+// reference, because it is a query per row.
+func TestIndicatorInspectorNamesWhatCarriesIt(t *testing.T) {
 	ui, _ := newTestUI(t)
 	seedIndicatorEvents(t, ui, 9)
 
 	ui.enterScreen(destIndicators)
 	awaitIdle(t, ui)
 	ui.indicators.table.Select(1, 0)
+
+	ind := ui.selectedIndicator()
+	if ind == nil {
+		t.Fatal("nothing selected")
+	}
+	ui.indicators.context.load(ind.TypeID, ind.Value)
 	ui.renderIndicatorInspector()
 
 	got := stripTags(ui.indicators.inspector.GetText(true))
-	for _, want := range []string{"sightings", "carried by", "events"} {
+	for _, want := range []string{ind.Value, "carried by", "event"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the inspector is missing %q:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "sightings") {
+		t.Errorf("the inspector repeats the sightings column:\n%s", got)
+	}
+}
+
+// And it names the findings, not just how many there are.
+func TestIndicatorInspectorNamesTheFindings(t *testing.T) {
+	ui, st := newTestUI(t)
+	seedTriageFinding(t, st, "a", "")
+
+	ui.enterScreen(destIndicators)
+	awaitIdle(t, ui)
+
+	// The finding's own host observable.
+	row := -1
+	for i, r := range ui.indicators.rows {
+		if r.Value == "workstation-14" {
+			row = i + 1
+			break
+		}
+	}
+	if row < 0 {
+		t.Fatalf("the finding's host is not in the indicators list: %+v", ui.indicators.rows)
+	}
+	ui.indicators.table.Select(row, 0)
+
+	ind := ui.selectedIndicator()
+	ui.indicators.context.load(ind.TypeID, ind.Value)
+	ui.renderIndicatorInspector()
+
+	got := stripTags(ui.indicators.inspector.GetText(true))
+	if !strings.Contains(got, "Malicious attachment") {
+		t.Errorf("the inspector does not name the finding carrying the indicator:\n%s", got)
 	}
 }
 
@@ -199,5 +244,63 @@ func TestIndicatorsEmptyStateIsAboutTheDatabase(t *testing.T) {
 	}
 	if !strings.Contains(got, "database") {
 		t.Errorf("the empty state does not say where indicators come from: %s", got)
+	}
+}
+
+// f is this screen's filter, not the events one.
+//
+// Unclaimed, f reached the global handler, which opened the events filter —
+// time, severity and event type, applied to a list of observables that has
+// none of those. F cleared the same filters.
+func TestIndicatorsOwnTheirFilterKey(t *testing.T) {
+	ui, _ := newTestUI(t)
+	seedIndicatorEvents(t, ui, 9)
+	ui.enterScreen(destIndicators)
+	awaitIdle(t, ui)
+
+	if ui.globalInputCapture(tcell.NewEventKey(tcell.KeyRune, 'f', tcell.ModNone)) != nil {
+		t.Fatal("f was not claimed on Indicators")
+	}
+	if ui.activeModal == nil {
+		t.Fatal("f opened nothing")
+	}
+	frame := strings.Join(renderPrimitive(t, ui.activeModal, 150, 34), "\n")
+	if !strings.Contains(frame, "Filter by type") {
+		t.Errorf("f on Indicators did not open the type filter:\n%s", frame)
+	}
+	ui.closeModal()
+}
+
+// The type filter narrows the list, and F puts it back.
+func TestIndicatorTypeFilterNarrowsTheList(t *testing.T) {
+	ui, st := newTestUI(t)
+	seedTriageFinding(t, st, "a", "") // a hostname and a username
+	ui.enterScreen(destIndicators)
+	awaitIdle(t, ui)
+
+	all := len(ui.indicators.rows)
+	types := indicatorTypesPresent(ui.indicators.rows)
+	if len(types) < 2 {
+		t.Fatalf("expected several observable types, got %+v", types)
+	}
+
+	ui.indicators.filter.TypeIDs = []int{types[0].id}
+	ui.spawnLoad(ui.loadIndicators)
+	awaitIdle(t, ui)
+
+	narrowed := len(ui.indicators.rows)
+	if narrowed >= all || narrowed == 0 {
+		t.Errorf("filtering to one type left %d of %d rows", narrowed, all)
+	}
+
+	if !ui.clearIndicatorFilters() {
+		t.Fatal("clearing reported nothing to clear")
+	}
+	awaitIdle(t, ui)
+	if len(ui.indicators.rows) != all {
+		t.Errorf("clearing left %d rows, want all %d back", len(ui.indicators.rows), all)
+	}
+	if ui.clearIndicatorFilters() {
+		t.Error("clearing an unfiltered list reported that it cleared something")
 	}
 }

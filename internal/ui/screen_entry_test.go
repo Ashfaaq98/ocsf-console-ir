@@ -88,8 +88,13 @@ func TestStubHandlersPassKeysOn(t *testing.T) {
 }
 
 // The rail must mark the screen you are actually on, whichever route took you
-// there. The letter shortcuts opened a screen without telling the rail, so `A`
-// left it marking Triage while Events was on screen.
+// there.
+//
+// Each destination is reached by its digit and by nothing else. There were
+// capital-letter jumps as well — A to Events, C to Cases, I to Indicators, D to
+// Triage, R to Reports — advertised in no bar, no palette and no help, with D
+// meaning Triage while A meant Events. They were the last route that could open
+// a screen without going through the navigation table.
 func TestEveryRouteMarksTheRail(t *testing.T) {
 	ui, _ := newTestUI(t)
 	if err := ui.refreshCases(); err != nil {
@@ -101,10 +106,11 @@ func TestEveryRouteMarksTheRail(t *testing.T) {
 		want destinationID
 		name string
 	}{
-		{'A', destEvents, "Events"},
-		{'C', destCases, "Cases"},
-		{'I', destIndicators, "Indicators"},
-		{'D', destTriage, "Triage"},
+		{'1', destTriage, "Triage"},
+		{'2', destCases, "Cases"},
+		{'3', destEvents, "Events"},
+		{'4', destIndicators, "Indicators"},
+		{'5', destReports, "Reports"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ui.destination = destHome
@@ -258,5 +264,24 @@ func TestCaseSummaryWithoutAProviderSaysSo(t *testing.T) {
 
 	if got := stripTags(ui.statusBar.GetText(true)); !strings.Contains(got, "No LLM provider") {
 		t.Errorf("status = %q, want it to name the missing provider", got)
+	}
+}
+
+// The capital-letter jumps are gone, and the capitals are free for the screens
+// that want them.
+func TestTheLetterJumpsAreGone(t *testing.T) {
+	ui, _ := newTestUI(t)
+	if err := ui.refreshCases(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, key := range []rune{'A', 'C', 'I', 'D', 'R'} {
+		ui.enterScreen(destHome)
+		awaitIdle(t, ui)
+		ui.globalInputCapture(tcell.NewEventKey(tcell.KeyRune, key, tcell.ModNone))
+		if ui.destination != destHome {
+			t.Errorf("%c still jumps to %v", key, ui.destination)
+		}
+		awaitIdle(t, ui)
 	}
 }
