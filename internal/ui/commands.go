@@ -16,6 +16,9 @@ type CommandItem struct {
 }
 
 // showCommandPalette opens a fuzzy modal command palette.
+// commandListRows is how many commands the palette shows at once.
+const commandListRows = 10
+
 func (ui *UI) showCommandPalette() {
 	// Destinations come from the table in nav.go rather than being listed
 	// again here. They were listed again here, and the copies drifted: the
@@ -75,23 +78,11 @@ func (ui *UI) showCommandPalette() {
 		}
 	})
 
-	modal := tview.NewFlex().SetDirection(tview.FlexRow).
+	body := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(input, 1, 0, true).
-		AddItem(list, 10, 0, false)
-	modal.SetBorder(true).
-		SetTitle(" COMMAND PALETTE ").
-		SetTitleColor(ui.theme.Header).
-		SetBorderColor(ui.theme.FocusBorder).
-		SetBackgroundColor(ui.theme.SurfaceRaised)
+		AddItem(list, commandListRows, 0, false)
 
-	centered := tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(modal, 13, 1, true).
-			AddItem(nil, 0, 1, false), 60, 1, true).
-		AddItem(nil, 0, 1, false)
-
-	ui.rootModal(centered)
+	ui.overlayModal(modalPanel(body, "COMMAND PALETTE", ui.theme),
+		60, commandListRows+5)
 	ui.app.SetFocus(input)
 }

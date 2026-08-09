@@ -20,6 +20,12 @@ import (
 // mainRoot is the application's ordinary root: the layout with the status bar
 // beneath it.
 func (ui *UI) mainRoot() tview.Primitive {
+	// Before the layout exists there is nothing to show through — a modal can
+	// be raised during start-up, and a nil child in a Flex is a panic rather
+	// than an empty background.
+	if ui.layout == nil || ui.statusBar == nil {
+		return tview.NewBox()
+	}
 	return tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(ui.layout, 0, 1, true).
 		AddItem(ui.statusBar, 1, 0, false)
@@ -56,4 +62,47 @@ func modalPanel(body tview.Primitive, title string, theme Theme) *tview.Frame {
 		SetBorderColor(theme.FocusBorder).
 		SetBackgroundColor(theme.SurfaceRaised)
 	return frame
+}
+
+// overlayPrimitive puts a self-sizing primitive over the current screen.
+//
+// For tview.Modal, which measures the screen and centres itself: it draws only
+// its own box, so the page beneath shows around it.
+func (ui *UI) overlayPrimitive(p tview.Primitive) {
+	pages := tview.NewPages().
+		AddPage("screen", ui.mainRoot(), true, true).
+		AddPage("modal", p, true, true)
+	ui.rootModal(pages)
+	ui.app.SetFocus(p)
+}
+
+// overlayForm centres a form at the height its own fields need.
+//
+// Measured rather than guessed: a form rooted on its own filled the terminal,
+// and a form given a fixed height would clip the moment a field was added to
+// it.
+func (ui *UI) overlayForm(form *tview.Form, width int) {
+	ui.overlayModal(form, width, formHeight(form))
+}
+
+// formHeight is the rows a form needs: each field and its padding, a row for
+// the buttons, the border, and the two rows tview leaves around them.
+//
+// The two are measured, not assumed: tview draws the first field one row below
+// the top of the inner rect and will not draw the buttons at all unless a row
+// remains beneath them — so a form sized to the sum of its fields loses its
+// Save and Cancel entirely, which is worse than a form that does not open.
+func formHeight(form *tview.Form) int {
+	h := 0
+	for i := 0; i < form.GetFormItemCount(); i++ {
+		field := form.GetFormItem(i).GetFieldHeight()
+		if field <= 0 {
+			field = tview.DefaultFormFieldHeight
+		}
+		h += field + 1
+	}
+	if form.GetButtonCount() > 0 {
+		h++
+	}
+	return h + 4
 }

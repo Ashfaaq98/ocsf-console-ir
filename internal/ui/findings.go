@@ -727,8 +727,7 @@ func (ui *UI) showFindingStatusModal() {
 	})
 	form.AddButton("Cancel", func() { ui.restoreMainLayout() })
 
-	ui.rootModal(form)
-	ui.app.SetFocus(form)
+	ui.overlayForm(form, 64)
 }
 
 // showFindingVerdictModal records the analyst's true/false-positive judgement,
@@ -794,8 +793,7 @@ func (ui *UI) showFindingVerdictModal() {
 	})
 	form.AddButton("Cancel", func() { ui.restoreMainLayout() })
 
-	ui.rootModal(form)
-	ui.app.SetFocus(form)
+	ui.overlayForm(form, 64)
 }
 
 // toggleFindingsScope switches between open findings and everything.
@@ -962,8 +960,7 @@ func (ui *UI) escalateFindings(findings []store.Finding) {
 	})
 	form.AddButton("Cancel", func() { ui.restoreMainLayout() })
 
-	ui.rootModal(form)
-	ui.app.SetFocus(form)
+	ui.overlayForm(form, 64)
 }
 
 // currentAnalyst returns the operator name recorded on audit entries.

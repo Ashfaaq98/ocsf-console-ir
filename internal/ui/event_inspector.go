@@ -86,16 +86,7 @@ func (ui *UI) showPivotMenu(event store.Event) {
 	if height > 16 {
 		height = 16
 	}
-	centered := tview.NewFlex().
-		AddItem(nil, 0, 1, false).
-		AddItem(tview.NewFlex().SetDirection(tview.FlexRow).
-			AddItem(nil, 0, 1, false).
-			AddItem(list, height, 1, true).
-			AddItem(nil, 0, 1, false), 60, 1, true).
-		AddItem(nil, 0, 1, false)
-
-	ui.rootModal(centered)
-	ui.app.SetFocus(list)
+	ui.overlayModal(list, 60, height)
 }
 
 // closeModal returns to the main layout.

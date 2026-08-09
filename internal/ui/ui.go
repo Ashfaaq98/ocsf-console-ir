@@ -2635,9 +2635,7 @@ func (ui *UI) showModal(title, text string) {
 		return event
 	})
 
-	ui.rootModal(modal)
-	// Set focus to the modal to ensure it receives key events
-	ui.app.SetFocus(modal)
+	ui.overlayPrimitive(modal)
 }
 
 // restoreMainLayout restores the main TUI layout after closing a modal/help view
@@ -3339,8 +3337,7 @@ func (ui *UI) showCreateCaseModal() {
 		return event
 	})
 
-	ui.rootModal(form)
-	ui.app.SetFocus(form)
+	ui.overlayForm(form, 64)
 	// Brief hint for users on Description field navigation
 	ui.setStatusDirect("[%s]Description: Enter=newline, Tab/Shift+Tab move fields[-:-:-]", ui.theme.TagAccent)
 }
@@ -3361,8 +3358,7 @@ func (ui *UI) showAddToExistingCaseModal() {
 		modal.SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 			ui.restoreMainLayout()
 		})
-		ui.rootModal(modal)
-		ui.app.SetFocus(modal)
+		ui.overlayPrimitive(modal)
 		return
 	}
 
@@ -3432,12 +3428,12 @@ func (ui *UI) showAddToExistingCaseModal() {
 		return ev
 	})
 
-	// Set root to the composed layout and focus the input field.
+	// Over the events it is about to file, and focus the input field.
 	//
-	// Through rootModal, not SetRoot: rooted directly it never registered as a
-	// modal, so the global capture went on claiming 1-5 for navigation while a
-	// case number was being typed into the field.
-	ui.rootModal(layout)
+	// Through the modal path, not SetRoot: rooted directly it never registered
+	// as a modal, so the global capture went on claiming 1-5 for navigation
+	// while a case number was being typed into the field.
+	ui.overlayModal(layout, 92, 20)
 	ui.app.SetFocus(form)
 
 	// Brief hint
@@ -3695,8 +3691,7 @@ func (ui *UI) showCombinedFilterModal() {
 			ui.showMultiSelectModal("Select Severities", []string{"critical", "high", "medium", "low", "informational"}, customSev, form, func(sel map[string]bool) {
 				customSev = sel
 				sevDD.SetCurrentOption(6)
-				ui.rootModal(form)
-				ui.app.SetFocus(form)
+				ui.overlayForm(form, 64)
 			})
 		}
 	})
@@ -3743,8 +3738,7 @@ func (ui *UI) showCombinedFilterModal() {
 			ui.showMultiSelectModal("Select Categories", selectable, customType, form, func(sel map[string]bool) {
 				customType = sel
 				typeDD.SetCurrentOption(customTypeIdx)
-				ui.rootModal(form)
-				ui.app.SetFocus(form)
+				ui.overlayForm(form, 64)
 			})
 		}
 	})
@@ -3874,8 +3868,7 @@ func (ui *UI) showCombinedFilterModal() {
 		return ev
 	})
 
-	ui.rootModal(form)
-	ui.app.SetFocus(form)
+	ui.overlayForm(form, 64)
 	ui.setStatusDirect("[%s]Tab/Shift+Tab: navigate • Enter: open dropdown • Apply/Clear/Cancel at bottom[-:-:-]", ui.theme.TagAccent)
 }
 
@@ -3965,8 +3958,7 @@ func (ui *UI) showMultiSelectModal(title string, options []string, initial map[s
 		return ev
 	})
 
-	ui.rootModal(form)
-	ui.app.SetFocus(form)
+	ui.overlayForm(form, 64)
 }
 
 // scheduleEventsReload coordinates safe event reloads after actions like filter Apply/Clear.
@@ -4318,8 +4310,7 @@ func (ui *UI) showDeleteCaseConfirm() {
 		return event
 	})
 
-	ui.rootModal(modal)
-	ui.app.SetFocus(modal)
+	ui.overlayPrimitive(modal)
 }
 
 // buildShortcutHints is the right-hand half of the status bar: the keys the
@@ -4528,8 +4519,7 @@ func (ui *UI) showDeleteEventsConfirm(ids []string) {
 		return ev
 	})
 
-	ui.rootModal(modal)
-	ui.app.SetFocus(modal)
+	ui.overlayPrimitive(modal)
 }
 
 // Case Filter modal: filter cases by name (Title), status, and severity.
@@ -4704,8 +4694,7 @@ func (ui *UI) showCaseFilterModal() {
 		return ev
 	})
 
-	ui.rootModal(form)
-	ui.app.SetFocus(form)
+	ui.overlayForm(form, 64)
 	ui.setStatusDirect("[%s]Tab/Shift+Tab: navigate • Enter: open dropdown • Apply/Cancel at bottom[-:-:-]", ui.theme.TagAccent)
 }
 
