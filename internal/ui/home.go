@@ -419,11 +419,14 @@ func (h *homeView) load() {
 	run(panelQueue, func() {
 		// One more than the panel can show, so "and N more" can be truthful
 		// without a second count query.
-		q, err := st.GetPriorityQueue(ctx, h.queueWant()+1)
+		// Asked once: the panel must not decide how many to keep from a
+		// different answer than the one it queried with.
+		want := h.queueWant()
+		q, err := st.GetPriorityQueue(ctx, want+1)
 		h.set(func(d *homeData) {
 			d.queueTotal = len(q)
-			if len(q) > h.queueWant() {
-				q = q[:h.queueWant()]
+			if len(q) > want {
+				q = q[:want]
 			}
 			d.queue, d.queueErr = q, err
 		})
@@ -883,7 +886,11 @@ func (h *homeView) rebuild(width, height int) {
 	if showInspector {
 		fixed += homeInspectorRows
 	}
+	// Under the mutex: the loaders read this to size their query, and the
+	// layout writes it on the UI goroutine.
+	h.mu.Lock()
 	h.queueRows = clamp(height-fixed, homeQueueFloor+2, homeQueueCeiling+2)
+	h.mu.Unlock()
 
 	h.root.Clear()
 	h.root.AddItem(h.header, homeHeaderRows, 0, false)
@@ -902,11 +909,19 @@ func (h *homeView) rebuild(width, height int) {
 
 // queueWant is how many findings to ask the database for: what the panel can
 // show, within bounds, so the query follows the window rather than a constant.
+// queueWant is how many findings the queue panel asks for.
+//
+// Locked, because it is read from the loader's goroutine and written by the
+// layout on the UI goroutine — the same split as the data it is sizing.
 func (h *homeView) queueWant() int {
-	if h.queueRows <= 0 {
+	h.mu.Lock()
+	rows := h.queueRows
+	h.mu.Unlock()
+
+	if rows <= 0 {
 		return homeQueueFloor
 	}
-	return clamp(h.queueRows-2, homeQueueFloor, homeQueueCeiling)
+	return clamp(rows-2, homeQueueFloor, homeQueueCeiling)
 }
 
 func clamp(v, lo, hi int) int {

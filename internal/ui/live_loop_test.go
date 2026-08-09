@@ -1,14 +1,3 @@
-//go:build !race
-
-// Deadlock tests, run without the race detector.
-//
-// They start the real event loop alongside the screens' loaders, and the
-// events loaders write shared UI state — the query state's totals and page
-// index — on their own goroutines while the status bar reads it on the loop.
-// That race is real and pre-existing; it is not what these tests are for, and
-// it is not something to fix by weakening them. Under -race they are skipped;
-// under the ordinary run they catch the freeze they were written for.
-
 package ui
 
 import (
@@ -161,9 +150,16 @@ func awaitDestination(ui *UI, want destinationID, within time.Duration) bool {
 func settle(ui *UI, within time.Duration) {
 	done := make(chan struct{})
 	go func() {
-		if ui.home != nil {
-			ui.home.close()
-			ui.home.wait()
+		// Home is taken from the screen on the loop and closed off it: the
+		// field belongs to the UI goroutine, and close waits for a ticker that
+		// queues its own updates.
+		var h *homeView
+		ui.app.QueueUpdate(func() {
+			h, ui.home = ui.home, nil
+		})
+		if h != nil {
+			h.close()
+			h.wait()
 		}
 		ui.waitForLoads()
 		close(done)

@@ -1766,11 +1766,33 @@ func (ui *UI) refreshCases() error {
 	filtered := cases
 
 	ui.logger.Printf("Loaded %d cases from database", len(cases))
-	// Store source list and apply CASE filters
-	ui.allCases = filtered
+
+	// The all-events filters, read on the UI goroutine, for the overview total.
+	var plan eventQueryPlan
+	ui.queueUpdate(func() { plan = ui.planEventQuery(contextAll, "") })
+	eventsTotal, _ := ui.store.CountEventsFiltered(ctx, "",
+		plan.start, plan.end, plan.severities, plan.types)
+
+	// Everything that touches the screen, on the screen's goroutine.
+	ui.queueUpdate(func() { ui.applyCases(filtered, eventsTotal) })
+
+	ui.setStatus("[%s]Loaded %d cases[-:-:-]", ui.theme.TagSuccess, len(filtered))
+
+	return nil
+}
+
+// applyCases records a freshly read case list.
+//
+// It must run on the UI goroutine. refreshCases used to do all of this from
+// whichever goroutine called it — assigning ui.cases, clearing the selection,
+// repainting the list — while the key handler was writing the same fields on
+// the event loop.
+func (ui *UI) applyCases(cases []store.Case, eventsTotal int) {
+	ui.allCases = cases
 	ui.cases = ui.applyCaseFilters(ui.allCases)
 
-	// Selection stability: if current selected case is filtered out, clear selection and switch to ALL EVENTS
+	// Selection stability: a case the filters removed is no longer the
+	// selection, and the events list falls back to all events.
 	if ui.selectedCaseID != "" {
 		found := false
 		for _, c := range ui.cases {
@@ -1785,10 +1807,8 @@ func (ui *UI) refreshCases() error {
 		}
 	}
 
-	ui.updateCasesList()
+	ui.renderCasesList()
 
-	// Compute ALL CASES stats (OPEN, INVESTIGATING, CLOSED)
-	totalCases := len(ui.cases)
 	var openN, invN, closeN int
 	for _, c := range ui.cases {
 		switch strings.ToLower(strings.TrimSpace(c.Status)) {
@@ -1800,26 +1820,7 @@ func (ui *UI) refreshCases() error {
 			closeN++
 		}
 	}
-
-	// Compute ALL EVENTS total with current ALL-context filters
-	sAll := ui.getOrInitState(contextAll)
-	start := sAll.filterStart
-	if start.IsZero() && !ui.filterStart.IsZero() {
-		start = ui.filterStart
-	}
-	end := sAll.filterEnd
-	if end.IsZero() && !ui.filterEnd.IsZero() {
-		end = ui.filterEnd
-	}
-	sev := keysFromMap(sAll.filterSeverities)
-	typ := keysFromMap(sAll.filterTypes)
-	eventsTotal, _ := ui.store.CountEventsFiltered(ctx, "", start, end, sev, typ)
-
-	ui.updateOverview(eventsTotal, totalCases, openN, invN, closeN)
-
-	ui.setStatus("[%s]Loaded %d cases[-:-:-]", ui.theme.TagSuccess, len(filtered))
-
-	return nil
+	ui.updateOverview(eventsTotal, len(ui.cases), openN, invN, closeN)
 }
 
 // updateCasesList updates the cases sidebar
@@ -1910,16 +1911,24 @@ func (ui *UI) loadCaseEvents() {
 			if ui.logger != nil {
 				ui.logger.Printf("panic in loadCaseEvents: %v", r)
 			}
-			ui.setStatusDirect("[%s]Error loading events (recovered)[-:-:-]", ui.theme.TagError)
+			ui.setStatus("[%s]Error loading events (recovered)[-:-:-]", ui.theme.TagError)
 		}
 	}()
 
-	if ui.selectedCaseID == "" {
+	// Which case, and its filters, read on the UI goroutine.
+	var plan eventQueryPlan
+	ui.queueUpdate(func() {
+		if ui.selectedCaseID == "" {
+			return
+		}
+		plan = ui.planEventQuery(ui.selectedCaseID, ui.selectedCaseID)
+	})
+	if plan.caseID == "" {
 		ui.logger.Println("loadCaseEvents: no case selected")
 		return
 	}
 
-	ui.logger.Printf("Loading events for case: %s", ui.selectedCaseID)
+	ui.logger.Printf("Loading events for case: %s", plan.caseID)
 	// Show loading status immediately on the UI thread
 	ui.setStatus("[%s]Loading events...[-:-:-]", ui.theme.TagWarning)
 
@@ -1927,22 +1936,10 @@ func (ui *UI) loadCaseEvents() {
 	ctx, cancel := context.WithTimeout(ui.ctx, 4*time.Second)
 	defer cancel()
 
-	// Per-context query state and filters/pagination
-	s := ui.getOrInitState(ui.selectedCaseID)
-	// Bridge legacy time fields if set
-	if s.filterStart.IsZero() && !ui.filterStart.IsZero() {
-		s.filterStart = ui.filterStart
-	}
-	if s.filterEnd.IsZero() && !ui.filterEnd.IsZero() {
-		s.filterEnd = ui.filterEnd
-	}
-	sev := keysFromMap(s.filterSeverities)
-	typ := keysFromMap(s.filterTypes)
-
 	// Count total first to clamp page index
-	total, err := ui.store.CountEventsFiltered(ctx, ui.selectedCaseID, s.filterStart, s.filterEnd, sev, typ)
+	total, err := ui.store.CountEventsFiltered(ctx, plan.caseID, plan.start, plan.end, plan.severities, plan.types)
 	if err != nil {
-		ui.logger.Printf("Error counting events for case %s: %v", ui.selectedCaseID, err)
+		ui.logger.Printf("Error counting events for case %s: %v", plan.caseID, err)
 		// Reset filter apply guard on failure
 		atomic.StoreInt32(&ui.filterApplying, 0)
 		ui.queueUpdate(func() {
@@ -1954,32 +1951,12 @@ func (ui *UI) loadCaseEvents() {
 		})
 		return
 	}
-	s.totalCount = total
+	page, offset := pageOffset(total, plan.pageSize, plan.pageIndex)
 
-	// Clamp page index within bounds
-	maxPages := 1
-	if s.pageSize > 0 {
-		maxPages = (s.totalCount + s.pageSize - 1) / s.pageSize
-		if maxPages == 0 {
-			maxPages = 1
-		}
-		if s.pageIndex >= maxPages {
-			s.pageIndex = maxPages - 1
-		}
-		if s.pageIndex < 0 {
-			s.pageIndex = 0
-		}
-	}
-
-	limit := s.pageSize
-	offset := 0
-	if limit > 0 {
-		offset = s.pageIndex * limit
-	}
-
-	events, err := ui.store.GetEventsFiltered(ctx, ui.selectedCaseID, s.filterStart, s.filterEnd, sev, typ, limit, offset)
+	events, err := ui.store.GetEventsFiltered(ctx, plan.caseID,
+		plan.start, plan.end, plan.severities, plan.types, plan.pageSize, offset)
 	if err != nil {
-		ui.logger.Printf("Error loading events for case %s: %v", ui.selectedCaseID, err)
+		ui.logger.Printf("Error loading events for case %s: %v", plan.caseID, err)
 		// Reset filter apply guard on failure
 		atomic.StoreInt32(&ui.filterApplying, 0)
 		ui.queueUpdate(func() {
@@ -1992,7 +1969,7 @@ func (ui *UI) loadCaseEvents() {
 		return
 	}
 
-	ui.logger.Printf("Loaded %d events for case %s", len(events), ui.selectedCaseID)
+	ui.logger.Printf("Loaded %d events for case %s", len(events), plan.caseID)
 	if ui.logger != nil {
 		if d := ui.eventsLoad.startedAgo(); d > 0 {
 			ui.logger.Printf("loadCaseEvents: query finished in %v; updating UI", d)
@@ -2001,6 +1978,7 @@ func (ui *UI) loadCaseEvents() {
 
 	// Update UI in main thread
 	ui.queueUpdate(func() {
+		ui.recordEventQuery(plan, total, page)
 		// Clear any previous selections when data changes (avoid stale IDs across pages)
 		ui.selectedEventIDs = make(map[string]bool)
 		ui.events = events
@@ -4183,38 +4161,28 @@ func (ui *UI) loadAllEvents() {
 			if ui.logger != nil {
 				ui.logger.Printf("panic in loadAllEvents: %v", r)
 			}
-			ui.setStatusDirect("[%s]Error loading all events (recovered)[-:-:-]", ui.theme.TagError)
+			ui.setStatus("[%s]Error loading all events (recovered)[-:-:-]", ui.theme.TagError)
 		}
 	}()
 
 	ui.logger.Println("Loading ALL events...")
-	if ui.logger != nil {
-		ui.logger.Printf("loadAllEvents: filterStart=%v filterEnd=%v", ui.filterStart, ui.filterEnd)
-	}
 	ui.setStatus("[%s]Loading ALL events...[-:-:-]", ui.theme.TagWarning)
 
 	// Run DB query with a short timeout to avoid UI freeze if DB is locked
 	ctx, cancel := context.WithTimeout(ui.ctx, 4*time.Second)
 	defer cancel()
 
-	var (
-		events []store.Event
-		err    error
-	)
+	// The query context, read once on the UI goroutine.
+	var plan eventQueryPlan
+	ui.queueUpdate(func() { plan = ui.planEventQuery(contextAll, "") })
+	if ui.logger != nil {
+		ui.logger.Printf("loadAllEvents: filterStart=%v filterEnd=%v", plan.start, plan.end)
+	}
 
-	// Resolve per-context query state for ALL and bridge time filters from legacy fields
-	s := ui.getOrInitState(contextAll)
-	if s.filterStart.IsZero() && !ui.filterStart.IsZero() {
-		s.filterStart = ui.filterStart
-	}
-	if s.filterEnd.IsZero() && !ui.filterEnd.IsZero() {
-		s.filterEnd = ui.filterEnd
-	}
-	sev := keysFromMap(s.filterSeverities)
-	typ := keysFromMap(s.filterTypes)
+	var events []store.Event
 
 	// Count total to compute pagination/clamp page index
-	total, err := ui.store.CountEventsFiltered(ctx, "", s.filterStart, s.filterEnd, sev, typ)
+	total, err := ui.store.CountEventsFiltered(ctx, "", plan.start, plan.end, plan.severities, plan.types)
 	if err != nil {
 		if ui.logger != nil {
 			ui.logger.Printf("Error counting ALL events: %v", err)
@@ -4230,30 +4198,10 @@ func (ui *UI) loadAllEvents() {
 		})
 		return
 	}
-	s.totalCount = total
+	page, offset := pageOffset(total, plan.pageSize, plan.pageIndex)
 
-	// Clamp page index based on total
-	maxPages := 1
-	if s.pageSize > 0 {
-		maxPages = (s.totalCount + s.pageSize - 1) / s.pageSize
-		if maxPages == 0 {
-			maxPages = 1
-		}
-		if s.pageIndex >= maxPages {
-			s.pageIndex = maxPages - 1
-		}
-		if s.pageIndex < 0 {
-			s.pageIndex = 0
-		}
-	}
-
-	limit := s.pageSize
-	offset := 0
-	if limit > 0 {
-		offset = s.pageIndex * limit
-	}
-
-	events, err = ui.store.GetEventsFiltered(ctx, "", s.filterStart, s.filterEnd, sev, typ, limit, offset)
+	events, err = ui.store.GetEventsFiltered(ctx, "",
+		plan.start, plan.end, plan.severities, plan.types, plan.pageSize, offset)
 	if err != nil {
 		if ui.logger != nil {
 			ui.logger.Printf("Error loading ALL events: %v", err)
@@ -4279,6 +4227,7 @@ func (ui *UI) loadAllEvents() {
 
 	// Update UI in main thread
 	ui.queueUpdate(func() {
+		ui.recordEventQuery(plan, total, page)
 		ui.selectedEventIDs = make(map[string]bool)
 		ui.events = events
 		ui.updateEventsList()
@@ -4308,7 +4257,7 @@ func (ui *UI) loadAllEvents() {
 				closeN++
 			}
 		}
-		ui.updateOverview(s.totalCount, totalCases, openN, invN, closeN)
+		ui.updateOverview(total, totalCases, openN, invN, closeN)
 
 		ui.setStatusDirect("[%s]Loaded %d events[-:-:-] (ALL EVENTS)", ui.theme.TagSuccess, len(events))
 		// Re-enable Apply after load completes
