@@ -1626,11 +1626,10 @@ func (ui *UI) setupKeybindings() {
 				return nil
 			// Theme toggles
 			case 't':
-				// Apply theme synchronously on UI goroutine to avoid queue starvation
-				if ui.logger != nil {
-					ui.logger.Printf("Key 't' pressed: applying theme cycle (current=%s)", ui.themeName)
-				}
-				ui.cycleTheme()
+				// The list, not the next one along. Cycling blindly through six
+				// themes left the application on a palette nobody chose — light
+				// is two presses from the default — and saved it.
+				ui.showThemePicker()
 				return nil
 			case 'f':
 				// Whose filter this is follows the screen, not the focus.
