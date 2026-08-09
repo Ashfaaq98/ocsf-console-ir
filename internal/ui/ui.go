@@ -1823,49 +1823,58 @@ func (ui *UI) refreshCases() error {
 }
 
 // updateCasesList updates the cases sidebar
+// updateCasesList repaints the case list from off the UI goroutine.
+//
+// The two halves are separate deliberately. queueUpdate blocks until the event
+// loop drains it, so calling this from a key handler — which runs *on* that
+// loop — deadlocks the application. Anything already on the UI goroutine calls
+// renderCasesList instead.
 func (ui *UI) updateCasesList() {
-	ui.queueUpdate(func() {
-		// Which case the cursor was on, before the list is torn down. A
-		// refresh used to send it back to the first case, so pressing r while
-		// reading case four put case one's briefing on screen.
-		wasOn := ui.selectedCaseID
-		if i := ui.sidebar.GetCurrentItem(); i >= 0 && i < len(ui.cases) {
-			wasOn = ui.cases[i].ID
-		}
+	ui.queueUpdate(ui.renderCasesList)
+}
 
-		ui.sidebar.Clear()
+// renderCasesList paints the rows. It must already be on the UI goroutine.
+func (ui *UI) renderCasesList() {
+	// Which case the cursor was on, before the list is torn down. A
+	// refresh used to send it back to the first case, so pressing r while
+	// reading case four put case one's briefing on screen.
+	wasOn := ui.selectedCaseID
+	if i := ui.sidebar.GetCurrentItem(); i >= 0 && i < len(ui.cases) {
+		wasOn = ui.cases[i].ID
+	}
 
-		if len(ui.cases) == 0 {
-			return
-		}
+	ui.sidebar.Clear()
 
-		// The title has whatever the list's width leaves after the number.
-		room := casesListWidth(ui.termWidth) - 10
+	if len(ui.cases) == 0 {
+		return
+	}
 
-		for i, case_ := range ui.cases {
-			title := truncate(case_.Title, room)
+	// The title has whatever the list's width leaves after the number.
+	room := casesListWidth(ui.termWidth) - 10
 
-			severity := strings.ToUpper(case_.Severity)
-			severityColor := ui.getSeverityColor(case_.Severity)
+	for i, case_ := range ui.cases {
+		title := truncate(case_.Title, room)
 
-			// Include case number in the display (1-based) using the same visual style as tview "(n)"
-			caseNumber := i + 1
-			mainText := fmt.Sprintf("[%s](%d)[-] [%s]%s[-]", ui.theme.TagAccent, caseNumber, ui.theme.TagTextPrimary, title)
-			secondaryText := fmt.Sprintf("[%s]%s[-] | %s | %d events",
-				severityColor,
-				severity,
-				strings.ToLower(strings.TrimSpace(case_.Status)),
-				case_.EventCount,
-			)
+		severity := strings.ToUpper(case_.Severity)
+		severityColor := ui.getSeverityColor(case_.Severity)
 
-			// Do not pass tview shortcut runes at all, to avoid duplicate "(1)" style labels.
-			// Multi-digit number selection is handled by our input-capture buffer.
-			var shortcut rune = 0
-			ui.sidebar.AddItem(mainText, secondaryText, shortcut, nil)
-		}
+		// Include case number in the display (1-based) using the same visual style as tview "(n)"
+		caseNumber := i + 1
+		mainText := fmt.Sprintf("[%s](%d)[-] [%s]%s[-]", ui.theme.TagAccent, caseNumber, ui.theme.TagTextPrimary, title)
+		secondaryText := fmt.Sprintf("[%s]%s[-] | %s | %d events",
+			severityColor,
+			severity,
+			strings.ToLower(strings.TrimSpace(case_.Status)),
+			case_.EventCount,
+		)
 
-		ui.selectCaseByID(wasOn)
-	})
+		// Do not pass tview shortcut runes at all, to avoid duplicate "(1)" style labels.
+		// Multi-digit number selection is handled by our input-capture buffer.
+		var shortcut rune = 0
+		ui.sidebar.AddItem(mainText, secondaryText, shortcut, nil)
+	}
+
+	ui.selectCaseByID(wasOn)
 }
 
 // selectCaseByID puts the cursor on a case, falling back to the first.
@@ -2386,7 +2395,7 @@ func (ui *UI) showCaseSummary() {
 	}
 
 	if selectedCase == nil {
-		ui.setStatus("[%s]Selected case not found[-:-:-]", ui.theme.TagError)
+		ui.setStatusDirect("[%s]Selected case not found[-:-:-]", ui.theme.TagError)
 		return
 	}
 
@@ -2394,11 +2403,11 @@ func (ui *UI) showCaseSummary() {
 	// it is also assigned from the provider settings modal, and a summary is
 	// not worth a nil dereference on the one path that could clear it.
 	if ui.llm == nil {
-		ui.setStatus("[%s]No LLM provider configured — press L to set one up[-:-:-]", ui.theme.TagWarning)
+		ui.setStatusDirect("[%s]No LLM provider configured — press L to set one up[-:-:-]", ui.theme.TagWarning)
 		return
 	}
 
-	ui.setStatus("[%s]Generating case summary...[-:-:-]", ui.theme.TagWarning)
+	ui.setStatusDirect("[%s]Generating case summary...[-:-:-]", ui.theme.TagWarning)
 
 	caseID := selectedCase.ID
 	go func() {
@@ -3011,19 +3020,33 @@ func (ui *UI) composeStatus(message string) string {
 		t.TagMuted, ui.buildShortcutHints())
 }
 
-// setStatus updates the status bar
+// setStatus updates the status bar from anywhere.
+//
+// Composed on the UI goroutine and posted without waiting for it. Both halves
+// of that are fixes:
+//
+// Composing at the call site read ui.destination, the theme and the screen's
+// flags off whatever goroutine called — a data race against the key handler
+// that writes them while a loader is announcing itself.
+//
+// And waiting was worse. QueueUpdate blocks until the event loop drains it, so
+// any caller already on that loop froze the entire application — which is what
+// pressing s on a case did, through showCaseSummary.
+//
+// The cost is ordering: two callers racing can land out of order and the bar
+// shows the loser. A momentarily stale line beats a dead application, and
+// anything already on the UI goroutine calls setStatusDirect, which keeps both.
 func (ui *UI) setStatus(format string, args ...interface{}) {
-	statusText := ui.composeStatus(fmt.Sprintf(format, args...))
+	message := fmt.Sprintf(format, args...)
 
-	if ui.running.Load() {
-		// Use non-blocking QueueUpdate to avoid potential re-entrancy stalls during input handling
-		ui.app.QueueUpdate(func() {
-			ui.statusBar.SetText(statusText)
-		})
-	} else {
-		// When the app is not running (e.g., unit tests), set directly.
-		ui.statusBar.SetText(statusText)
+	if !ui.running.Load() {
+		// No loop to post to (unit tests).
+		ui.statusBar.SetText(ui.composeStatus(message))
+		return
 	}
+	go ui.app.QueueUpdate(func() {
+		ui.statusBar.SetText(ui.composeStatus(message))
+	})
 }
 
 // getSeverityColor returns the color tag for a severity level (for text markup)
@@ -5167,7 +5190,10 @@ func (ui *UI) switchToCases() {
 	// known, and the titles are cut to fit it — so a wide terminal showed
 	// titles trimmed to the narrowest layout until something else refreshed
 	// the list.
-	ui.updateCasesList()
+	//
+	// Rendered directly: this runs on the UI goroutine, and the queued form
+	// waits for a loop that is currently executing this function.
+	ui.renderCasesList()
 	ui.setStatusDirect("[%s]Cases • Enter opens a case · c creates one[-:-:-]", ui.theme.TagAccent)
 }
 
