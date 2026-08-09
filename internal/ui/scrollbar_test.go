@@ -110,3 +110,29 @@ func TestDisplayedLinesCountsWrapping(t *testing.T) {
 }
 
 func ptrTheme(t Theme) *Theme { return &t }
+
+// A pane must not scroll past its own end.
+//
+// tview clamps the offset downward to zero and upward only after ScrollToEnd,
+// so holding Down walks the text off the top and leaves a blank pane with no
+// way to tell how far it has gone.
+func TestScrollStopsAtTheEnd(t *testing.T) {
+	tv := tview.NewTextView().SetDynamicColors(true)
+	tv.SetBorder(true)
+	attachScrollbar(tv, ptrTheme(themeDark()))
+	tv.SetText(strings.Repeat("a line\n", 40))
+
+	// Far past the end, as holding the arrow key would.
+	tv.ScrollTo(500, 0)
+	lines := renderPrimitive(t, tv, 40, 12)
+
+	if got, _ := tv.GetScrollOffset(); got > 40 {
+		t.Errorf("the pane scrolled to line %d of a 40-line document", got)
+	}
+
+	// And the last line is still on screen rather than off the top.
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "a line") {
+		t.Errorf("scrolling to the end emptied the pane:\n%s", joined)
+	}
+}

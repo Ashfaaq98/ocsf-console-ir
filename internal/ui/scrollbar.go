@@ -45,8 +45,23 @@ func attachScrollbar(tv *tview.TextView, theme *Theme) {
 
 		// One column for the bar, one blank between it and the text.
 		textWidth := iw - 2
-		offset, _ := tv.GetScrollOffset()
+		offset, col := tv.GetScrollOffset()
 		total := displayedLines(tv.GetText(true), textWidth)
+
+		// Stop the pane scrolling past its own end.
+		//
+		// tview clamps the offset downward to zero and upward only after
+		// ScrollToEnd, so holding Down walks the text off the top and leaves a
+		// blank pane with no way to tell how far it has gone. Clamping here
+		// catches every route in — the arrows, the page keys and the wheel —
+		// because they all arrive as a changed offset by the next draw.
+		if max := total - ih; offset > max {
+			if max < 0 {
+				max = 0
+			}
+			tv.ScrollTo(max, col)
+			offset = max
+		}
 
 		drawScrollbar(screen, ix+iw-1, iy, ih, offset, total, theme)
 		return ix, iy, textWidth, ih

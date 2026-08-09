@@ -502,3 +502,86 @@ func TestTriageEnterIsNotAdvertised(t *testing.T) {
 		t.Errorf("Triage does not advertise the key that reaches the detail: %s", got)
 	}
 }
+
+// Marking a finding must not move the cursor.
+//
+// Space repaints the table, and the repaint sent the cursor back to the top —
+// so marking the fifth finding meant scrolling back down to reach the sixth.
+func TestMarkingAFindingKeepsTheCursor(t *testing.T) {
+	ui, st := newTestUI(t)
+	for _, uid := range []string{"a", "b", "c", "d"} {
+		seedTriageFinding(t, st, uid, "")
+	}
+	ui.enterScreen(destTriage)
+	awaitIdle(t, ui)
+
+	ui.eventList.Select(3, 0)
+	want, ok := ui.currentFinding()
+	if !ok {
+		t.Fatal("nothing under the cursor")
+	}
+
+	ui.toggleEventSelection()
+
+	row, _ := ui.eventList.GetSelection()
+	if row != 3 {
+		t.Errorf("marking a finding moved the cursor to row %d, want row 3", row)
+	}
+	got, ok := ui.currentFinding()
+	if !ok || got.ID != want.ID {
+		t.Errorf("the cursor left %q after marking it", want.ID)
+	}
+	if ui.triageSelection().count() != 1 {
+		t.Errorf("%d findings marked, want 1", ui.triageSelection().count())
+	}
+}
+
+// A filter change is the one case where the top of the queue is right: the
+// finding the cursor was on may no longer be in the list.
+func TestFilteringResetsTheCursor(t *testing.T) {
+	ui, st := newTestUI(t)
+	seedTriageFinding(t, st, "a", "")
+	seedTriageFinding(t, st, "b", "")
+
+	// One with a title the others do not share, so a search can single it out.
+	odd := &ocsf.Finding{
+		FindingInfo: ocsf.FindingInfo{UID: "odd", Title: "Cryptominer on build-agent-03"},
+		RiskScore:   30, StatusID: ocsf.FindingStatusNew,
+	}
+	odd.ClassUID = ocsf.ClassDetectionFinding
+	odd.CategoryUID = ocsf.CategoryFindings
+	odd.SeverityID = ocsf.SeverityLow
+	odd.Time = time.Now()
+	if _, err := st.SaveFinding(context.Background(), odd); err != nil {
+		t.Fatal(err)
+	}
+
+	ui.enterScreen(destTriage)
+	awaitIdle(t, ui)
+	if len(ui.findings) != 3 {
+		t.Fatalf("loaded %d findings, want 3", len(ui.findings))
+	}
+
+	// Park the cursor on a finding the search will not match.
+	ui.eventList.Select(1, 0)
+	parked, _ := ui.currentFinding()
+	if strings.Contains(parked.Title, "Cryptominer") {
+		ui.eventList.Select(2, 0)
+	}
+
+	ui.triageFilterState().search = "Cryptominer"
+	ui.spawnLoad(ui.loadFindings)
+	awaitIdle(t, ui)
+
+	if len(ui.findings) != 1 {
+		t.Fatalf("the search matched %d findings, want the one", len(ui.findings))
+	}
+	row, _ := ui.eventList.GetSelection()
+	if row != 1 {
+		t.Errorf("after filtering the cursor sits at row %d, want the top", row)
+	}
+	got, ok := ui.currentFinding()
+	if !ok || got.FindingUID != "odd" {
+		t.Errorf("the cursor is not on the only remaining finding")
+	}
+}

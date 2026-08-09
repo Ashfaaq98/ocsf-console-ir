@@ -140,8 +140,10 @@ func (ui *UI) showTriageSearch() {
 
 	ui.triageSearchBar = input
 	ui.mainPanel.Clear()
-	ui.mainPanel.AddItem(input, 1, 0, true)
 	ui.restoreTriageBody()
+	// At the foot, beside the keys, where a prompt belongs — and where it does
+	// not push the queue down a row the moment it opens.
+	ui.mainPanel.AddItem(input, 1, 0, true)
 	ui.app.SetFocus(input)
 }
 
@@ -152,7 +154,7 @@ func (ui *UI) closeTriageSearch() {
 	ui.app.SetFocus(ui.eventList)
 }
 
-// restoreTriageBody rebuilds the queue beneath the search field.
+// restoreTriageBody rebuilds the queue above the search field.
 func (ui *UI) restoreTriageBody() {
 	ui.mainPanel.AddItem(ui.triageChipRow(), 1, 0, false)
 	ui.mainPanel.AddItem(ui.eventList, 0, 2, false)

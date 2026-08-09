@@ -147,6 +147,17 @@ const triagePageSize = 200
 
 // updateFindingsList renders the findings queue into the main table.
 func (ui *UI) updateFindingsList(total int) {
+	// Where the cursor was, before the table is torn down.
+	//
+	// This function repaints for reasons that are not a reload — marking a
+	// finding with Space, a theme change — and every one of them sent the
+	// cursor back to the top, so marking the fifth finding meant scrolling back
+	// down to reach the sixth.
+	wasOn := ""
+	if row, _ := ui.eventList.GetSelection(); row > 0 && row-1 < len(ui.findings) {
+		wasOn = ui.findings[row-1].ID
+	}
+
 	ui.eventList.Clear()
 	ui.eventList.SetSelectedStyle(tcell.StyleDefault.
 		Background(ui.theme.SelectionBg).Foreground(ui.theme.SelectionFg))
@@ -263,17 +274,27 @@ func (ui *UI) updateFindingsList(total int) {
 		}
 	}
 
-	ui.selectLoadedFinding()
+	ui.selectLoadedFinding(wasOn)
 }
 
 // selectLoadedFinding puts the cursor on the finding another screen asked for,
 // falling back to the top of the queue.
-func (ui *UI) selectLoadedFinding() {
+func (ui *UI) selectLoadedFinding(wasOn string) {
 	if ui.eventList.GetRowCount() <= 1 {
 		return
 	}
+
+	// A finding another screen asked for wins: it is an explicit request, and
+	// it only survives one repaint.
 	want := ui.pendingFindingID
 	ui.pendingFindingID = ""
+
+	// Otherwise stay where the analyst left the cursor, if that finding is
+	// still in the list. It will not be after a filter change, which is the one
+	// case where the top of the queue is the right answer.
+	if want == "" {
+		want = wasOn
+	}
 
 	if want != "" {
 		for i, f := range ui.findings {
@@ -282,9 +303,6 @@ func (ui *UI) selectLoadedFinding() {
 				return
 			}
 		}
-		// Asked for and not in this page: the filters or the page size put it
-		// somewhere else. The top of the queue is a better answer than a cursor
-		// left wherever the previous screen happened to leave it.
 	}
 	ui.eventList.Select(1, 0)
 }
