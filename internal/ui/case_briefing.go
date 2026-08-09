@@ -105,9 +105,14 @@ func briefingStatement(b *strings.Builder, d briefingData, t Theme, width int) {
 	}
 	// This is what every existing case shows on first open, so it has to be
 	// worth reading rather than a blank.
+	//
+	// It says nothing about how to write one. It used to offer "S write one",
+	// and S is not handled here or in the case screen — the global binding on
+	// this screen generates an AI summary. The store has SetStatement and it
+	// has no caller but the demo seeder; a way to write a briefing from the UI
+	// is a feature, and until it exists the panel does not claim otherwise.
 	fmt.Fprintf(b, " [%s]No statement yet — one sentence on what happened, so the next person[-]\n", t.TagMuted)
-	fmt.Fprintf(b, " [%s]does not have to reconstruct it from the evidence.[-]   %s\n",
-		t.TagMuted, renderKey("S", "write one", t))
+	fmt.Fprintf(b, " [%s]does not have to reconstruct it from the evidence.[-]\n", t.TagMuted)
 }
 
 // scopeLines summarises what the case covers.
@@ -166,7 +171,9 @@ func scopeOf(events []store.Event) (hosts, users []string, first, last time.Time
 // hypothesisLines renders beliefs with their confidence.
 func hypothesisLines(brief store.Briefing, t Theme) []string {
 	if len(brief.Hypotheses) == 0 {
-		return []string{fmt.Sprintf("  [%s]Nothing recorded.[-]   %s", t.TagMuted, renderKey("H", "add one", t))}
+		// No key: H opens the help screen, and nothing anywhere calls
+		// store.AddHypothesis — which has no caller in the repository at all.
+		return []string{fmt.Sprintf("  [%s]Nothing recorded.[-]", t.TagMuted)}
 	}
 	out := make([]string, 0, len(brief.Hypotheses))
 	for _, h := range brief.Hypotheses {
@@ -195,7 +202,9 @@ func confidenceMark(confidence string, t Theme) (glyph, colour, label string) {
 // nextActionLines renders the checklist.
 func nextActionLines(brief store.Briefing, t Theme) []string {
 	if len(brief.NextActions) == 0 {
-		return []string{fmt.Sprintf("  [%s]Nothing outstanding.[-]   %s", t.TagMuted, renderKey("A", "add one", t))}
+		// No key: A leaves for the Events screen, and store.AddNextAction has
+		// no caller either.
+		return []string{fmt.Sprintf("  [%s]Nothing outstanding.[-]", t.TagMuted)}
 	}
 	out := make([]string, 0, len(brief.NextActions))
 	for _, a := range brief.NextActions {
@@ -213,16 +222,16 @@ func nextActionLines(brief store.Briefing, t Theme) []string {
 // summaryLines renders the generated summary, always labelled as generated.
 func summaryLines(brief store.Briefing, t Theme, width int) []string {
 	if !brief.HasSummary || strings.TrimSpace(brief.Summary) == "" {
-		return []string{fmt.Sprintf("  [%s]None generated.[-]   %s", t.TagMuted, renderKey("g", "generate", t))}
+		// No key: g is go-to-top, and the binding that would have generated one
+		// is unreachable dead code inside the case screen.
+		return []string{fmt.Sprintf("  [%s]None generated.[-]", t.TagMuted)}
 	}
 	out := []string{}
 	for _, line := range wrapText(brief.Summary, maxInt(width-4, 24)) {
 		out = append(out, fmt.Sprintf("  [%s]%s[-]", t.TagTextPrimary, tview.Escape(line)))
 	}
-	// The only route from generated text into the case record, and it takes a
-	// deliberate action.
-	out = append(out, "", "  "+actionBar(t,
-		keyHint{"a", "accept into notes"}, keyHint{"r", "regenerate"}))
+	// No keys offered. a is add-to-case and r refreshes; neither accepts a
+	// summary into the record, and nothing else does.
 	return out
 }
 

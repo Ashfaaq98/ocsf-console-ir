@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 	"github.com/gdamore/tcell/v2"
 )
 
@@ -141,4 +142,63 @@ func TestPivotIsNotLiveOnTriage(t *testing.T) {
 	if ui.activeModal != nil {
 		t.Error("p opened a pivot menu on the findings queue")
 	}
+}
+
+// Moving down the case list changes the briefing beside it.
+//
+// The list had no changed-handler at all, so the briefing was pinned to the
+// first case. Its only swap path was a digit typed into the list — and the
+// global capture claims 1 to 5 for navigation, so it worked from the sixth case
+// onwards and was discoverable by nobody.
+func TestArrowingTheCaseListSwapsTheBriefing(t *testing.T) {
+	ui, st := newTestUI(t)
+	ctx := context.Background()
+	for i, title := range []string{"Phishing-led intrusion", "Account compromise", "Cryptominer"} {
+		if _, err := st.CreateOrUpdateCase(ctx, store.Case{
+			ID: fmt.Sprintf("c%d", i), Title: title, Status: "OPEN",
+			CreatedAt: time.Now().Add(-time.Duration(i) * time.Hour), UpdatedAt: time.Now(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ui.refreshCases(); err != nil {
+		t.Fatal(err)
+	}
+
+	ui.enterScreen(destCases)
+	awaitIdle(t, ui)
+	first := ui.selectedCaseID
+	if first == "" {
+		t.Fatal("entering Cases selected no case")
+	}
+
+	ui.sidebar.SetCurrentItem(1)
+
+	if ui.selectedCaseID == first {
+		t.Errorf("moving down the list left the briefing on %q", first)
+	}
+	if ui.selectedCaseID != ui.cases[1].ID {
+		t.Errorf("the briefing shows %q, want the case under the cursor (%q)",
+			ui.selectedCaseID, ui.cases[1].ID)
+	}
+}
+
+// Clearing the list must not be mistaken for a selection: tview fires the
+// changed handler with -1, and updateCasesList clears before it repopulates.
+func TestClearingTheCaseListIsNotASelection(t *testing.T) {
+	ui, st := newTestUI(t)
+	if _, err := st.CreateOrUpdateCase(context.Background(), store.Case{
+		ID: "c1", Title: "A case", Status: "OPEN", CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ui.refreshCases(); err != nil {
+		t.Fatal(err)
+	}
+	ui.enterScreen(destCases)
+	awaitIdle(t, ui)
+
+	// Must not panic or select out of range.
+	ui.sidebar.Clear()
+	ui.updateCasesList()
 }

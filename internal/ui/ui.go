@@ -613,9 +613,6 @@ type UI struct {
 	globalInputCapture func(*tcell.EventKey) *tcell.EventKey
 
 	// Multi-key shortcut state
-	shortcutBuffer  string
-	shortcutTimer   *time.Timer
-	shortcutTimeout time.Duration
 
 	// Context for cancellation
 	ctx    context.Context
@@ -742,8 +739,6 @@ func NewUI(ctx context.Context, store *store.Store, llmProvider llm.LLMProvider,
 		cancel:           cancel,
 		hasTrueColor:     detectTrueColor(),
 		selectedEventIDs: make(map[string]bool),
-		shortcutBuffer:   "",
-		shortcutTimeout:  750 * time.Millisecond, // 750ms timeout for multi-key input
 		version:          version,
 		// Buffered so an enrichment worker never waits on the UI. Arrivals for the
 		// open event are rare (its own lookups), so this is generous.
@@ -1023,16 +1018,10 @@ func (ui *UI) setupLayout() {
 				return nil
 			}
 		case tcell.KeyRune:
-			// Handle number keys for case selection (multi-key support)
-			if ev.Rune() >= '1' && ev.Rune() <= '9' {
-				ui.handleShortcutKey(ev.Rune())
-				return nil
-			}
-			// Handle 0 key (only if buffer is not empty)
-			if ev.Rune() == '0' && ui.shortcutBuffer != "" {
-				ui.handleShortcutKey(ev.Rune())
-				return nil
-			}
+			// The digits belong to navigation. They used to be intercepted here
+			// for "type a case number", which the global capture claimed first
+			// for 1 to 5 — so it worked from the sixth case onwards and was
+			// discoverable by nobody. Arrowing the list swaps the briefing now.
 		}
 		return ev
 	})
@@ -1161,65 +1150,6 @@ func (ui *UI) copyToClipboard(text string) {
 	encoded := base64.StdEncoding.EncodeToString([]byte(text))
 	fmt.Printf("\033]52;c;%s\007", encoded)
 	ui.setStatusDirect("[%s]Copied to clipboard[-:-:-]", ui.theme.TagSuccess)
-}
-
-// onSidebarSelect handles user selection from the case list
-func (ui *UI) onSidebarSelect(index int) {
-	ui.logger.Printf("Sidebar selected (cases list): index=%d, cases=%d", index, len(ui.cases))
-
-	// On the Cases screen the list sits beside a briefing, and selecting a case
-	// swaps that briefing. The path below loads the case's events into
-	// ui.eventList, which is not on screen here — it would have written to a
-	// widget nobody can see.
-	if ui.onCases() {
-		if index >= 0 && index < len(ui.cases) {
-			ui.selectedCaseID = ui.cases[index].ID
-			ui.showCaseBriefing(ui.cases[index])
-		}
-		return
-	}
-
-	// Prepare UI to show a loading state immediately and focus the Events table.
-	showLoading := func(title string) {
-		ui.eventList.Clear()
-		headers := []string{"Time", "Type", "Severity", "Host", "Source", "Message"}
-		for col, header := range headers {
-			ui.eventList.SetCell(0, col, tview.NewTableCell(header).
-				SetTextColor(ui.theme.TableHeader).
-				SetBackgroundColor(ui.theme.TableHeaderBg).
-				SetAttributes(tcell.AttrBold))
-		}
-		ui.eventList.SetCell(1, 0, tview.NewTableCell("Loading...").
-			SetTextColor(ui.theme.TableRowMuted))
-		ui.app.SetFocus(ui.eventList)
-		ui.setStatusDirect("[%s]%s[-:-:-]", ui.theme.TagWarning, title)
-	}
-
-	// Cases list indexes map directly to ui.cases
-	if index < 0 || index >= len(ui.cases) {
-		ui.logger.Printf("Invalid case index: %d (cases: %d)", index, len(ui.cases))
-		return
-	}
-
-	ui.showAll = false
-	ui.showFindings = false
-	ui.selectedCaseID = ui.cases[index].ID
-	// Reset pagination for this case context
-	{
-		s := ui.getOrInitState(ui.selectedCaseID)
-		s.pageIndex = 0
-	}
-	ui.logger.Printf("Selected case ID: %s", ui.selectedCaseID)
-	showLoading("Loading events for selected case...")
-
-	// If a previous load appears stuck, free the guard so a new one can run.
-	if ui.eventsLoad.reclaimIfStuck() && ui.logger != nil {
-		ui.logger.Printf("onSidebarSelect: reclaimed a stuck events load")
-	}
-	if ui.logger != nil {
-		ui.logger.Printf("onSidebarSelect: starting loadCaseEvents (caseID=%s, filterStart=%v, filterEnd=%v)", ui.selectedCaseID, ui.filterStart, ui.filterEnd)
-	}
-	ui.spawnLoad(ui.loadCaseEvents)
 }
 
 // screenKeys is the current screen's own key handler, or nil where the screen
@@ -3165,81 +3095,6 @@ func (ui *UI) GetStats() map[string]interface{} {
 	}
 }
 
-// handleShortcutKey handles a number key press for case selection.
-// It supports multi-digit input with disambiguation:
-//   - If typing this digit could still form a larger valid number (e.g., "1" when there are >=10 cases),
-//     we start a short timer and wait for the next digit before selecting.
-//   - If no valid longer number can be formed (e.g., "7" when there are only 9 cases), we select immediately.
-func (ui *UI) handleShortcutKey(digit rune) {
-	// Cancel any existing timer
-	if ui.shortcutTimer != nil {
-		ui.shortcutTimer.Stop()
-		ui.shortcutTimer = nil
-	}
-
-	// Add digit to buffer
-	ui.shortcutBuffer += string(digit)
-
-	// Parse current buffer
-	caseNum, err := strconv.Atoi(ui.shortcutBuffer)
-	if err != nil || caseNum < 1 {
-		// Invalid prefix; reset
-		ui.shortcutBuffer = ""
-		return
-	}
-
-	max := len(ui.cases)
-	if max == 0 {
-		ui.shortcutBuffer = ""
-		return
-	}
-
-	// If current number is greater than max, no further digits can make it valid (numbers only grow).
-	if caseNum > max {
-		ui.shortcutBuffer = ""
-		return
-	}
-
-	// At this point, caseNum is within [1..max].
-	// Determine if a longer valid number could be formed by adding another digit.
-	// If caseNum*10 <= max, there exists at least one valid extension (e.g., 1 -> 10..19).
-	canExtendValid := (caseNum*10 <= max) && (len(ui.shortcutBuffer) < 3)
-
-	if canExtendValid {
-		// Wait briefly for an additional digit; on timeout, commit current caseNum.
-		ui.shortcutTimer = time.AfterFunc(ui.shortcutTimeout, func() {
-			ui.queueUpdate(func() {
-				if num, err := strconv.Atoi(ui.shortcutBuffer); err == nil && num >= 1 && num <= len(ui.cases) {
-					ui.selectCaseByNumber(num)
-				}
-				ui.shortcutBuffer = ""
-				ui.shortcutTimer = nil
-			})
-		})
-		return
-	}
-
-	// No valid extension possible or buffer length cap reached; select immediately.
-	ui.selectCaseByNumber(caseNum)
-	ui.shortcutBuffer = ""
-}
-
-// selectCaseByNumber selects a case by its 1-based number
-func (ui *UI) selectCaseByNumber(caseNum int) {
-	if caseNum < 1 || caseNum > len(ui.cases) {
-		return
-	}
-
-	// Convert to 0-based index
-	caseIndex := caseNum - 1
-
-	// Select the case in the sidebar
-	ui.sidebar.SetCurrentItem(caseIndex)
-
-	// Trigger the selection
-	ui.onSidebarSelect(caseIndex)
-}
-
 // toggleEventSelection toggles selection state for the currently focused event or finding
 func (ui *UI) toggleEventSelection() {
 	row, _ := ui.eventList.GetSelection()
@@ -5142,6 +4997,21 @@ func (ui *UI) switchToCases() {
 	ui.casesPane.SetBackgroundColor(ui.theme.Bg)
 	ui.casesPane.AddItem(ui.sidebar, casesListWidth, 0, true)
 	ui.casesPane.AddItem(ui.buildCaseBriefingTab(ui.cases[0]), 0, 1, false)
+	ui.selectedCaseID = ui.cases[0].ID
+
+	// Moving down the list changes the briefing beside it.
+	//
+	// The list had no changed-handler at all, so the briefing was pinned to the
+	// first case. Its only swap path was a digit typed into the list — and the
+	// global capture claims 1 to 5 for navigation, so it worked for the sixth
+	// case onwards and for nothing anyone would find.
+	ui.sidebar.SetChangedFunc(func(index int, _, _ string, _ rune) {
+		// Guarded: updateCasesList calls Clear, which fires this with -1.
+		if !ui.onCases() || index < 0 || index >= len(ui.cases) {
+			return
+		}
+		ui.showCaseBriefing(ui.cases[index])
+	})
 
 	ui.setMainView(ui.casesPane)
 	ui.app.SetFocus(ui.sidebar)
@@ -5157,6 +5027,7 @@ const casesListWidth = 38
 // showCaseBriefing swaps the briefing pane to a different case, keeping the
 // list beside it. Without this the list could select a case it could not open.
 func (ui *UI) showCaseBriefing(c store.Case) {
+	ui.selectedCaseID = c.ID
 	if ui.casesPane == nil || ui.casesPane.GetItemCount() < 2 {
 		ui.setMainView(ui.buildCaseBriefingTab(c))
 		return
