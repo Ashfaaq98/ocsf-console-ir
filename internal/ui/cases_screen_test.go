@@ -209,3 +209,53 @@ func TestTheBriefingPromptWrapsToThePane(t *testing.T) {
 		}
 	}
 }
+
+// c on Cases opens the new-case form.
+//
+// It is what the footer has always advertised there. The key reached the
+// global handler, which is the events flow — mark events, then file them into a
+// case — so on a screen with no events to mark it answered "No events
+// selected. Use Space to select events first."
+func TestNewCaseOnTheCasesScreenOpensTheForm(t *testing.T) {
+	ui, st := newTestUI(t)
+	seedCases(t, ui, st, 1)
+	ui.enterScreen(destCases)
+	awaitIdle(t, ui)
+
+	if ui.globalInputCapture(tcell.NewEventKey(tcell.KeyRune, 'c', tcell.ModNone)) != nil {
+		t.Fatal("c was not claimed on Cases")
+	}
+	if ui.activeModal == nil {
+		t.Fatal("c opened nothing on Cases")
+	}
+	frame := strings.Join(renderPrimitive(t, ui.activeModal, 150, 34), "\n")
+	if !strings.Contains(frame, "Create New Case") {
+		t.Errorf("c did not open the new-case form:\n%s", frame)
+	}
+	if strings.Contains(stripTags(ui.statusBar.GetText(true)), "No events selected") {
+		t.Error("c on Cases still complains about an events selection")
+	}
+}
+
+// A case can be created with nothing attached, which is what that form does on
+// the Cases screen.
+func TestACaseCanBeCreatedWithNoEvents(t *testing.T) {
+	ui, st := newTestUI(t)
+	ui.enterScreen(destCases)
+	awaitIdle(t, ui)
+
+	ui.createCase("Suspected exfiltration", "", "high", "", nil)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		cases, err := st.ListCases(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(cases) == 1 && cases[0].Title == "Suspected exfiltration" {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Error("a case with no events was never created")
+}

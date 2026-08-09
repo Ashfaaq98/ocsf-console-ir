@@ -1353,6 +1353,15 @@ func (ui *UI) casesKeys(ev *tcell.EventKey) *tcell.EventKey {
 		// moved off the list.
 		ui.showCaseFilterModal()
 		return nil
+	case 'c':
+		// A new case, straight to the form.
+		//
+		// The global c is the events flow — mark events, then file them into a
+		// new case — so on this screen, where there are no events to mark, the
+		// key the footer advertises as "new case" answered "No events
+		// selected. Use Space to select events first."
+		ui.showCreateCaseModal()
+		return nil
 	case 'r':
 		// The case list, and only that. Globally r also schedules an events
 		// reload, which on this screen queries a table that is not on screen.
@@ -3388,7 +3397,9 @@ func (ui *UI) showCreateCaseModal() {
 			ui.setStatusDirect("[%s]Title is required[-:-:-]", ui.theme.TagError)
 			return
 		}
-		ui.createCaseWithEvents(title, description, severity, assignedTo)
+		// The selection is read here, on the UI goroutine, rather than from
+		// the goroutine that does the work.
+		ui.createCase(title, description, severity, assignedTo, ui.selectedEventIDList())
 		ui.restoreMainLayout()
 	})
 	form.AddButton("Cancel", func() {
@@ -3507,9 +3518,32 @@ func (ui *UI) showAddToExistingCaseModal() {
 	ui.setStatusDirect("[%s]Enter the case number (1-%d) and press 'Add Events'. Esc to cancel.[-:-:-]", ui.theme.TagAccent, len(ui.cases))
 }
 
-// createCaseWithEvents creates a new case and assigns selected events to it
-func (ui *UI) createCaseWithEvents(title, description, severity, assignedTo string) {
-	ui.setStatusDirect("[%s]Creating case and assigning events...[-:-:-]", ui.theme.TagWarning)
+// selectedEventIDList is the marked events, as a stable slice.
+//
+// It must run on the UI goroutine. The map itself is replaced by the loaders,
+// so a background reader can find it changing underneath.
+func (ui *UI) selectedEventIDList() []string {
+	ids := make([]string, 0, len(ui.selectedEventIDs))
+	for id := range ui.selectedEventIDs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// createCase files a new case, with the events it was given.
+//
+// The events are a parameter rather than something read from the screen: this
+// is reached both from the events flow, where a selection is the point, and
+// from the Cases screen, where there is nothing selected and a case with no
+// evidence yet is exactly what is wanted.
+func (ui *UI) createCase(title, description, severity, assignedTo string, eventIDs []string) {
+	if len(eventIDs) == 0 {
+		ui.setStatusDirect("[%s]Creating case…[-:-:-]", ui.theme.TagWarning)
+	} else {
+		ui.setStatusDirect("[%s]Creating case and assigning %s…[-:-:-]",
+			ui.theme.TagWarning, plural(len(eventIDs), "event"))
+	}
 
 	go func() {
 		// Create the case
@@ -3531,7 +3565,7 @@ func (ui *UI) createCaseWithEvents(title, description, severity, assignedTo stri
 
 		// Assign selected events to the case
 		var successCount, errorCount int
-		for eventID := range ui.selectedEventIDs {
+		for _, eventID := range eventIDs {
 			if err := ui.store.AssignEventToCase(ui.ctx, eventID, caseID); err != nil {
 				errorCount++
 				if ui.logger != nil {
@@ -3580,10 +3614,17 @@ func (ui *UI) createCaseWithEvents(title, description, severity, assignedTo stri
 				// Load events for the new case asynchronously
 				ui.spawnLoad(ui.loadCaseEvents)
 
-				if errorCount > 0 {
-					ui.setStatusDirect("[%s]Case created with %d events (%d errors)[-:-:-]", ui.theme.TagWarning, successCount, errorCount)
-				} else {
-					ui.setStatusDirect("[%s]Case created successfully with %d events[-:-:-]", ui.theme.TagSuccess, successCount)
+				switch {
+				case errorCount > 0:
+					ui.setStatusDirect("[%s]Case created with %s (%d could not be attached)[-:-:-]",
+						ui.theme.TagWarning, plural(successCount, "event"), errorCount)
+				case successCount == 0:
+					// Not "with 0 events", which reads as a failure. An empty
+					// case is what this key does on the Cases screen.
+					ui.setStatusDirect("[%s]Case created[-:-:-]", ui.theme.TagSuccess)
+				default:
+					ui.setStatusDirect("[%s]Case created with %s[-:-:-]",
+						ui.theme.TagSuccess, plural(successCount, "event"))
 				}
 			})
 		}

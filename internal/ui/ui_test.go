@@ -165,7 +165,7 @@ func TestCaseCreation(t *testing.T) {
 	ui.selectedEventIDs = map[string]bool{eventID: true}
 
 	// Test case creation (this would normally be called by the UI)
-	ui.createCaseWithEvents("Test Case", "Test Description", "medium", "test-user")
+	ui.createCase("Test Case", "Test Description", "medium", "test-user", ui.selectedEventIDList())
 
 	// Give some time for the goroutine to complete
 	time.Sleep(200 * time.Millisecond)
