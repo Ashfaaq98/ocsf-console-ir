@@ -59,6 +59,7 @@ func TestDialogsLeaveTheScreenVisible(t *testing.T) {
 	renderPrimitive(t, ui.eventList, 150, 20)
 	ui.updateFindingsList(len(ui.findings))
 	ui.eventList.Select(1, 0)
+	settleInspector(ui)
 
 	for _, tc := range []struct {
 		name  string
@@ -109,4 +110,18 @@ func TestHelpIsAPageNotADialog(t *testing.T) {
 	if _, overlaid := ui.activeModal.(*tview.Pages); overlaid {
 		t.Error("help now overlays the screen; if that is intended, this test is what to update")
 	}
+}
+
+// settleInspector cancels the finding inspector's pending repaint.
+//
+// The debounce fires on its own goroutine, and in tests queueUpdate runs its
+// function inline there rather than posting it to an event loop — so a repaint
+// can land in the middle of a render that production would have serialised.
+func settleInspector(ui *UI) {
+	ui.findingInspect.mu.Lock()
+	if ui.findingInspect.timer != nil {
+		ui.findingInspect.timer.Stop()
+		ui.findingInspect.timer = nil
+	}
+	ui.findingInspect.mu.Unlock()
 }
