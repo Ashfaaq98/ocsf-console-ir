@@ -90,3 +90,61 @@ func TestLeavingAModalDoesNotSayHelpClosed(t *testing.T) {
 		t.Errorf("the bar does not say which screen you are on: %s", got)
 	}
 }
+
+// Closing a modal returns focus to the screen underneath.
+//
+// Choosing a filter from the Triage chip menu left the arrow keys doing
+// nothing: only half the modal call sites recorded ui.lastFocus, and with none
+// recorded the restore fell through to the case sidebar — so the arrows were
+// moving an off-screen list while the findings queue sat still.
+func TestClosingAModalReturnsFocusToTheQueue(t *testing.T) {
+	ui, st := newTestUI(t)
+	seedTriageFinding(t, st, "a", "")
+	seedTriageFinding(t, st, "b", "")
+	ui.enterScreen(destTriage)
+	awaitIdle(t, ui)
+
+	ui.showTriageChips()
+	if ui.app.GetFocus() == ui.eventList {
+		t.Fatal("the chip menu did not take focus")
+	}
+
+	// In the order the menu's own callback runs them: close, then re-query.
+	ui.closeModal()
+	ui.toggleTriageChip(chipOpen)
+	awaitIdle(t, ui)
+
+	if got := ui.app.GetFocus(); got != ui.eventList {
+		t.Errorf("focus went to %T after the filter menu closed, want the findings queue", got)
+	}
+
+	// And the arrows now reach it.
+	before, _ := ui.eventList.GetSelection()
+	handler := ui.eventList.InputHandler()
+	handler(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone), func(tview.Primitive) {})
+	if after, _ := ui.eventList.GetSelection(); after == before {
+		t.Errorf("the queue did not move on Down: still row %d", before)
+	}
+}
+
+// A modal opened over a modal must not record the outer one as the thing to
+// return to — closing both would leave focus on a primitive that is gone.
+func TestNestedModalsRestoreTheScreenBeneath(t *testing.T) {
+	ui, _ := newTestUI(t)
+	ui.destination = destTriage
+	ui.app.SetFocus(ui.eventList)
+
+	outer := tview.NewList()
+	ui.rootModal(outer)
+	ui.app.SetFocus(outer)
+	inner := tview.NewList()
+	ui.rootModal(inner)
+
+	ui.closeModal()
+	if got := ui.app.GetFocus(); got == outer || got == inner {
+		t.Errorf("focus was restored to a closed modal (%p)", got)
+	}
+	if got := ui.app.GetFocus(); got != ui.eventList {
+		t.Errorf("focus went to %T, want the findings queue", got)
+	}
+}

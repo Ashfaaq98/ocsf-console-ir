@@ -2576,7 +2576,6 @@ func (ui *UI) showHelp() {
 		return ev
 	})
 
-	ui.lastFocus = ui.app.GetFocus()
 	ui.rootModal(centered)
 	ui.app.SetFocus(table)
 }
@@ -2629,7 +2628,6 @@ func (ui *UI) showModal(title, text string) {
 		return event
 	})
 
-	ui.lastFocus = ui.app.GetFocus()
 	ui.rootModal(modal)
 	// Set focus to the modal to ensure it receives key events
 	ui.app.SetFocus(modal)
@@ -2656,8 +2654,9 @@ func (ui *UI) restoreMainLayout() {
 	// Restore focus to the previously focused component if available
 	target := ui.lastFocus
 	if target == nil {
-		target = ui.sidebar
+		target = ui.screenFocus()
 	}
+	ui.lastFocus = nil
 	ui.app.SetFocus(target)
 	ui.highlightFocus(target)
 
@@ -2838,8 +2837,51 @@ func (ui *UI) startRedrawHeartbeat() {
 // has focus is what lets a modal built from a List suppress keys: the pivot
 // menu is one, and q used to quit the application straight through it.
 func (ui *UI) rootModal(p tview.Primitive) {
+	// Remember what to give focus back to, here rather than at each call site.
+	//
+	// Eight of the eighteen callers set ui.lastFocus by hand and the rest
+	// forgot, so closing one of those left focus wherever the previous modal
+	// had put it — or, when there had been none, on the navigation rail. That
+	// is what made the arrow keys stop scrolling the findings queue after
+	// choosing a filter: the keys were moving an unfocused rail instead.
+	//
+	// Guarded against nesting, so a modal opened over a modal does not record
+	// the outer modal as the thing to return to.
+	if ui.activeModal == nil && ui.app != nil {
+		ui.lastFocus = ui.app.GetFocus()
+	}
 	ui.activeModal = p
 	ui.app.SetRoot(p, true)
+}
+
+// screenFocus is the widget an analyst works in on the current screen.
+//
+// The fallback when nothing was recorded. It used to be the case sidebar
+// unconditionally, which is the working widget on exactly one of the six
+// screens.
+func (ui *UI) screenFocus() tview.Primitive {
+	switch ui.destination {
+	case destHome:
+		if ui.home != nil && ui.home.root != nil {
+			return ui.home.root
+		}
+	case destCases:
+		if ui.sidebar != nil {
+			return ui.sidebar
+		}
+	case destIndicators:
+		if ui.indicators != nil && ui.indicators.table != nil {
+			return ui.indicators.table
+		}
+	case destTriage, destEvents:
+		if ui.eventList != nil {
+			return ui.eventList
+		}
+	}
+	if ui.eventList != nil {
+		return ui.eventList
+	}
+	return ui.sidebar
 }
 
 func (ui *UI) isDialogActive() bool {
@@ -3289,7 +3331,6 @@ func (ui *UI) showCreateCaseModal() {
 		return event
 	})
 
-	ui.lastFocus = ui.app.GetFocus()
 	ui.rootModal(form)
 	ui.app.SetFocus(form)
 	// Brief hint for users on Description field navigation
@@ -3383,9 +3424,12 @@ func (ui *UI) showAddToExistingCaseModal() {
 		return ev
 	})
 
-	// Set root to the composed layout and focus the input field
-	ui.lastFocus = ui.app.GetFocus()
-	ui.app.SetRoot(layout, true)
+	// Set root to the composed layout and focus the input field.
+	//
+	// Through rootModal, not SetRoot: rooted directly it never registered as a
+	// modal, so the global capture went on claiming 1-5 for navigation while a
+	// case number was being typed into the field.
+	ui.rootModal(layout)
 	ui.app.SetFocus(form)
 
 	// Brief hint
@@ -3822,7 +3866,6 @@ func (ui *UI) showCombinedFilterModal() {
 		return ev
 	})
 
-	ui.lastFocus = ui.app.GetFocus()
 	ui.rootModal(form)
 	ui.app.SetFocus(form)
 	ui.setStatusDirect("[%s]Tab/Shift+Tab: navigate • Enter: open dropdown • Apply/Clear/Cancel at bottom[-:-:-]", ui.theme.TagAccent)
@@ -4267,7 +4310,6 @@ func (ui *UI) showDeleteCaseConfirm() {
 		return event
 	})
 
-	ui.lastFocus = ui.app.GetFocus()
 	ui.rootModal(modal)
 	ui.app.SetFocus(modal)
 }
@@ -4478,7 +4520,6 @@ func (ui *UI) showDeleteEventsConfirm(ids []string) {
 		return ev
 	})
 
-	ui.lastFocus = ui.app.GetFocus()
 	ui.rootModal(modal)
 	ui.app.SetFocus(modal)
 }
@@ -4655,7 +4696,6 @@ func (ui *UI) showCaseFilterModal() {
 		return ev
 	})
 
-	ui.lastFocus = ui.app.GetFocus()
 	ui.rootModal(form)
 	ui.app.SetFocus(form)
 	ui.setStatusDirect("[%s]Tab/Shift+Tab: navigate • Enter: open dropdown • Apply/Cancel at bottom[-:-:-]", ui.theme.TagAccent)
