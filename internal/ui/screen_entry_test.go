@@ -275,13 +275,18 @@ func TestTheLetterJumpsAreGone(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Home once, not once per key. Each entry builds a fresh dashboard with its
+	// own loads, and replacing one does not wait for the loads it left running
+	// — so five of them outlive the test and write into a temp directory that
+	// is being removed.
+	ui.enterScreen(destHome)
+	awaitIdle(t, ui)
+
 	for _, key := range []rune{'A', 'C', 'I', 'D', 'R'} {
-		ui.enterScreen(destHome)
-		awaitIdle(t, ui)
 		ui.globalInputCapture(tcell.NewEventKey(tcell.KeyRune, key, tcell.ModNone))
 		if ui.destination != destHome {
 			t.Errorf("%c still jumps to %v", key, ui.destination)
 		}
-		awaitIdle(t, ui)
 	}
+	awaitIdle(t, ui)
 }

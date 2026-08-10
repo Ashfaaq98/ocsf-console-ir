@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
@@ -58,9 +59,25 @@ func newTestHome(t *testing.T) (*homeView, *store.Store) {
 
 // loadAndRender runs the queries synchronously and paints every panel, which is
 // what start() does asynchronously.
-func (h *homeView) loadAndRender(t *testing.T) {
+// loadAndRender fills the dashboard the way a real session does: the screen is
+// measured first, then queried, then painted.
+//
+// The order matters. The queue asks for as many findings as its panel can hold,
+// so loading before the size is known asks for the placeholder's row budget —
+// which is exactly the defect that made the real screen say "and 1 more" above
+// ten blank rows.
+func (h *homeView) loadAndRender(t *testing.T, size ...int) {
 	t.Helper()
-	h.load()
+	w, ht := 140, 40
+	if len(size) == 2 {
+		w, ht = size[0], size[1]
+	}
+	h.relayout(w, ht)
+	// Through reload rather than load: relayout may already have started one
+	// when the new size gave the queue more rows, and two loads painting the
+	// same panels is exactly what the guard in reload exists to prevent.
+	h.reload()
+	h.wait()
 	h.renderAll()
 }
 
@@ -514,5 +531,72 @@ func TestStatusBarAdvertisesTheThemeKey(t *testing.T) {
 
 	if got := stripTags(h.ui.composeStatus("Analyst Home")); !strings.Contains(got, "t theme") {
 		t.Errorf("the theme key is not advertised:\n%s", got)
+	}
+}
+
+// The queue asks for as many findings as the screen can actually hold.
+//
+// The dashboard is built at a placeholder size before the terminal has been
+// measured, and the first query used that placeholder's row budget. On a tall
+// terminal the panel then said "… and 1 more · press 1 for the full queue"
+// above ten blank rows, and stayed that way until the ten-second refresh.
+func TestTheQueueFillsTheScreenItIsDrawnIn(t *testing.T) {
+	h, st := newTestHome(t)
+	for i := 0; i < 40; i++ {
+		seedTestFinding(t, st, fmt.Sprintf("f%02d", i), 90, ocsf.SeverityHigh, ocsf.FindingStatusNew)
+	}
+
+	// A short screen asks for few.
+	h.loadAndRender(t, 140, 24)
+	short := h.queueWant()
+
+	// A tall one asks for more, without the layout tier changing.
+	h.relayout(140, 44)
+	tall := h.queueWant()
+	if tall <= short {
+		t.Fatalf("a 44-row screen asks for %d findings, no more than a 24-row one (%d)", tall, short)
+	}
+
+	// And the extra rows are filled now, rather than at the next refresh.
+	h.wait()
+	h.renderAll()
+
+	if data, _ := h.snapshot(); len(data.queue) != tall {
+		t.Errorf("the queue holds %d findings for a panel that fits %d", len(data.queue), tall)
+	}
+}
+
+// The symptom: a queue with room to spare must not defer to the full screen.
+func TestAQueueWithRoomToSpareShowsEverything(t *testing.T) {
+	h, st := newTestHome(t)
+	for i := 0; i < 9; i++ {
+		seedTestFinding(t, st, fmt.Sprintf("f%d", i), 90, ocsf.SeverityHigh, ocsf.FindingStatusNew)
+	}
+
+	h.loadAndRender(t, 140, 44)
+	h.wait()
+	h.renderAll()
+
+	lines := renderPrimitive(t, h.root, 140, 44)
+	if _, ok := findLine(lines, "more"); ok {
+		t.Errorf("nine findings in a panel that fits twenty still says there are more:\n%s",
+			strings.Join(lines, "\n"))
+	}
+}
+
+// Growing the terminal asks again exactly once, not on every frame.
+func TestTheQueueDoesNotReloadOnEveryFrame(t *testing.T) {
+	h, st := newTestHome(t)
+	seedTestFinding(t, st, "a", 90, ocsf.SeverityHigh, ocsf.FindingStatusNew)
+	h.loadAndRender(t, 140, 44)
+
+	before := h.lastQueried()
+	for i := 0; i < 5; i++ {
+		h.relayout(140, 44)
+	}
+	h.wait()
+
+	if got := h.lastQueried(); got != before {
+		t.Errorf("redrawing at the same size re-queried: %d then %d", before, got)
 	}
 }

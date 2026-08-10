@@ -135,6 +135,15 @@ type homeView struct {
 	// queueRows is the height the queue was last laid out at, including its
 	// border. The query asks for what fits.
 	queueRows int
+	// height is the height the screen was last laid out at, so a resize inside
+	// one layout tier still moves the queue's row budget.
+	height int
+	// queried is how many findings the last query asked for, so a screen that
+	// turns out to hold more can ask again exactly once.
+	queried int
+	// loadingNow and reloadWanted keep the panels to one load at a time.
+	loadingNow   bool
+	reloadWanted bool
 	// width is the width the screen was last laid out at, so panels can wrap
 	// text without asking a widget for a rect that is a frame out of date.
 	width int
@@ -338,11 +347,43 @@ func (h *homeView) applyTheme() {
 }
 
 // reload runs a load off the UI goroutine, tracked so it can be waited for.
+// reload refreshes every panel, one load at a time.
+//
+// Guarded because three things ask for a reload — the ten-second ticker, the
+// r key, and a resize that gives the queue more rows — and nothing stopped two
+// of them running at once. Two loads then painted the same panels from two
+// goroutines, which the event loop serialises in production and the race
+// detector catches everywhere else.
+//
+// A request that arrives during a load is remembered rather than dropped: the
+// one that matters is the resize, and losing it would leave the queue asking
+// for the rows the screen had a moment ago.
 func (h *homeView) reload() {
+	h.mu.Lock()
+	if h.loadingNow {
+		h.reloadWanted = true
+		h.mu.Unlock()
+		return
+	}
+	h.loadingNow = true
+	h.mu.Unlock()
+
 	h.inflight.Add(1)
 	go func() {
 		defer h.inflight.Done()
-		h.load()
+		for {
+			h.load()
+
+			h.mu.Lock()
+			again := h.reloadWanted
+			h.reloadWanted = false
+			if !again {
+				h.loadingNow = false
+				h.mu.Unlock()
+				return
+			}
+			h.mu.Unlock()
+		}
 	}()
 }
 
@@ -422,6 +463,10 @@ func (h *homeView) load() {
 		// Asked once: the panel must not decide how many to keep from a
 		// different answer than the one it queried with.
 		want := h.queueWant()
+		h.mu.Lock()
+		h.queried = want
+		h.mu.Unlock()
+
 		q, err := st.GetPriorityQueue(ctx, want+1)
 		h.set(func(d *homeData) {
 			d.queueTotal = len(q)
@@ -841,12 +886,64 @@ func evidenceCount(evidencesJSON string) int {
 // ---------------------------------------------------------------------------
 
 // relayout rebuilds only when the responsive tier changed.
+// resizeQueue records the size the screen is being drawn at and works out how
+// many findings the queue can hold.
+//
+// The queue takes whatever the other panels leave. It used to be pinned to five
+// rows while the panel beside it held three cases in seventeen, so a tall
+// terminal showed five findings and eleven blank lines. It is the one panel
+// with something to act on; the slack is its by right.
+func (h *homeView) resizeQueue(width, height int) {
+	showInspector := !h.short && h.mode != LayoutCompact
+	showCards := !(h.short && height < homeShortCardsBelow)
+
+	fixed := homeHeaderRows
+	if showCards {
+		fixed += h.cardRows()
+	}
+	if showInspector {
+		fixed += homeInspectorRows
+	}
+
+	// Under the mutex: the loaders read this to size their query, and the
+	// layout writes it on the UI goroutine.
+	h.mu.Lock()
+	h.width, h.height = width, height
+	h.queueRows = clamp(height-fixed, homeQueueFloor+2, homeQueueCeiling+2)
+	h.mu.Unlock()
+}
+
+// lastQueried is how many findings the last queue query asked for.
+func (h *homeView) lastQueried() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.queried
+}
+
+// relayout keeps the screen matched to the terminal it is being drawn in.
+//
+// Two things can change here, and they used to be conflated. The *tier* decides
+// which panels exist, and only a tier change needs the widgets rebuilding. The
+// *height* decides how many findings the queue asks for, and that changes
+// without the tier changing at all — so a 45-row terminal kept the row budget
+// worked out for whatever height the screen was first laid out at.
 func (h *homeView) relayout(width, height int) {
 	mode, short := GetLayoutMode(width, height)
-	if h.built && mode == h.mode && short == h.short {
-		return
+	if !h.built || mode != h.mode || short != h.short {
+		h.rebuild(width, height)
+	} else if height != h.height || width != h.width {
+		// Same panels, different size: only the row budget moves.
+		h.resizeQueue(width, height)
 	}
-	h.rebuild(width, height)
+
+	// The queue is built at a placeholder size before the terminal has been
+	// measured, so the first query asks for the rows that placeholder had. When
+	// the real size turns out to hold more, ask again — otherwise the panel
+	// says "and 1 more, press 1 for the full queue" above ten blank rows until
+	// the ten-second refresh comes round.
+	if want := h.queueWant(); want > h.lastQueried() {
+		h.reload()
+	}
 }
 
 // rebuild assembles the screen for the current tier.
@@ -859,7 +956,6 @@ func (h *homeView) relayout(width, height int) {
 // shared by every screen; Home used to carry a second bar of its own above it.
 func (h *homeView) rebuild(width, height int) {
 	h.mode, h.short = GetLayoutMode(width, height)
-	h.width = width
 
 	showInspector := !h.short && h.mode != LayoutCompact
 	showCards := !(h.short && height < homeShortCardsBelow)
@@ -873,24 +969,7 @@ func (h *homeView) rebuild(width, height int) {
 		h.cards.AddItem(c, 0, 1, false)
 	}
 
-	// The queue takes whatever is left.
-	//
-	// It used to be pinned to five rows while the panel beside it held three
-	// cases in seventeen, so a tall terminal showed five findings and eleven
-	// blank lines. It is the one panel with something to act on; the slack is
-	// its by right.
-	fixed := homeHeaderRows
-	if showCards {
-		fixed += h.cardRows()
-	}
-	if showInspector {
-		fixed += homeInspectorRows
-	}
-	// Under the mutex: the loaders read this to size their query, and the
-	// layout writes it on the UI goroutine.
-	h.mu.Lock()
-	h.queueRows = clamp(height-fixed, homeQueueFloor+2, homeQueueCeiling+2)
-	h.mu.Unlock()
+	h.resizeQueue(width, height)
 
 	h.root.Clear()
 	h.root.AddItem(h.header, homeHeaderRows, 0, false)
