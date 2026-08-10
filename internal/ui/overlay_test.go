@@ -112,9 +112,9 @@ func TestHelpIsAPageNotADialog(t *testing.T) {
 	}
 }
 
-// settleInspector cancels the finding inspector's pending repaint.
+// settleInspector cancels the pending repaints the inspectors have scheduled.
 //
-// The debounce fires on its own goroutine, and in tests queueUpdate runs its
+// Both debounces fire on their own goroutine, and in tests queueUpdate runs its
 // function inline there rather than posting it to an event loop — so a repaint
 // can land in the middle of a render that production would have serialised.
 func settleInspector(ui *UI) {
@@ -124,4 +124,13 @@ func settleInspector(ui *UI) {
 		ui.findingInspect.timer = nil
 	}
 	ui.findingInspect.mu.Unlock()
+
+	if ui.indicators != nil {
+		ui.indicators.context.mu.Lock()
+		if ui.indicators.context.timer != nil {
+			ui.indicators.context.timer.Stop()
+			ui.indicators.context.timer = nil
+		}
+		ui.indicators.context.mu.Unlock()
+	}
 }

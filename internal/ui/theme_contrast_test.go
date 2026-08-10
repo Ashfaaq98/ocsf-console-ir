@@ -195,12 +195,18 @@ func TestEveryScreenRendersInEveryTheme(t *testing.T) {
 		ui.setTheme(name)
 		for _, screen := range screens {
 			ui.enterScreen(screen.id)
-			awaitIdle(t, ui)
-			// Home's clock and refresh ticker repaint from their own goroutine;
-			// stopped here so a tick cannot land inside a render.
+
+			// Home's clock and refresh ticker repaint from their own goroutine,
+			// and in tests queueUpdate runs inline there rather than posting to
+			// an event loop — so a tick lands in the middle of a render that
+			// production would have serialised. Stopped and drained on the way
+			// in, before anything reads the widgets.
 			if ui.home != nil {
 				ui.home.close()
+				ui.home.wait()
 			}
+			awaitIdle(t, ui)
+			settleInspector(ui)
 
 			for _, size := range [][2]int{{150, 40}, {100, 30}} {
 				frame := strings.Join(renderPrimitive(t, ui.mainRoot(), size[0], size[1]), "\n")
