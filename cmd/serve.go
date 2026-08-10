@@ -130,18 +130,6 @@ func runServe(cmd *cobra.Command, args []string) error {
 		logger = runtimeLoggerConsole("serve", os.Stderr)
 	}
 
-	// The HTTP receiver writes each POST as a file into the drop folder; the
-	// folder watcher is what actually ingests those files, and it only starts
-	// alongside the TUI. Headless, the receiver would answer 202 Accepted and
-	// leave the events on disk unread — a pipeline pointed at it would look
-	// healthy while losing everything. Refuse the combination rather than
-	// accept data we will not store.
-	if httpIngestEnable && !willUseTUI {
-		return fmt.Errorf("HTTP ingestion is not supported without the TUI: " +
-			"POSTed events would be accepted and never ingested. " +
-			"Run without --no-tui, or use `console-ir ingest <dir> --watch`, which is fully headless")
-	}
-
 	logger.Println("Starting Console-IR server")
 
 	// Pre-determine if we'll use TUI so we can configure logging/bus before starting services
@@ -249,33 +237,70 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 	defer coordinator.Stop()
 
-	// Optional HTTP ingestion server (runs alongside services and TUI/headless)
-	if httpIngestEnable {
-		if strings.TrimSpace(httpIngestDir) == "" {
-			httpIngestDir = resolvePathRelativeToBase(baseDir, ingestDir)
-		}
-		httpLogger := svcLogger // silent when TUI is active to avoid corrupting screen
-		opts := ingest.HTTPIngestOptions{
-			Bind:   httpIngestBind,
-			Token:  httpIngestToken,
-			Dir:    httpIngestDir,
-			RPS:    httpIngestRPS,
-			Burst:  httpIngestBurst,
-			Logger: httpLogger,
-		}
-		httpSrv, err := ingest.NewHTTPIngestServer(opts)
-		if err != nil {
-			logger.Printf("HTTP ingest init error: %v", err)
+	// The HTTP receiver, built whether or not it is switched on.
+	//
+	// Built either way so the interface can start it later: the flag decides
+	// the state a session begins in, not whether the feature exists. Its
+	// address and token stay configuration, because those are decisions about
+	// what to expose and to whom, not a toggle.
+	if strings.TrimSpace(httpIngestDir) == "" {
+		httpIngestDir = resolvePathRelativeToBase(baseDir, ingestDir)
+	}
+	httpSrv, err := ingest.NewHTTPIngestServer(ingest.HTTPIngestOptions{
+		Bind:   httpIngestBind,
+		Token:  httpIngestToken,
+		Dir:    httpIngestDir,
+		RPS:    httpIngestRPS,
+		Burst:  httpIngestBurst,
+		Logger: svcLogger, // to the file, so it cannot corrupt the screen
+	})
+	if err != nil {
+		logger.Printf("HTTP ingest init error: %v", err)
+		httpSrv = nil
+	}
+	if httpSrv != nil && httpIngestEnable {
+		if err := httpSrv.Start(svcCtx); err != nil {
+			logger.Printf("HTTP ingest start error: %v", err)
 		} else {
-			if err := httpSrv.Start(svcCtx); err != nil {
-				logger.Printf("HTTP ingest start error: %v", err)
-			} else {
-				logger.Printf("HTTP ingest server enabled on %s writing to %s", httpIngestBind, httpIngestDir)
-			}
+			logger.Printf("HTTP ingest listening on %s writing to %s", httpIngestBind, httpIngestDir)
 		}
 	}
 
 	// Auto-seeding removed: sample cases/events will no longer be auto-created on startup.
+
+	// Folder ingestion, in both modes.
+	//
+	// It used to start inside the TUI branch, which is what made HTTP ingestion
+	// lossy without a terminal: the receiver writes each POST as a file and the
+	// watcher is what actually reads those files into the database, so headless
+	// the sender was told 202 Accepted and the events sat on disk unread. The
+	// two halves belong together wherever they run.
+	ingestDir = resolvePathRelativeToBase(baseDir, ingestDir)
+	if err := os.MkdirAll(ingestDir, 0755); err != nil {
+		logger.Printf("Warning: Could not create ingest directory %s: %v", ingestDir, err)
+	}
+	ingestLogger := svcLogger
+	if !noTUI {
+		// A file-backed logger while the TUI owns the terminal.
+		ingestLogger = runtimeLogger("ui")
+	}
+	fing := ingest.NewFolderIngestor(ingest.NewParser(), st, eventBus, ingest.FolderOptions{
+		Dir:      ingestDir,
+		Watch:    true,
+		Patterns: []string{"*.jsonl", "*.json"},
+		Logger:   ingestLogger,
+		// Ingest files already present in the drop folder on startup, then
+		// tail. Persisted offsets prevent re-ingesting on restart, so we do not
+		// skip to EOF, which silently ignored staged files.
+		TailFromEnd: false,
+		// Drive embedded core enrichments in-process for each ingested event.
+		Enricher: pluginManager,
+	})
+	go func() {
+		if err := fing.Run(ctx); err != nil && ctx.Err() == nil {
+			logger.Printf("Folder ingest error: %v", err)
+		}
+	}()
 
 	// Start TUI if not in headless mode
 	if !noTUI {
@@ -315,35 +340,6 @@ func runServe(cmd *cobra.Command, args []string) error {
 
 			// Skip auto-creating any cases; only users can create cases via the TUI.
 
-			// Start background folder ingestion for the TUI.
-			ingestDir := resolvePathRelativeToBase(baseDir, ingestDir)
-			if err := os.MkdirAll(ingestDir, 0755); err != nil {
-				logger.Printf("Warning: Could not create ingest directory %s: %v", ingestDir, err)
-			}
-			parser := ingest.NewParser()
-			fopts := ingest.FolderOptions{
-				Dir:       ingestDir,
-				Watch:     true,
-				Patterns:  []string{"*.jsonl", "*.json"},
-				CaseTitle: "",
-				// Route folder-ingestor logs to the UI file logger to avoid corrupting TUI output
-				Logger: uiLogger,
-				// Ingest files already present in the drop folder on startup, then
-				// tail. Persisted offsets prevent re-ingesting on restart, so we do
-				// not skip to EOF (which silently ignored staged files).
-				TailFromEnd: false,
-				// Drive embedded core enrichments in-process for each ingested event.
-				Enricher: pluginManager,
-			}
-			// Use the real event bus so folder ingestion publishes events for plugins
-			fbus := eventBus
-			fing := ingest.NewFolderIngestor(parser, st, fbus, fopts)
-			go func() {
-				if err := fing.Run(ctx); err != nil && ctx.Err() == nil {
-					logger.Printf("Folder ingest error: %v", err)
-				}
-			}()
-
 			tui := ui.NewUI(ctx, st, llmProvider, uiLogger, GetVersion())
 			// So empty-state hints name the folder that is genuinely watched,
 			// which --ingest-dir can move.
@@ -368,6 +364,10 @@ func runServe(cmd *cobra.Command, args []string) error {
 					Ingested: s.Ingested,
 				}
 			})
+			// The receiver, as a shape rather than a dependency on ingest.
+			if httpSrv != nil {
+				tui.SetIngestListener(&httpListener{srv: httpSrv, ctx: svcCtx})
+			}
 			tui.SetEnrichmentStatus(func() ui.EnrichmentStatus {
 				q := pluginManager.EnrichmentQueue()
 				return ui.EnrichmentStatus{
@@ -816,3 +816,21 @@ func (w *errorFilterWriter) Write(p []byte) (n int, err error) {
 	// Suppress non-error logs in TUI mode
 	return len(p), nil
 }
+
+// httpListener adapts the HTTP receiver to what the interface needs of it.
+//
+// The interface asks four questions and offers two actions; it does not know
+// what an HTTPIngestServer is, and the ingest package does not know a screen
+// exists.
+type httpListener struct {
+	srv *ingest.HTTPIngestServer
+	ctx context.Context
+}
+
+func (l *httpListener) Listening() bool { return l.srv.Listening() }
+func (l *httpListener) Address() string { return l.srv.Address() }
+func (l *httpListener) HasToken() bool  { return l.srv.HasToken() }
+func (l *httpListener) Received() int   { return l.srv.Received() }
+func (l *httpListener) Stop()           { l.srv.Stop() }
+
+func (l *httpListener) Start() error { return l.srv.Start(l.ctx) }

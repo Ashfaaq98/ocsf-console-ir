@@ -492,6 +492,9 @@ type UI struct {
 	// the demo. Everything works; nothing survives, and the screen says so.
 	ephemeral bool
 
+	// listener is the HTTP receiver, when the build has one.
+	listener IngestListener
+
 	// findingInspect holds the selected finding's context — its indicators and
 	// their prevalence, and the name of the case it belongs to — loaded off the
 	// UI goroutine behind a debounce.
@@ -1640,11 +1643,17 @@ func (ui *UI) setupKeybindings() {
 				return nil
 			// Theme toggles
 			case 't':
-				// Apply theme synchronously on UI goroutine to avoid queue starvation
-				if ui.logger != nil {
-					ui.logger.Printf("Key 't' pressed: applying theme cycle (current=%s)", ui.themeName)
-				}
+				// Applied on the UI goroutine: a theme change repaints every
+				// screen, and queueing that from here would wait on the loop
+				// this handler is running on.
 				ui.cycleTheme()
+				return nil
+			case ',':
+				// The comma is the settings key everywhere else, and this panel
+				// is where the HTTP receiver's state is legible: whether it is
+				// listening, on what address, and whether anyone who can reach
+				// it may post.
+				ui.showSettings()
 				return nil
 			case 'f':
 				// Whose filter this is follows the screen, not the focus.

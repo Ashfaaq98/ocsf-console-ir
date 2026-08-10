@@ -47,6 +47,18 @@ type HTTPIngestServer struct {
 	limiter *simpleLimiter
 	logger  *logging.Logger
 	started int32
+
+	// stop cancels the run started by Start, so a caller can close the
+	// listener without owning the context it was handed. The interface offers
+	// this as a toggle, and "restart the application" is not a toggle.
+	stop func()
+	// addr is where it actually bound, which is not always what was asked for:
+	// port 0 means "any free port", and a screen reporting ":0" tells nobody
+	// where to send anything.
+	addr atomic.Value
+	// received counts accepted payloads, so a screen can say the listener is
+	// doing something rather than merely being up.
+	received int64
 }
 
 // NewHTTPIngestServer constructs a new HTTP server for ingestion.
@@ -111,8 +123,9 @@ func (h *HTTPIngestServer) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", h.opts.Bind, err)
 	}
+	h.addr.Store(ln.Addr().String())
 	h.logger.Printf("HTTP ingest listening on http://%s, dir=%s rps=%d burst=%d auth=%v",
-		h.opts.Bind, h.opts.Dir, h.opts.RPS, h.opts.Burst, h.opts.Token != "")
+		h.Address(), h.opts.Dir, h.opts.RPS, h.opts.Burst, h.opts.Token != "")
 
 	go func() {
 		if err := h.srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -120,19 +133,55 @@ func (h *HTTPIngestServer) Start(ctx context.Context) error {
 		}
 	}()
 
+	runCtx, cancel := context.WithCancel(ctx)
+	h.stop = cancel
+
 	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+		<-runCtx.Done()
+		shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelShutdown()
 		if err := h.srv.Shutdown(shutdownCtx); err != nil {
 			h.logger.Printf("graceful shutdown failed: %v", err)
 		}
 		if h.limiter != nil {
 			h.limiter.Close()
 		}
+		atomic.StoreInt32(&h.started, 0)
 	}()
 	return nil
 }
+
+// Stop closes the listener. Safe to call when it is not running.
+//
+// A payload part-way through being written is finished first: the handler
+// renames a complete temporary file into place, so a shutdown either leaves a
+// whole file for the watcher or none at all.
+func (h *HTTPIngestServer) Stop() {
+	if h.stop != nil {
+		h.stop()
+	}
+}
+
+// Listening reports whether the server is accepting requests.
+func (h *HTTPIngestServer) Listening() bool { return atomic.LoadInt32(&h.started) == 1 }
+
+// Address is where it listens: the address it bound to once it is running, and
+// the one it was asked for before that.
+func (h *HTTPIngestServer) Address() string {
+	if a, ok := h.addr.Load().(string); ok && a != "" {
+		return a
+	}
+	return h.opts.Bind
+}
+
+// HasToken reports whether a bearer token is required.
+//
+// Worth surfacing rather than inferring: without one, anything that can reach
+// the address can write into the analyst's case data.
+func (h *HTTPIngestServer) HasToken() bool { return strings.TrimSpace(h.opts.Token) != "" }
+
+// Received is how many payloads have been accepted since the process started.
+func (h *HTTPIngestServer) Received() int { return int(atomic.LoadInt64(&h.received)) }
 
 // handleIngest accepts POST /ingest with JSON or JSONL
 func (h *HTTPIngestServer) handleIngest(w http.ResponseWriter, r *http.Request) {
@@ -246,6 +295,7 @@ func (h *HTTPIngestServer) handleIngest(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	// Respond
+	atomic.AddInt64(&h.received, 1)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_, _ = w.Write([]byte(fmt.Sprintf(`{"ack":"%s"}`, ack)))

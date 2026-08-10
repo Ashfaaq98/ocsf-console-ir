@@ -74,6 +74,12 @@ type FolderIngestor struct {
 
 // NewFolderIngestor constructs a folder ingestor.
 func NewFolderIngestor(parser *Parser, st *store.Store, b bus.Bus, opts FolderOptions) *FolderIngestor {
+	// A nil bus is a caller that does not want events published, not a caller
+	// asking to crash on the first record ingested. Every publish here is
+	// best-effort already; this makes "no bus" one of the ways it can be.
+	if b == nil {
+		b = bus.NewNullBus(opts.Logger)
+	}
 	if opts.Logger == nil {
 		opts.Logger = nil
 	}

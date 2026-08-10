@@ -11,8 +11,9 @@ import (
 )
 
 // The timeline is the case's narrative, so it reads as a story rather than a
-// log: events, findings and audit entries on one line of time, clustered so
-// six things on one host inside six minutes are one entry rather than six.
+// log: events, findings, the analyst's own notes and audit entries on one line
+// of time, clustered so six things on one host inside six minutes are one entry
+// rather than six.
 //
 // Clustering reuses the same window-and-entity rule the Events screen applies,
 // via clusterEvents in event_cluster.go — the timeline is not a second idea
@@ -29,6 +30,7 @@ type timelineKind int
 const (
 	timelineEvent timelineKind = iota
 	timelineFinding
+	timelineNote
 	timelineActivity
 )
 
@@ -54,8 +56,8 @@ type timelineEntry struct {
 // *entries*, not of source records: clustering six events into one line is the
 // timeline working, not the timeline hiding something, and reporting it as
 // "showing 12 of 25" would call every well-clustered case truncated.
-func buildTimeline(events []store.Event, findings []store.Finding, audit []store.AuditEntry,
-	pinned map[string]bool, group groupKey) ([]timelineEntry, int) {
+func buildTimeline(events []store.Event, findings []store.Finding, notes []store.Note,
+	audit []store.AuditEntry, pinned map[string]bool, group groupKey) ([]timelineEntry, int) {
 
 	entries := []timelineEntry{}
 
@@ -85,6 +87,26 @@ func buildTimeline(events []store.Event, findings []store.Finding, audit []store
 		entries = append(entries, timelineEntry{
 			At: f.FirstSeen, Kind: timelineFinding,
 			Label: truncate(f.Title, 70), Detail: "finding", Count: 1,
+		})
+	}
+
+	// What the analyst wrote, beside what happened.
+	//
+	// A note is the only entry here somebody chose to make: "13:42 blocked the
+	// address at the firewall" is the sentence that explains the six events
+	// above it and the absence of any below. Without it the timeline says what
+	// arrived and never what was done about it — and the same notes already
+	// appear in the report, so the case screen was the one place they did not.
+	//
+	// Briefing notes are the summary, not the narrative, and IOC notes are
+	// indicators; both belong to their own tabs.
+	for _, n := range notes {
+		if store.IsBriefingNote(n) || strings.EqualFold(n.LinkedType, "ioc") {
+			continue
+		}
+		entries = append(entries, timelineEntry{
+			At: n.CreatedAt, Kind: timelineNote,
+			Label: truncate(firstLine(n.Content), 70), Detail: noteAuthor(n), Count: 1,
 		})
 	}
 
@@ -210,6 +232,8 @@ func timelineMark(k timelineKind, t Theme) (glyph, colour string) {
 	switch k {
 	case timelineFinding:
 		return "◆", t.TagSeverityHigh
+	case timelineNote:
+		return "✎", t.TagWarning
 	case timelineActivity:
 		return "·", t.TagMuted
 	default:
@@ -252,7 +276,12 @@ func (cm *CaseManagement) updateTimelineView() {
 		cm.logger.Warn("timeline: could not read case findings: %v", err)
 	}
 
-	entries, dropped := buildTimeline(cm.events, findings, cm.auditLog, cm.pinnedEvents, groupByHost)
+	notes, err := cm.store.GetNotes(cm.ctx, cm.caseData.ID)
+	if err != nil && cm.logger != nil {
+		cm.logger.Warn("timeline: could not read case notes: %v", err)
+	}
+
+	entries, dropped := buildTimeline(cm.events, findings, notes, cm.auditLog, cm.pinnedEvents, groupByHost)
 	cm.timelineRows = renderTimeline(cm.timelineView, entries, cm.expandedTimeline, cm.theme, dropped)
 }
 
@@ -272,4 +301,12 @@ func (cm *CaseManagement) toggleTimelineCluster() {
 		cm.expandedTimeline = label
 	}
 	cm.updateTimelineView()
+}
+
+// noteAuthor names who wrote a note, for the timeline's detail column.
+func noteAuthor(n store.Note) string {
+	if a := strings.TrimSpace(n.Author); a != "" {
+		return "note by " + a
+	}
+	return "note"
 }
