@@ -488,6 +488,10 @@ type UI struct {
 	// reports is the Reports screen, built on first use.
 	reports *reportsView
 
+	// ephemeral marks a session whose database is thrown away when it ends —
+	// the demo. Everything works; nothing survives, and the screen says so.
+	ephemeral bool
+
 	// findingInspect holds the selected finding's context — its indicators and
 	// their prevalence, and the name of the case it belongs to — loaded off the
 	// UI goroutine behind a debounce.
@@ -4929,6 +4933,14 @@ func (ui *UI) RefreshAllEventsAsync(source string) {
 // SetIngestDir records the drop folder being watched, so empty-state hints name
 // the real path rather than a hardcoded one that drifts when the default moves.
 func (ui *UI) SetIngestDir(dir string) { ui.ingestDir = dir }
+
+// MarkEphemeral tells the interface its database will not outlive the session.
+//
+// Set by the demo, which builds a throwaway database in a temporary directory
+// and removes it on exit. An analyst can triage the queue, write notes and
+// produce a report in there, and none of it survives quitting — so the screen
+// says so while there is still time to act on it.
+func (ui *UI) MarkEphemeral() { ui.ephemeral = true }
 
 // SetWatcherStatus supplies folder-ingestion health to the evidence pulse.
 // Without it the pulse says "not watching", which is the truthful answer for a

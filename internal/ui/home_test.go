@@ -600,3 +600,54 @@ func TestTheQueueDoesNotReloadOnEveryFrame(t *testing.T) {
 		t.Errorf("redrawing at the same size re-queried: %d then %d", before, got)
 	}
 }
+
+// A demo session says its database is disposable.
+//
+// The demo builds a throwaway database in a temporary directory and removes it
+// on exit. Nothing on screen said so: the warning was printed before the
+// interface opened and then erased, and again after it closed — by which point
+// the triage decisions, notes and reports made in that session were already
+// gone. "DB connected" was true and misleading.
+func TestADemoSessionSaysNothingIsSaved(t *testing.T) {
+	h, _ := newTestHome(t)
+
+	h.renderHeader()
+	if got := stripTags(h.header.GetText(true)); !strings.Contains(got, "DB connected") {
+		t.Fatalf("an ordinary session does not report its database: %q", got)
+	}
+
+	h.ui.MarkEphemeral()
+	h.renderHeader()
+
+	got := stripTags(h.header.GetText(true))
+	if !strings.Contains(got, "nothing is saved") {
+		t.Errorf("a demo session does not warn that its data is thrown away: %q", got)
+	}
+	if strings.Contains(got, "DB connected") {
+		t.Errorf("a demo session still reports a healthy database: %q", got)
+	}
+}
+
+// A replaced dashboard starts no new work.
+//
+// The queue reloads when a resize gives it more rows, and that fires from the
+// draw path — so a screen being torn down could begin a load while the caller
+// that closed it was already waiting for the ones in flight, which is adding to
+// a wait group somebody is waiting on.
+func TestAClosedDashboardDoesNotReload(t *testing.T) {
+	h, st := newTestHome(t)
+	seedTestFinding(t, st, "a", 90, ocsf.SeverityHigh, ocsf.FindingStatusNew)
+	h.loadAndRender(t, 140, 24)
+
+	h.close()
+	before := h.lastQueried()
+
+	// Everything that would ordinarily start one.
+	h.reload()
+	h.relayout(140, 44)
+	h.wait()
+
+	if got := h.lastQueried(); got != before {
+		t.Errorf("a closed dashboard queried again: %d then %d", before, got)
+	}
+}

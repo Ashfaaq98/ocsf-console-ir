@@ -90,6 +90,11 @@ func runDemo(cmd *cobra.Command, args []string) error {
 	dbPath = demoDB
 	ingestDir = filepath.Join(dir, "incoming")
 
+	// The interface says the database is disposable while the session is
+	// running. The line printed before it opened is erased, and the one printed
+	// after it closes arrives once the work is already gone.
+	ephemeralDB = !demoKeep
+
 	if err := runServe(cmd, nil); err != nil {
 		return err
 	}

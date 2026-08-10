@@ -29,6 +29,10 @@ var (
 	forceTUI bool
 
 	// HTTP ingestion flags
+	// ephemeralDB is set by the demo: its database lives in a temporary
+	// directory that is removed on exit.
+	ephemeralDB bool
+
 	httpIngestEnable bool
 	httpIngestBind   string
 	httpIngestToken  string
@@ -344,6 +348,12 @@ func runServe(cmd *cobra.Command, args []string) error {
 			// So empty-state hints name the folder that is genuinely watched,
 			// which --ingest-dir can move.
 			tui.SetIngestDir(ingestDir)
+			// A demo's database is deleted when the session ends, so the screen
+			// says so rather than reporting a healthy connection to something
+			// about to be thrown away.
+			if ephemeralDB {
+				tui.MarkEphemeral()
+			}
 
 			// The evidence pulse reports on two subsystems the store knows
 			// nothing about. Both are read through a function so the ui package

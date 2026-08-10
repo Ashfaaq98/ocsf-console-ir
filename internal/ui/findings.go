@@ -197,7 +197,16 @@ func (ui *UI) loadFindings() {
 
 	// Filtering re-queries. It does not filter a loaded page in Go, which is
 	// only correct while the page happens to be the whole result set.
-	filter := ui.triageFilterState().storeFilter(time.Now(), triagePageSize, 0)
+	//
+	// The filter is read on the UI goroutine, like the events loaders' plan.
+	// Chips, saved views and the search field are written by key handlers while
+	// this is running, so building the query here read state the loop was
+	// changing — a query half from one filter and half from the next.
+	var filter store.FindingFilter
+	ui.queueUpdate(func() {
+		filter = ui.triageFilterState().storeFilter(time.Now(), triagePageSize, 0)
+	})
+
 	findings, err := ui.store.GetFindings(ui.ctx, filter)
 	if err != nil {
 		ui.queueUpdate(func() {

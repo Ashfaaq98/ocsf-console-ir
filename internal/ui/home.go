@@ -141,9 +141,11 @@ type homeView struct {
 	// queried is how many findings the last query asked for, so a screen that
 	// turns out to hold more can ask again exactly once.
 	queried int
-	// loadingNow and reloadWanted keep the panels to one load at a time.
+	// loadingNow and reloadWanted keep the panels to one load at a time, and
+	// stopped stops any of it beginning after the screen has been replaced.
 	loadingNow   bool
 	reloadWanted bool
+	stopped      bool
 	// width is the width the screen was last laid out at, so panels can wrap
 	// text without asking a widget for a rect that is a frame out of date.
 	width int
@@ -360,15 +362,22 @@ func (h *homeView) applyTheme() {
 // for the rows the screen had a moment ago.
 func (h *homeView) reload() {
 	h.mu.Lock()
+	if h.stopped {
+		// The screen has been replaced. Its loads paint widgets nobody is
+		// looking at, and starting one now races the caller waiting for the
+		// last of them to finish.
+		h.mu.Unlock()
+		return
+	}
 	if h.loadingNow {
 		h.reloadWanted = true
 		h.mu.Unlock()
 		return
 	}
 	h.loadingNow = true
+	h.inflight.Add(1)
 	h.mu.Unlock()
 
-	h.inflight.Add(1)
 	go func() {
 		defer h.inflight.Done()
 		for {
@@ -395,7 +404,18 @@ func (h *homeView) reload() {
 // screen change. Callers that are about to remove the database — which in
 // practice means tests — call wait afterwards.
 func (h *homeView) close() {
-	h.once.Do(func() { close(h.stop) })
+	h.once.Do(func() {
+		// Under the mutex, and before the channel: reload adds to the wait
+		// group under the same lock, so once this returns nothing new can
+		// start. Without it a resize could begin a load while a caller that had
+		// just closed the screen was already waiting for the ones in flight —
+		// adding to a wait group somebody is waiting on.
+		h.mu.Lock()
+		h.stopped = true
+		h.mu.Unlock()
+
+		close(h.stop)
+	})
 }
 
 // wait blocks until no load is in flight.
@@ -547,8 +567,16 @@ func (h *homeView) renderHeader() {
 	// connection this screen has is the database, and whether it is open is the
 	// difference between an empty dashboard and a broken one.
 	db := fmt.Sprintf("[%s]●[-:-:-] [%s]DB connected[-:-:-]", t.TagSuccess, t.TagMuted)
-	if h.ui.store == nil {
+	switch {
+	case h.ui.store == nil:
 		db = fmt.Sprintf("[%s]●[-:-:-] [%s]DB unavailable[-:-:-]", t.TagError, t.TagMuted)
+	case h.ui.ephemeral:
+		// A demo runs on a database that is deleted when the session ends, and
+		// "DB connected" is true and misleading: an analyst can triage a queue,
+		// write notes and produce a report, and lose all of it on quitting. The
+		// warning belonged before the screen opened, where it was erased, and
+		// after it closed, where it was too late.
+		db = fmt.Sprintf("[%s]●[-:-:-] [%s]demo · nothing is saved[-:-:-]", t.TagWarning, t.TagWarning)
 	}
 
 	// No product name here. It is on the status bar, once.
