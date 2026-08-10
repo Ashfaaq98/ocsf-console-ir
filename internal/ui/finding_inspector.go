@@ -325,12 +325,15 @@ func (r findingInspector) headline(f store.Finding) string {
 }
 
 // narrative is why this finding matters, wrapped rather than cut.
+//
+// The producer's own description first. finding_info.desc is what the detection
+// says it saw; message is often set to the title, and reading the title back
+// under "why it matters" says nothing. The panel used to claim nothing was
+// supplied whenever message was empty — which was false for every finding that
+// carried a desc, because it was parsed and then dropped on the way to storage.
 func (r findingInspector) narrative(f store.Finding) string {
 	t := r.theme
-	why := strings.TrimSpace(f.Message)
-	if why == "" {
-		why = "No description was supplied by the producer."
-	}
+	why := findingNarrative(f)
 
 	const label = " WHY IT MATTERS  "
 	indent := strings.Repeat(" ", len(label))
@@ -485,6 +488,22 @@ func (r findingInspector) caseLabel(f store.Finding, fc findingContext) string {
 	// The lookup has not landed. The identifier is a poor label but it is not a
 	// lie, and it is replaced the moment the query returns.
 	return truncate(f.CaseID, 30)
+}
+
+// findingNarrative picks the best available account of a finding.
+//
+// desc, then message when it adds something the title does not, and only then
+// the admission that there is nothing. A message identical to the title is
+// treated as absent: repeating the heading is not a description.
+func findingNarrative(f store.Finding) string {
+	if d := strings.TrimSpace(f.Desc); d != "" {
+		return d
+	}
+	msg := strings.TrimSpace(f.Message)
+	if msg != "" && !strings.EqualFold(msg, strings.TrimSpace(f.Title)) {
+		return msg
+	}
+	return "No description was supplied by the producer."
 }
 
 // seenRange is when the activity happened, said once when it is one moment.

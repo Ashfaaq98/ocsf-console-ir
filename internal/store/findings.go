@@ -25,8 +25,12 @@ type Finding struct {
 	ActivityID  int `json:"activity_id,omitempty"`
 	TypeUID     int `json:"type_uid,omitempty"`
 
-	Title        string `json:"title"`
-	Message      string `json:"message,omitempty"`
+	Title   string `json:"title"`
+	Message string `json:"message,omitempty"`
+	// Desc is finding_info.desc: what the detection says it saw, in the
+	// producer's words. Distinct from Message, which producers often set to the
+	// title.
+	Desc         string `json:"desc,omitempty"`
 	AnalyticName string `json:"analytic_name,omitempty"`
 	AnalyticUID  string `json:"analytic_uid,omitempty"`
 
@@ -126,12 +130,25 @@ func (f Finding) RelatedEvents() []ocsf.RelatedEvent {
 }
 
 const findingColumns = `id, finding_uid, case_id, class_uid, category_uid, activity_id, type_uid,
-	title, message, analytic_name, analytic_uid, status, status_id, verdict, verdict_id,
+	title, message, description, analytic_name, analytic_uid, status, status_id, verdict, verdict_id,
 	severity, severity_id, confidence_id, risk_level_id, risk_score, impact_id, priority_id,
 	is_alert, is_suspected_breach, assignee, metadata_uid,
 	first_seen, last_seen, created_time,
 	attacks_json, evidences_json, related_events_json, finding_info_list_json,
 	raw_json, created_at, updated_at`
+
+// sqlPlaceholders builds the "?, ?, ?" list for a column list.
+//
+// Counted from the columns rather than written out: the count was a literal 35,
+// so adding a column produced "36 values for 37 columns" at runtime — from
+// every caller at once, and only once a finding was actually saved.
+func sqlPlaceholders(columns string) string {
+	n := len(strings.Split(columns, ","))
+	if n < 1 {
+		return ""
+	}
+	return "?" + strings.Repeat(", ?", n-1)
+}
 
 // findingColumnsWithAlias renders findingColumns with a table alias, for joins.
 // Deriving it from the same const keeps the SELECT list and scanFindings in step.
@@ -156,6 +173,7 @@ func (s *Store) migrateFindings() error {
 			type_uid INTEGER,
 			title TEXT,
 			message TEXT,
+			description TEXT,
 			analytic_name TEXT,
 			analytic_uid TEXT,
 			status TEXT,
@@ -197,7 +215,86 @@ func (s *Store) migrateFindings() error {
 			return fmt.Errorf("failed to create findings schema: %w", err)
 		}
 	}
-	return nil
+	return s.migrateFindingDescription()
+}
+
+// migrateFindingDescription adds the description column to an existing database
+// and fills it in from what was already stored.
+//
+// Additive and re-runnable, like migrateCaseOCSFColumns: the column is added
+// only when pragma_table_info says it is missing, and the backfill only touches
+// rows that have nothing there.
+func (s *Store) migrateFindingDescription() error {
+	var count int
+	if err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM pragma_table_info('findings') WHERE name='description'`,
+	).Scan(&count); err != nil {
+		return fmt.Errorf("failed to check findings.description: %w", err)
+	}
+	if count == 0 {
+		if _, err := s.db.Exec(`ALTER TABLE findings ADD COLUMN description TEXT`); err != nil {
+			return fmt.Errorf("failed to add findings.description: %w", err)
+		}
+	}
+	return s.backfillFindingDescription()
+}
+
+// backfillFindingDescription recovers finding_info.desc from raw_json.
+//
+// The parser has always read it; nothing stored it. The text is in raw_json for
+// every finding ever ingested, so the column starts full rather than filling up
+// over the next few weeks of ingestion.
+func (s *Store) backfillFindingDescription() error {
+	rows, err := s.db.Query(
+		`SELECT id, raw_json FROM findings WHERE (description IS NULL OR description = '') AND raw_json != ''`)
+	if err != nil {
+		return fmt.Errorf("failed to read findings for backfill: %w", err)
+	}
+	defer rows.Close()
+
+	type update struct{ id, desc string }
+	var pending []update
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			return fmt.Errorf("failed to scan finding for backfill: %w", err)
+		}
+		var f ocsf.Finding
+		// Unparseable raw_json is skipped rather than failing the migration: a
+		// database that will not open is worse than a description that stays
+		// empty.
+		if err := json.Unmarshal([]byte(raw), &f); err != nil {
+			continue
+		}
+		if d := strings.TrimSpace(f.FindingInfo.Desc); d != "" {
+			pending = append(pending, update{id: id, desc: d})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("failed to read findings for backfill: %w", err)
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin backfill: %w", err)
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare(`UPDATE findings SET description = ? WHERE id = ?`)
+	if err != nil {
+		return fmt.Errorf("failed to prepare backfill: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, u := range pending {
+		if _, err := stmt.Exec(u.desc, u.id); err != nil {
+			return fmt.Errorf("failed to backfill finding %s: %w", u.id, err)
+		}
+	}
+	return tx.Commit()
 }
 
 // SaveFinding writes a finding, updating in place when one with the same
@@ -274,7 +371,7 @@ func (s *Store) SaveFinding(ctx context.Context, f *ocsf.Finding) (string, error
 }
 
 func upsertFinding(ctx context.Context, tx *sql.Tx, f Finding) error {
-	placeholders := "?" + strings.Repeat(", ?", 35)
+	placeholders := sqlPlaceholders(findingColumns)
 	query := `INSERT INTO findings (` + findingColumns + `) VALUES (` + placeholders + `)
 		ON CONFLICT(finding_uid) DO UPDATE SET
 			case_id = excluded.case_id,
@@ -284,6 +381,7 @@ func upsertFinding(ctx context.Context, tx *sql.Tx, f Finding) error {
 			type_uid = excluded.type_uid,
 			title = excluded.title,
 			message = excluded.message,
+			description = excluded.description,
 			analytic_name = excluded.analytic_name,
 			analytic_uid = excluded.analytic_uid,
 			status = excluded.status,
@@ -313,7 +411,7 @@ func upsertFinding(ctx context.Context, tx *sql.Tx, f Finding) error {
 
 	_, err := tx.ExecContext(ctx, query,
 		f.ID, f.FindingUID, nullableString(f.CaseID), f.ClassUID, f.CategoryUID, f.ActivityID, f.TypeUID,
-		f.Title, f.Message, f.AnalyticName, f.AnalyticUID, f.Status, f.StatusID, f.Verdict, f.VerdictID,
+		f.Title, f.Message, f.Desc, f.AnalyticName, f.AnalyticUID, f.Status, f.StatusID, f.Verdict, f.VerdictID,
 		f.Severity, f.SeverityID, f.ConfidenceID, f.RiskLevelID, f.RiskScore, f.ImpactID, f.PriorityID,
 		boolToInt(f.IsAlert), boolToInt(f.IsSuspectedBreach), f.Assignee, f.MetadataUID,
 		f.FirstSeen.Unix(), f.LastSeen.Unix(), f.CreatedTime.Unix(),
@@ -358,6 +456,7 @@ func (s *Store) ocsfToStoreFinding(f *ocsf.Finding) (Finding, error) {
 
 		Title:        f.Title(),
 		Message:      f.Message,
+		Desc:         f.FindingInfo.Desc,
 		AnalyticName: f.AnalyticName(),
 
 		Status:    f.StatusName(),
@@ -681,14 +780,14 @@ func scanFindings(rows *sql.Rows) ([]Finding, error) {
 	for rows.Next() {
 		var f Finding
 		var caseID, status, verdict, severity sql.NullString
-		var title, message, analyticName, analyticUID, assignee, metadataUID sql.NullString
+		var title, message, description, analyticName, analyticUID, assignee, metadataUID sql.NullString
 		var attacks, evidences, relatedEvents, findingInfoList sql.NullString
 		var firstSeen, lastSeen, createdTime, createdAt, updatedAt int64
 		var isAlert, isBreach int
 
 		err := rows.Scan(
 			&f.ID, &f.FindingUID, &caseID, &f.ClassUID, &f.CategoryUID, &f.ActivityID, &f.TypeUID,
-			&title, &message, &analyticName, &analyticUID, &status, &f.StatusID, &verdict, &f.VerdictID,
+			&title, &message, &description, &analyticName, &analyticUID, &status, &f.StatusID, &verdict, &f.VerdictID,
 			&severity, &f.SeverityID, &f.ConfidenceID, &f.RiskLevelID, &f.RiskScore, &f.ImpactID, &f.PriorityID,
 			&isAlert, &isBreach, &assignee, &metadataUID,
 			&firstSeen, &lastSeen, &createdTime,
@@ -700,7 +799,7 @@ func scanFindings(rows *sql.Rows) ([]Finding, error) {
 		}
 
 		for dst, src := range map[*string]sql.NullString{
-			&f.CaseID: caseID, &f.Title: title, &f.Message: message,
+			&f.CaseID: caseID, &f.Title: title, &f.Message: message, &f.Desc: description,
 			&f.AnalyticName: analyticName, &f.AnalyticUID: analyticUID,
 			&f.Status: status, &f.Verdict: verdict, &f.Severity: severity,
 			&f.Assignee: assignee, &f.MetadataUID: metadataUID,

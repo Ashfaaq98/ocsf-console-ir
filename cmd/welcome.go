@@ -29,6 +29,21 @@ func databaseExists(path string) bool {
 	return err == nil && !info.IsDir() && info.Size() > 0
 }
 
+// shouldShowWelcome decides where a run starts.
+//
+// There are exactly two destinations — no database goes to the Welcome Screen,
+// a database goes to the main UI — and no branch on whether that database holds
+// any findings, cases or events. An existing but empty database opens the app,
+// which renders its own empty states. Getting that second case wrong is what
+// the old four-branch routing did.
+//
+// A named function rather than a condition inside runServe: runServe cannot be
+// called from a test without launching a TUI, so the decision was reachable
+// only by hand.
+func shouldShowWelcome(willUseTUI bool, dbPath string) bool {
+	return willUseTUI && !databaseExists(dbPath)
+}
+
 // runWelcome shows the Welcome Screen and carries out whatever was chosen.
 //
 // dbPath has already been resolved from --db, --data-dir and --portable, so the

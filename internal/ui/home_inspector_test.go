@@ -253,3 +253,66 @@ func TestInspectorIgnoresContextForAnotherFinding(t *testing.T) {
 		t.Errorf("the inspector painted another finding's indicators:\n%s", got)
 	}
 }
+
+// The panel says what the detection said, and only claims silence when there
+// is silence.
+//
+// finding_info.desc was parsed and dropped, so the panel fell back to message —
+// and producers commonly set message to the title, which meant reading the
+// heading back under "why it matters", or being told nothing was supplied when
+// something was.
+func TestTheNarrativePrefersTheProducersDescription(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		finding store.Finding
+		want    string
+	}{
+		{
+			name: "desc wins",
+			finding: store.Finding{
+				Title:   "Malicious attachment delivered",
+				Message: "Malicious attachment delivered",
+				Desc:    "A macro-enabled document arrived from a lookalike domain.",
+			},
+			want: "A macro-enabled document arrived from a lookalike domain.",
+		},
+		{
+			name:    "message when it adds something",
+			finding: store.Finding{Title: "Beacon detected", Message: "Nine callbacks in four minutes."},
+			want:    "Nine callbacks in four minutes.",
+		},
+		{
+			name:    "a message that repeats the title is not a description",
+			finding: store.Finding{Title: "Beacon detected", Message: "beacon detected"},
+			want:    "No description was supplied by the producer.",
+		},
+		{
+			name:    "genuinely nothing",
+			finding: store.Finding{Title: "Beacon detected"},
+			want:    "No description was supplied by the producer.",
+		},
+	} {
+		if got := findingNarrative(tc.finding); got != tc.want {
+			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// And it reaches the screen.
+func TestTheInspectorShowsTheDescription(t *testing.T) {
+	f := store.Finding{
+		Title:      "Suspected account compromise",
+		Message:    "Suspected account compromise",
+		Desc:       "The account authenticated from two countries in nine minutes.",
+		SeverityID: 4,
+	}
+	r := findingInspector{theme: themeDark(), width: 100, narrativeLines: 4}
+
+	got := stripTags(r.render(f, findingContext{}))
+	if !strings.Contains(got, "two countries in nine minutes") {
+		t.Errorf("the panel does not show the producer's description:\n%s", got)
+	}
+	if strings.Contains(got, "No description was supplied") {
+		t.Errorf("the panel claims nothing was supplied while showing a description:\n%s", got)
+	}
+}

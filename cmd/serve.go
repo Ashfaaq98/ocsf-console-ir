@@ -146,15 +146,12 @@ func runServe(cmd *cobra.Command, args []string) error {
 	baseDir := getWorkingDir()
 	resolvedDBPath := resolvePathRelativeToBase(baseDir, config.Database.Path)
 
-	// Entry routing: a missing database means a first run, which gets the
-	// Welcome Screen. There are exactly two destinations — no database goes to
-	// Welcome, a database goes to the main UI — and no branch on whether that
-	// database holds any findings, cases or events. An existing but empty
-	// database opens the app, which renders its own empty states.
+	// Entry routing. The decision itself is shouldShowWelcome, so it can be
+	// tested without launching a TUI.
 	//
 	// This runs before store.NewStore below, which would otherwise create the
 	// file and make the check answer yes on every run.
-	if willUseTUI && !databaseExists(resolvedDBPath) {
+	if shouldShowWelcome(willUseTUI, resolvedDBPath) {
 		logger.Info("no database at %s; showing the welcome screen", resolvedDBPath)
 		res, err := runWelcome(cmd, resolvedDBPath)
 		if err != nil {
