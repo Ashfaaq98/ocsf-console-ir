@@ -1,55 +1,37 @@
 package cmd
 
 import (
+	"os"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
 )
 
-// The HTTP receiver writes each POST as a file into the drop folder; the folder
-// watcher that ingests those files only starts alongside the TUI. Headless, the
-// receiver answered 202 Accepted and left the events unread — a pipeline would
-// have looked healthy while losing every one. Refusing the combination is the
-// difference between an unimplemented feature and silent data loss.
-func TestHTTPIngestRefusedWithoutTUI(t *testing.T) {
-	saveHTTP, saveNoTUI := httpIngestEnable, noTUI
-	t.Cleanup(func() { httpIngestEnable, noTUI = saveHTTP, saveNoTUI })
-
-	httpIngestEnable = true
-	noTUI = true
-
-	err := runServe(&cobra.Command{}, nil)
-	if err == nil {
-		t.Fatal("headless + --http-ingest-enable was accepted; POSTed events would be silently dropped")
+// Folder ingestion starts in both modes.
+//
+// The HTTP receiver writes each POST as a file and the folder watcher is what
+// reads those files into the database. The watcher used to start only inside
+// the TUI branch, so headless the receiver answered 202 Accepted and the events
+// sat on disk unread — a pipeline pointed at it looked healthy while losing
+// every one. v0.2.0 refused the combination rather than lose data; now the two
+// halves start together and the refusal is gone.
+//
+// The end-to-end proof — post an event with no terminal and find it in SQLite —
+// is TestPostedEventsReachTheDatabaseHeadless in internal/ingest, which can run
+// both halves without runServe blocking on a shutdown signal.
+func TestHeadlessHTTPIngestIsNoLongerRefused(t *testing.T) {
+	body, err := os.ReadFile("serve.go")
+	if err != nil {
+		t.Fatal(err)
 	}
-	msg := err.Error()
-	if !strings.Contains(msg, "not supported without the TUI") {
-		t.Errorf("error does not say what is wrong: %q", msg)
+	if strings.Contains(string(body), "not supported without the TUI") {
+		t.Error("the guard is still in place, so headless HTTP ingestion still refuses to start")
 	}
-	// An error that does not say what to do instead is only half an error.
-	if !strings.Contains(msg, "ingest") || !strings.Contains(msg, "--watch") {
-		t.Errorf("error does not point at the headless path that does work: %q", msg)
-	}
-}
-
-// The guard must not fire on the combinations that are fine, or it would break
-// headless folder ingestion — the one headless path that works today.
-func TestHTTPIngestGuardDoesNotFireOtherwise(t *testing.T) {
-	saveHTTP, saveNoTUI := httpIngestEnable, noTUI
-	t.Cleanup(func() { httpIngestEnable, noTUI = saveHTTP, saveNoTUI })
-
-	// Headless with no HTTP receiver: allowed. Verified by the guard condition
-	// rather than by running the server, which would block.
-	httpIngestEnable, noTUI = false, true
-	if httpIngestEnable && noTUI {
-		t.Fatal("guard would fire without the HTTP receiver enabled")
-	}
-
-	// HTTP receiver with a TUI: allowed.
-	httpIngestEnable, noTUI = true, false
-	if httpIngestEnable && noTUI {
-		t.Fatal("guard would fire with the TUI running")
+	// And the watcher is no longer started inside the branch that needs a
+	// terminal.
+	if strings.Contains(string(body), "Start background folder ingestion for the TUI") {
+		t.Error("folder ingestion is still started only for the TUI")
 	}
 }
 
