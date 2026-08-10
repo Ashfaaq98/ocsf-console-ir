@@ -93,3 +93,12 @@ func humanise(action string) string {
 func escapePipes(s string) string {
 	return strings.ReplaceAll(strings.TrimSpace(s), "|", `\|`)
 }
+
+// equalFold and containsFold keep the case matcher from depending on the
+// caller's capitalisation. An analyst typing a case name should not have to
+// remember whether it began with a capital.
+func equalFold(a, b string) bool { return strings.EqualFold(a, b) }
+
+func containsFold(haystack, needle string) bool {
+	return strings.Contains(strings.ToLower(haystack), strings.ToLower(needle))
+}

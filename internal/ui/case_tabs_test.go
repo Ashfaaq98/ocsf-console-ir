@@ -284,7 +284,7 @@ func timelineFixture() ([]store.Event, []store.Finding, []store.AuditEntry) {
 // is made clearer by being folded into "6 events".
 func TestTimelineMergesAndOrders(t *testing.T) {
 	events, findings, audit := timelineFixture()
-	entries, _ := buildTimeline(events, findings, audit, map[string]bool{}, groupByHost)
+	entries, _ := buildTimeline(events, findings, nil, audit, map[string]bool{}, groupByHost)
 
 	if len(entries) != 3 {
 		t.Fatalf("timeline has %d entries, want 3 (one cluster, one finding, one activity)\n%+v",
@@ -307,8 +307,8 @@ func TestTimelineMergesAndOrders(t *testing.T) {
 // timeline cannot be cited.
 func TestTimelineIsStable(t *testing.T) {
 	events, findings, audit := timelineFixture()
-	a, _ := buildTimeline(events, findings, audit, map[string]bool{}, groupByHost)
-	b, _ := buildTimeline(events, findings, audit, map[string]bool{}, groupByHost)
+	a, _ := buildTimeline(events, findings, nil, audit, map[string]bool{}, groupByHost)
+	b, _ := buildTimeline(events, findings, nil, audit, map[string]bool{}, groupByHost)
 
 	if len(a) != len(b) {
 		t.Fatalf("two runs gave %d and %d entries", len(a), len(b))
@@ -340,7 +340,7 @@ func TestTimelineMarksAreDistinct(t *testing.T) {
 // timeline must show them rather than let tview eat them as colour tags.
 func TestTimelineEscapesEventText(t *testing.T) {
 	events, findings, audit := timelineFixture()
-	entries, _ := buildTimeline(events, findings, audit, map[string]bool{"a": true}, groupByHost)
+	entries, _ := buildTimeline(events, findings, nil, audit, map[string]bool{"a": true}, groupByHost)
 	table := tview.NewTable()
 	rows := renderTimeline(table, entries, entries[0].Label, themeDark(), 0)
 
@@ -398,7 +398,7 @@ func TestTimelineFoldsRepetitiveAudit(t *testing.T) {
 		})
 	}
 
-	entries, _ := buildTimeline(nil, nil, audit, map[string]bool{}, groupByHost)
+	entries, _ := buildTimeline(nil, nil, nil, audit, map[string]bool{}, groupByHost)
 	if len(entries) != 1 {
 		t.Fatalf("twelve audit entries produced %d timeline rows, want 1", len(entries))
 	}
@@ -449,5 +449,84 @@ func TestTabIndicesMatchTheirNames(t *testing.T) {
 	// Every tab has a page and a focus pane, or switching to it draws nothing.
 	if len(caseTabPages) != len(caseTabNames) {
 		t.Errorf("%d tabs but %d page mappings", len(caseTabNames), len(caseTabPages))
+	}
+}
+
+// The analyst's own notes belong on the timeline.
+//
+// A note is the only entry there somebody chose to make: "blocked the address
+// at the firewall" explains the events above it and the absence of any below.
+// Without it the timeline said what arrived and never what was done about it —
+// and the same notes were already in the report, so the case screen was the one
+// place they did not appear.
+func TestNotesAppearOnTheTimeline(t *testing.T) {
+	base := time.Date(2026, 8, 8, 3, 0, 0, 0, time.UTC)
+
+	events := []store.Event{
+		{ID: "e1", Message: "Outbound to 45.147.230.11", Host: "ws-14", Timestamp: base.Add(2 * time.Minute)},
+	}
+	findings := []store.Finding{
+		{Title: "Confirmed C2 beaconing", FirstSeen: base},
+	}
+	notes := []store.Note{
+		{Content: "Blocked 45.147.230.11 at the firewall", Author: "ashfaaq",
+			CreatedAt: base.Add(50 * time.Minute)},
+		{Content: "the statement, not a decision", LinkedType: store.NoteTypeStatement,
+			CreatedAt: base.Add(10 * time.Minute)},
+		{Content: "45.147.230.11", LinkedType: "ioc", CreatedAt: base.Add(20 * time.Minute)},
+	}
+	audit := []store.AuditEntry{
+		{Action: "create_case", Actor: "ashfaaq", Timestamp: base.Add(time.Hour)},
+	}
+
+	entries, _ := buildTimeline(events, findings, notes, audit, map[string]bool{}, groupByHost)
+
+	var kinds []timelineKind
+	var labels []string
+	for _, e := range entries {
+		kinds = append(kinds, e.Kind)
+		labels = append(labels, e.Label)
+	}
+
+	found := false
+	for i, k := range kinds {
+		if k == timelineNote {
+			found = true
+			if !strings.Contains(labels[i], "Blocked 45.147.230.11") {
+				t.Errorf("the note on the timeline reads %q", labels[i])
+			}
+		}
+	}
+	if !found {
+		t.Errorf("no note reached the timeline: %v", labels)
+	}
+
+	// The briefing belongs to the summary and an IOC to the indicators; neither
+	// is part of the narrative.
+	for _, l := range labels {
+		if strings.Contains(l, "not a decision") || l == "45.147.230.11" {
+			t.Errorf("a briefing or IOC note leaked into the timeline: %q", l)
+		}
+	}
+
+	// And it lands in order, between the event and the case being opened.
+	for i := 1; i < len(entries); i++ {
+		if entries[i].At.Before(entries[i-1].At) {
+			t.Errorf("the timeline runs backwards at entry %d", i)
+		}
+	}
+}
+
+// A note is marked as one, so it cannot be mistaken for something that happened
+// on its own.
+func TestANoteLooksLikeANote(t *testing.T) {
+	glyph, _ := timelineMark(timelineNote, themeDark())
+	if glyph == "" {
+		t.Fatal("a note has no mark on the timeline")
+	}
+	for _, other := range []timelineKind{timelineEvent, timelineFinding, timelineActivity} {
+		if g, _ := timelineMark(other, themeDark()); g == glyph {
+			t.Errorf("a note is drawn the same as kind %v", other)
+		}
 	}
 }

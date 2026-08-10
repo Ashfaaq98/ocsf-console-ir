@@ -22,47 +22,11 @@ import (
 // that was sent cannot be regenerated later. Writing it out is a second act the
 // analyst asks for, and it says exactly where the file went.
 
-// reportAuditLimit bounds the activity a report carries. A case worked for a
-// week can hold hundreds of entries, and a timeline nobody reads to the end is
-// not a timeline.
-const reportAuditLimit = 200
-
-// buildCaseReport gathers everything a case report is written from.
-//
-// It runs off the UI goroutine — six queries — and returns a value rather than
-// painting anything.
-func (ui *UI) buildCaseReport(ctx context.Context, caseID string) (report.CaseReport, error) {
-	if ui.store == nil {
-		return report.CaseReport{}, fmt.Errorf("no database")
-	}
-
-	c, err := ui.store.GetCase(ctx, caseID)
-	if err != nil || c == nil {
-		return report.CaseReport{}, fmt.Errorf("could not read case %s: %w", caseID, err)
-	}
-
-	r := report.CaseReport{
-		Case:      *c,
-		Version:   buildinfo.Display(ui.version),
-		Generated: time.Now(),
-	}
-
-	// A failure in any one of these costs a section, not the report. A case
-	// with no notes and a report that will not generate are different problems,
-	// and only the first is the analyst's.
-	r.Briefing, _ = ui.store.GetBriefing(ctx, caseID)
-	r.Findings, _ = ui.store.GetCaseFindings(ctx, caseID)
-	r.Events, _ = ui.store.GetEventsByCase(ctx, caseID)
-	r.Notes, _ = ui.store.GetNotes(ctx, caseID)
-	r.Audit, _ = ui.store.GetAuditEntries(ctx, caseID, reportAuditLimit)
-	r.Indicators, _ = ui.store.GetCaseIndicators(ctx, caseID)
-
-	return r, nil
-}
-
 // generateCaseReport writes a case report into the database and returns it.
 func (ui *UI) generateCaseReport(ctx context.Context, caseID string) (*store.Report, error) {
-	built, err := ui.buildCaseReport(ctx, caseID)
+	// Through the report package, so the command line and this screen produce
+	// the same document from the same reads.
+	built, err := report.BuildCase(ctx, ui.store, caseID, buildinfo.Display(ui.version), time.Now())
 	if err != nil {
 		return nil, err
 	}
