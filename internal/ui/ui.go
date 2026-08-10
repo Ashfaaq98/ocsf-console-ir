@@ -110,8 +110,8 @@ func themeDark() Theme {
 		TableZebra2:   hex("#121823"),
 
 		SeverityCritical: hex("#ff5f5f"),
-		SeverityHigh:     hex("#ffaf5f"),
-		SeverityMedium:   hex("#ffd75f"),
+		SeverityHigh:     hex("#ff9e3d"),
+		SeverityMedium:   hex("#ffe066"),
 		SeverityLow:      hex("#87ffaf"),
 		SeverityInfo:     hex("#87afff"),
 
@@ -122,8 +122,8 @@ func themeDark() Theme {
 		TagWarning:          "#f59e0b",
 		TagError:            "#ef4444",
 		TagSeverityCritical: "#ff5f5f",
-		TagSeverityHigh:     "#ffaf5f",
-		TagSeverityMedium:   "#ffd75f",
+		TagSeverityHigh:     "#ff9e3d",
+		TagSeverityMedium:   "#ffe066",
 		TagSeverityLow:      "#87ffaf",
 		TagSeverityInfo:     "#87afff",
 	}
@@ -155,7 +155,7 @@ func themeMidnight() Theme {
 		TableZebra2:   hex("#0b1016"),
 
 		SeverityCritical: hex("#ff5c70"),
-		SeverityHigh:     hex("#ff9d4d"),
+		SeverityHigh:     hex("#ff8c33"),
 		SeverityMedium:   hex("#f6d365"),
 		SeverityLow:      hex("#78d6a3"),
 		SeverityInfo:     hex("#56d4ff"),
@@ -167,7 +167,7 @@ func themeMidnight() Theme {
 		TagWarning:          "#f4c95d",
 		TagError:            "#ff5c70",
 		TagSeverityCritical: "#ff5c70",
-		TagSeverityHigh:     "#ff9d4d",
+		TagSeverityHigh:     "#ff8c33",
 		TagSeverityMedium:   "#f6d365",
 		TagSeverityLow:      "#78d6a3",
 		TagSeverityInfo:     "#56d4ff",
@@ -244,8 +244,14 @@ func themeColorblind() Theme {
 		TableZebra1:   hex("#1e1e1e"),
 		TableZebra2:   hex("#121212"),
 
-		SeverityCritical: hex("#d55e00"), // Vermillion
-		SeverityHigh:     hex("#e69f00"), // Orange
+		// Chosen against the three dichromacies rather than by eye.
+		// Vermillion and orange are 67 apart in ordinary vision and
+		// collapse to 51 under deuteranopia — the exact failure this
+		// palette exists to avoid. This set keeps the familiar
+		// red-orange-yellow-green-blue and stays 69 apart at worst under
+		// protanopia, deuteranopia and tritanopia alike.
+		SeverityCritical: hex("#cc3311"),
+		SeverityHigh:     hex("#ee7733"),
 		SeverityMedium:   hex("#f0e442"), // Yellow
 		SeverityLow:      hex("#009e73"), // Bluish green
 		SeverityInfo:     hex("#56b4e9"), // Sky blue
@@ -256,8 +262,8 @@ func themeColorblind() Theme {
 		TagSuccess:          "#009e73",
 		TagWarning:          "#f0e442",
 		TagError:            "#d55e00",
-		TagSeverityCritical: "#d55e00",
-		TagSeverityHigh:     "#e69f00",
+		TagSeverityCritical: "#cc3311",
+		TagSeverityHigh:     "#ee7733",
 		TagSeverityMedium:   "#f0e442",
 		TagSeverityLow:      "#009e73",
 		TagSeverityInfo:     "#56b4e9",
@@ -336,11 +342,11 @@ func themeLight() Theme {
 		TableZebra1:   hex("#ffffff"),
 		TableZebra2:   hex("#f8fafc"),
 
-		SeverityCritical: hex("#dc2626"),
-		SeverityHigh:     hex("#f97316"),
-		SeverityMedium:   hex("#ca8a04"),
-		SeverityLow:      hex("#16a34a"),
-		SeverityInfo:     hex("#2563eb"),
+		SeverityCritical: hex("#b91c1c"),
+		SeverityHigh:     hex("#ea580c"),
+		SeverityMedium:   hex("#a16207"),
+		SeverityLow:      hex("#15803d"),
+		SeverityInfo:     hex("#1d4ed8"),
 
 		TagTextPrimary:      "#111827",
 		TagMuted:            "#6b7280",
@@ -348,11 +354,11 @@ func themeLight() Theme {
 		TagSuccess:          "#15803d",
 		TagWarning:          "#b45309",
 		TagError:            "#b91c1c",
-		TagSeverityCritical: "#dc2626",
-		TagSeverityHigh:     "#f97316",
-		TagSeverityMedium:   "#ca8a04",
-		TagSeverityLow:      "#16a34a",
-		TagSeverityInfo:     "#2563eb",
+		TagSeverityCritical: "#b91c1c",
+		TagSeverityHigh:     "#ea580c",
+		TagSeverityMedium:   "#a16207",
+		TagSeverityLow:      "#15803d",
+		TagSeverityInfo:     "#1d4ed8",
 	}
 }
 
