@@ -361,6 +361,10 @@ func (s *Store) migrate() error {
 	if err := s.migrateObservables(); err != nil {
 		return err
 	}
+	if err := s.migrateReports(); err != nil {
+		return err
+	}
+
 	if err := s.migrateCaseOCSFColumns(); err != nil {
 		return err
 	}

@@ -56,6 +56,14 @@ type Finding struct {
 	LastSeen    time.Time `json:"last_seen"`
 	CreatedTime time.Time `json:"created_time,omitempty"`
 
+	// TriagedAt and VerdictAt are when an analyst first moved this finding off
+	// New, and first ruled on it. They are the two halves of "how long did we
+	// take", which is the metric every periodic report is asked for and the one
+	// thing that cannot be worked out after the fact — so they are recorded the
+	// moment the decision is made, and never overwritten by a later change.
+	TriagedAt time.Time `json:"triaged_at,omitempty"`
+	VerdictAt time.Time `json:"verdict_at,omitempty"`
+
 	AttacksJSON         string `json:"attacks_json,omitempty"`
 	EvidencesJSON       string `json:"evidences_json,omitempty"`
 	RelatedEventsJSON   string `json:"related_events_json,omitempty"`
@@ -133,7 +141,7 @@ const findingColumns = `id, finding_uid, case_id, class_uid, category_uid, activ
 	title, message, description, analytic_name, analytic_uid, status, status_id, verdict, verdict_id,
 	severity, severity_id, confidence_id, risk_level_id, risk_score, impact_id, priority_id,
 	is_alert, is_suspected_breach, assignee, metadata_uid,
-	first_seen, last_seen, created_time,
+	first_seen, last_seen, created_time, triaged_at, verdict_at,
 	attacks_json, evidences_json, related_events_json, finding_info_list_json,
 	raw_json, created_at, updated_at`
 
@@ -193,6 +201,8 @@ func (s *Store) migrateFindings() error {
 			metadata_uid TEXT,
 			first_seen INTEGER,
 			last_seen INTEGER,
+			triaged_at INTEGER,
+			verdict_at INTEGER,
 			created_time INTEGER,
 			attacks_json TEXT,
 			evidences_json TEXT,
@@ -215,7 +225,35 @@ func (s *Store) migrateFindings() error {
 			return fmt.Errorf("failed to create findings schema: %w", err)
 		}
 	}
+	if err := s.migrateFindingTiming(); err != nil {
+		return err
+	}
 	return s.migrateFindingDescription()
+}
+
+// migrateFindingTiming adds the two columns that record when an analyst decided.
+//
+// Additive and re-runnable, like the description column. Nothing is backfilled:
+// there is no record anywhere of when a decision was made before these existed,
+// and inventing one would put a fabricated number in a client's report.
+func (s *Store) migrateFindingTiming() error {
+	for _, col := range []struct{ name, sql string }{
+		{"triaged_at", `ALTER TABLE findings ADD COLUMN triaged_at INTEGER`},
+		{"verdict_at", `ALTER TABLE findings ADD COLUMN verdict_at INTEGER`},
+	} {
+		var count int
+		if err := s.db.QueryRow(
+			`SELECT COUNT(*) FROM pragma_table_info('findings') WHERE name=?`, col.name).
+			Scan(&count); err != nil {
+			return fmt.Errorf("failed to check findings.%s: %w", col.name, err)
+		}
+		if count == 0 {
+			if _, err := s.db.Exec(col.sql); err != nil {
+				return fmt.Errorf("failed to add findings.%s: %w", col.name, err)
+			}
+		}
+	}
+	return nil
 }
 
 // migrateFindingDescription adds the description column to an existing database
@@ -402,6 +440,8 @@ func upsertFinding(ctx context.Context, tx *sql.Tx, f Finding) error {
 			first_seen = MIN(findings.first_seen, excluded.first_seen),
 			last_seen = MAX(findings.last_seen, excluded.last_seen),
 			created_time = excluded.created_time,
+			triaged_at = COALESCE(findings.triaged_at, excluded.triaged_at),
+			verdict_at = COALESCE(findings.verdict_at, excluded.verdict_at),
 			attacks_json = excluded.attacks_json,
 			evidences_json = excluded.evidences_json,
 			related_events_json = excluded.related_events_json,
@@ -415,6 +455,7 @@ func upsertFinding(ctx context.Context, tx *sql.Tx, f Finding) error {
 		f.Severity, f.SeverityID, f.ConfidenceID, f.RiskLevelID, f.RiskScore, f.ImpactID, f.PriorityID,
 		boolToInt(f.IsAlert), boolToInt(f.IsSuspectedBreach), f.Assignee, f.MetadataUID,
 		f.FirstSeen.Unix(), f.LastSeen.Unix(), f.CreatedTime.Unix(),
+		unixOrNil(f.TriagedAt), unixOrNil(f.VerdictAt),
 		f.AttacksJSON, f.EvidencesJSON, f.RelatedEventsJSON, f.FindingInfoListJSON,
 		f.RawJSON, f.CreatedAt.Unix(), f.UpdatedAt.Unix(),
 	)
@@ -742,20 +783,40 @@ func (s *Store) UpdateFindingStatus(ctx context.Context, findingID string, statu
 		return fmt.Errorf("failed to look up finding %s: %w", findingID, err)
 	}
 
+	// COALESCE, so the first decision is the one the clock stops on. Re-opening
+	// a finding does not reset how long it took to be picked up, and this can
+	// only ever measure forward from the day it was added — there is no way to
+	// backfill when somebody made up their mind.
+	now := time.Now()
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE findings SET status_id = ?, status = ?, updated_at = ? WHERE id = ?`,
-		statusID, ocsf.FindingStatusName(classUID, statusID), time.Now().Unix(), findingID)
+		`UPDATE findings SET status_id = ?, status = ?, updated_at = ?,
+			triaged_at = COALESCE(triaged_at, ?)
+		 WHERE id = ?`,
+		statusID, ocsf.FindingStatusName(classUID, statusID), now.Unix(),
+		triageStamp(now, statusID), findingID)
 	if err != nil {
 		return fmt.Errorf("failed to update finding status: %w", err)
 	}
 	return nil
 }
 
+// triageStamp is when a status change counts as the finding having been picked
+// up. Moving it back to New is not triage, so that leaves the clock unstarted.
+func triageStamp(now time.Time, statusID int) interface{} {
+	if statusID == ocsf.FindingStatusNew || statusID == 0 {
+		return nil
+	}
+	return now.Unix()
+}
+
 // UpdateFindingVerdict records an analyst's true/false-positive judgement.
 func (s *Store) UpdateFindingVerdict(ctx context.Context, findingID string, verdictID int) error {
+	now := time.Now()
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE findings SET verdict_id = ?, verdict = ?, updated_at = ? WHERE id = ?`,
-		verdictID, ocsf.VerdictName(verdictID), time.Now().Unix(), findingID)
+		`UPDATE findings SET verdict_id = ?, verdict = ?, updated_at = ?,
+			verdict_at = COALESCE(verdict_at, ?)
+		 WHERE id = ?`,
+		verdictID, ocsf.VerdictName(verdictID), now.Unix(), now.Unix(), findingID)
 	if err != nil {
 		return fmt.Errorf("failed to update finding verdict: %w", err)
 	}
@@ -783,6 +844,7 @@ func scanFindings(rows *sql.Rows) ([]Finding, error) {
 		var title, message, description, analyticName, analyticUID, assignee, metadataUID sql.NullString
 		var attacks, evidences, relatedEvents, findingInfoList sql.NullString
 		var firstSeen, lastSeen, createdTime, createdAt, updatedAt int64
+		var triagedAt, verdictAt sql.NullInt64
 		var isAlert, isBreach int
 
 		err := rows.Scan(
@@ -790,13 +852,16 @@ func scanFindings(rows *sql.Rows) ([]Finding, error) {
 			&title, &message, &description, &analyticName, &analyticUID, &status, &f.StatusID, &verdict, &f.VerdictID,
 			&severity, &f.SeverityID, &f.ConfidenceID, &f.RiskLevelID, &f.RiskScore, &f.ImpactID, &f.PriorityID,
 			&isAlert, &isBreach, &assignee, &metadataUID,
-			&firstSeen, &lastSeen, &createdTime,
+			&firstSeen, &lastSeen, &createdTime, &triagedAt, &verdictAt,
 			&attacks, &evidences, &relatedEvents, &findingInfoList,
 			&f.RawJSON, &createdAt, &updatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan finding: %w", err)
 		}
+
+		f.TriagedAt = timeOrZero(triagedAt)
+		f.VerdictAt = timeOrZero(verdictAt)
 
 		for dst, src := range map[*string]sql.NullString{
 			&f.CaseID: caseID, &f.Title: title, &f.Message: message, &f.Desc: description,

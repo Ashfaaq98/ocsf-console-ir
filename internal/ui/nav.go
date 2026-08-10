@@ -84,8 +84,9 @@ func destinations() []destination {
 		{destIndicators, '4', "Indicators", "Every observable in the database",
 			[]keyHint{{"⏎", "pivot"}, {"/", "search"}, {"f", "type"}, {"r", "refresh"}},
 			false, false, (*UI).switchToIndicators},
-		{destReports, '5', "Reports", "Exports and case bundles",
-			nil,
+		{destReports, '5', "Reports", "Written-up cases, kept",
+			[]keyHint{{"n", "new"}, {"⏎", "read"}, {"w", "to file"}, {"d", "delete"},
+				{"Tab", "pane"}},
 			false, false, (*UI).switchToReports},
 	}
 }
@@ -365,6 +366,9 @@ func (ui *UI) hasEventsContext() bool {
 // eventsListOnScreen says whether the shared events table is part of what is
 // being drawn. On Cases and Indicators it is loaded but not shown, so nothing
 // that loads it may take focus.
+// onReports says whether the Reports screen is showing.
+func (ui *UI) onReports() bool { return ui.destination == destReports }
+
 func (ui *UI) eventsListOnScreen() bool {
 	return ui.destination == destEvents || ui.activeCM != nil
 }

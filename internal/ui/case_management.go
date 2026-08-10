@@ -589,6 +589,12 @@ func (cm *CaseManagement) setupKeybindings() {
 					return nil
 				}
 			case 'E':
+				// The report, not the bundle. An analyst pressing export at the
+				// end of a case wants something they can send; the JSON is for
+				// a machine and is on Shift+J.
+				cm.writeCaseReport()
+				return nil
+			case 'J':
 				cm.exportCase()
 				return nil
 			case 's':
@@ -2851,10 +2857,16 @@ func (cm *CaseManagement) exportCase() {
 			return
 		}
 
-		dir := "exports"
-		_ = os.MkdirAll(dir, 0o755)
-		filename := fmt.Sprintf("case_%s_%s.json", cm.caseData.ID, time.Now().Format("20060102_150405"))
-		path := filepath.Join(dir, filename)
+		// The directory the analyst launched from, not an "exports" folder
+		// resolved against whatever it happens to be: from home that wrote to
+		// ~/exports and from /tmp somewhere else, and nobody could predict
+		// which.
+		dir, err := os.Getwd()
+		if err != nil {
+			dir = paths.Current().Data
+		}
+		path := filepath.Join(dir, fmt.Sprintf("console-ir-%s-%s.json",
+			slugify(cm.caseData.Title), time.Now().Format("2006-01-02-1504")))
 
 		if err := os.WriteFile(path, data, 0o644); err != nil {
 			cm.app.QueueUpdate(func() {

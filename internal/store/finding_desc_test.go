@@ -199,3 +199,117 @@ func TestPlaceholdersMatchTheColumns(t *testing.T) {
 		}
 	}
 }
+
+// A triage decision records when it was made.
+//
+// How long a detection sat before somebody looked at it is the metric every
+// periodic report is asked for, and the one thing that cannot be worked out
+// afterwards: nothing anywhere remembers when an analyst made up their mind
+// unless it is written down as they do it.
+func TestATriageDecisionRecordsWhen(t *testing.T) {
+	st := descStore(t)
+	ctx := context.Background()
+
+	id, err := st.SaveFinding(ctx, findingWithDesc("timed", "Beacon", "", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := st.GetFindingByUID(ctx, "timed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !before.TriagedAt.IsZero() || !before.VerdictAt.IsZero() {
+		t.Fatal("an untouched finding already carries a decision time")
+	}
+
+	if err := st.UpdateFindingStatus(ctx, id, ocsf.FindingStatusInProgress); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateFindingVerdict(ctx, id, ocsf.VerdictTruePositive); err != nil {
+		t.Fatal(err)
+	}
+
+	after, err := st.GetFindingByUID(ctx, "timed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.TriagedAt.IsZero() {
+		t.Error("moving a finding off New did not record when")
+	}
+	if after.VerdictAt.IsZero() {
+		t.Error("ruling on a finding did not record when")
+	}
+}
+
+// The first decision is the one the clock stops on.
+func TestTheTriageClockDoesNotRestart(t *testing.T) {
+	st := descStore(t)
+	ctx := context.Background()
+
+	id, err := st.SaveFinding(ctx, findingWithDesc("reopened", "Beacon", "", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateFindingStatus(ctx, id, ocsf.FindingStatusInProgress); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := st.GetFindingByUID(ctx, "reopened")
+
+	time.Sleep(1100 * time.Millisecond)
+	if err := st.UpdateFindingStatus(ctx, id, ocsf.FindingStatusResolved); err != nil {
+		t.Fatal(err)
+	}
+	second, _ := st.GetFindingByUID(ctx, "reopened")
+
+	if !second.TriagedAt.Equal(first.TriagedAt) {
+		t.Errorf("a later status change moved the clock from %v to %v",
+			first.TriagedAt, second.TriagedAt)
+	}
+}
+
+// Moving a finding back to New is not triage, so it must not start the clock.
+func TestBackToNewIsNotTriage(t *testing.T) {
+	st := descStore(t)
+	ctx := context.Background()
+
+	id, err := st.SaveFinding(ctx, findingWithDesc("untouched", "Beacon", "", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateFindingStatus(ctx, id, ocsf.FindingStatusNew); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := st.GetFindingByUID(ctx, "untouched")
+	if !got.TriagedAt.IsZero() {
+		t.Error("setting a finding to New counted as triaging it")
+	}
+}
+
+// A producer resending the finding must not wipe the analyst's timings.
+func TestAProducerUpdateKeepsTheTimings(t *testing.T) {
+	st := descStore(t)
+	ctx := context.Background()
+
+	f := findingWithDesc("resent", "Beacon", "", "")
+	id, err := st.SaveFinding(ctx, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpdateFindingVerdict(ctx, id, ocsf.VerdictTruePositive); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := st.GetFindingByUID(ctx, "resent")
+
+	// The same finding arrives again, revised.
+	f.FindingInfo.Title = "Beacon (revised)"
+	if _, err := st.SaveFinding(ctx, f); err != nil {
+		t.Fatal(err)
+	}
+
+	after, _ := st.GetFindingByUID(ctx, "resent")
+	if !after.VerdictAt.Equal(before.VerdictAt) {
+		t.Errorf("a producer update reset the verdict time from %v to %v",
+			before.VerdictAt, after.VerdictAt)
+	}
+}

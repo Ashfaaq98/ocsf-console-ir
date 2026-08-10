@@ -485,6 +485,8 @@ type UI struct {
 	// filterModal is Triage's filter panel while it is open, so a reload can
 	// refresh the count it shows.
 	filterModal *triageFilterModal
+	// reports is the Reports screen, built on first use.
+	reports *reportsView
 
 	// findingInspect holds the selected finding's context — its indicators and
 	// their prevalence, and the name of the case it belongs to — loaded off the
@@ -1242,6 +1244,8 @@ func (ui *UI) screenKeys() func(*tcell.EventKey) *tcell.EventKey {
 		return ui.casesKeys
 	case destIndicators:
 		return ui.indicatorKeys
+	case destReports:
+		return ui.reportKeys
 	}
 	return nil
 }
@@ -5260,14 +5264,6 @@ func (ui *UI) showCaseBriefing(c store.Case) {
 	}
 	ui.casesPane.RemoveItem(ui.casesPane.GetItem(1))
 	ui.casesPane.AddItem(ui.buildCaseBriefingTab(c), 0, 1, false)
-}
-
-func (ui *UI) switchToReports() {
-	reportsTv := tview.NewTextView().SetDynamicColors(true)
-	reportsTv.SetBorder(true).SetTitle(" REPORTS & EXPORTS ").SetTitleColor(ui.theme.Header).SetBackgroundColor(ui.theme.Bg)
-	reportsTv.SetText(fmt.Sprintf("\n  [%s:b]Incident Reports & Export Bundles[-:-:-]\n\n  [%s]• Case Bundles (JSON/STIX)\n  • Generated Incident Briefings\n  • Telemetry Export (OCSF JSONL)[-:-:-]\n", ui.theme.TagAccent, ui.theme.TagTextPrimary))
-	ui.setMainView(reportsTv)
-	ui.setStatusDirect("[%s]Reports View • Export case summaries & investigation bundles[-:-:-]", ui.theme.TagAccent)
 }
 
 func (ui *UI) showHelpModal() {
