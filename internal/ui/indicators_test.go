@@ -304,3 +304,73 @@ func TestIndicatorTypeFilterNarrowsTheList(t *testing.T) {
 		t.Error("clearing an unfiltered list reported that it cleared something")
 	}
 }
+
+// A hash is shown whole when there is room for it.
+//
+// The value was cut to 44 characters in the renderer — a limit chosen for the
+// narrow pane on a case's tab — so a SHA-256 lost 23 of its 64 and the space it
+// would have used sat empty between that column and the next. A hash is only
+// useful entire: 41 characters cannot be pasted into anything.
+func TestAHashIsNotCropped(t *testing.T) {
+	ui, st := newTestUI(t)
+	hash := "3c1b5e7a9d2f4068ac13be57d9f0248613579bdf02468ace13579bdf02468ace"
+
+	ev := &ocsf.Event{Time: time.Now(), ClassUID: 4001, ActivityID: 1, TypeUID: 400101,
+		SeverityID: 3, Message: "miner"}
+	ev.Metadata.UID = "hash-event"
+	ev.Observables = []ocsf.Observable{{TypeID: 8, Type: "Hash", Value: hash}}
+	if _, err := st.SaveEvent(context.Background(), ev); err != nil {
+		t.Fatal(err)
+	}
+
+	ui.termWidth = 190
+	ui.enterScreen(destIndicators)
+	awaitIdle(t, ui)
+
+	// The table alone: rendering the whole screen would let the panel's copy of
+	// the value satisfy an assertion about the row.
+	frame := strings.Join(renderPrimitive(t, ui.indicators.table, 190, 10), "\n")
+	if !strings.Contains(frame, hash) {
+		t.Errorf("the table cropped the hash:\n%s", frame)
+	}
+
+	// And the panel shows it whole too, wherever the cursor is.
+	ui.indicators.table.Select(1, 0)
+	ind := ui.selectedIndicator()
+	ui.indicators.context.load(ind.TypeID, ind.Value)
+	ui.renderIndicatorInspector()
+	if got := stripTags(ui.indicators.inspector.GetText(true)); !strings.Contains(got, hash) {
+		t.Errorf("the panel cropped the hash:\n%s", got)
+	}
+}
+
+// A value too long for any pane is wrapped, not cut, so it can still be read.
+func TestALongValueWraps(t *testing.T) {
+	ui, st := newTestUI(t)
+	long := "https://cdn-metrics.example/" + strings.Repeat("segment/", 30) + "payload.bin"
+
+	ev := &ocsf.Event{Time: time.Now(), ClassUID: 4001, ActivityID: 1, TypeUID: 400101,
+		SeverityID: 3, Message: "beacon"}
+	ev.Metadata.UID = "long-event"
+	ev.Observables = []ocsf.Observable{{TypeID: 6, Type: "URL String", Value: long}}
+	if _, err := st.SaveEvent(context.Background(), ev); err != nil {
+		t.Fatal(err)
+	}
+
+	ui.termWidth = 120
+	ui.enterScreen(destIndicators)
+	awaitIdle(t, ui)
+	ui.indicators.table.Select(1, 0)
+	ind := ui.selectedIndicator()
+	ui.indicators.context.load(ind.TypeID, ind.Value)
+	ui.renderIndicatorInspector()
+
+	got := stripTags(ui.indicators.inspector.GetText(true))
+	joined := strings.ReplaceAll(strings.Join(strings.Fields(got), ""), "\n", "")
+	if !strings.Contains(joined, strings.ReplaceAll(long, " ", "")) {
+		t.Errorf("the panel does not hold the whole value:\n%s", got)
+	}
+	if strings.Count(got, "\n") < 2 {
+		t.Errorf("a value longer than the pane was not wrapped:\n%s", got)
+	}
+}

@@ -69,9 +69,27 @@ func manualIndicators(notes []store.Note) ([]store.CaseIndicator, map[string]str
 func renderCaseIndicators(table *tview.Table, indicators []store.CaseIndicator, t Theme, emptyHint []string) {
 	table.Clear()
 
-	headers := []string{"TYPE", "VALUE", "PROVENANCE", "SIGHTINGS", "FIRST", "LAST"}
+	// The three numeric columns are right-aligned, headers included. A sighting
+	// time is 11 columns dated and 5 bare — "08-06 05:59" beside "09:07" — so
+	// left-aligned they ran into each other and neither column had an edge.
+	headers := []struct {
+		title string
+		align int
+	}{
+		{"TYPE", tview.AlignLeft},
+		{"VALUE", tview.AlignLeft},
+		{"PROVENANCE", tview.AlignLeft},
+		{"SIGHTINGS", tview.AlignRight},
+		{"FIRST", tview.AlignRight},
+		{"LAST", tview.AlignRight},
+	}
 	for col, h := range headers {
-		table.SetCell(0, col, tview.NewTableCell(" "+h).
+		title := " " + h.title
+		if h.align == tview.AlignRight {
+			title = h.title + " "
+		}
+		table.SetCell(0, col, tview.NewTableCell(title).
+			SetAlign(h.align).
 			SetTextColor(t.TableHeader).SetBackgroundColor(t.TableHeaderBg).SetSelectable(false))
 	}
 
@@ -98,12 +116,22 @@ func renderCaseIndicators(table *tview.Table, indicators []store.CaseIndicator, 
 		row := i + 1
 
 		table.SetCell(row, 0, tview.NewTableCell(" "+tview.Escape(orDash(ind.Type))).SetTextColor(t.TextMuted))
-		table.SetCell(row, 1, tview.NewTableCell(tview.Escape(truncate(ind.Value, 44))).
+
+		// Not truncated here. The column expands into whatever the pane has
+		// left, and cutting the text first defeated that: a SHA-256 is 64
+		// characters, the cut was at 44, and the space it would have used sat
+		// empty between this column and the next. tview clips what genuinely
+		// does not fit.
+		table.SetCell(row, 1, tview.NewTableCell(tview.Escape(ind.Value)).
 			SetTextColor(t.TextPrimary).SetExpansion(1))
+
 		table.SetCell(row, 2, tview.NewTableCell(fmt.Sprintf("[%s]%s %s[-]", colour, glyph, label)))
-		table.SetCell(row, 3, tview.NewTableCell(fmt.Sprintf("%9d", ind.Sightings)).SetTextColor(t.TextMuted))
-		table.SetCell(row, 4, tview.NewTableCell(stampOrDash(ind.FirstSeen)).SetTextColor(t.TextMuted))
-		table.SetCell(row, 5, tview.NewTableCell(stampOrDash(ind.LastSeen)).SetTextColor(t.TextMuted))
+		table.SetCell(row, 3, tview.NewTableCell(fmt.Sprintf("%d ", ind.Sightings)).
+			SetAlign(tview.AlignRight).SetTextColor(t.TextMuted))
+		table.SetCell(row, 4, tview.NewTableCell(stampOrDash(ind.FirstSeen)+" ").
+			SetAlign(tview.AlignRight).SetTextColor(t.TextMuted))
+		table.SetCell(row, 5, tview.NewTableCell(stampOrDash(ind.LastSeen)+" ").
+			SetAlign(tview.AlignRight).SetTextColor(t.TextMuted))
 	}
 }
 

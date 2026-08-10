@@ -262,7 +262,13 @@ func (ui *UI) renderIndicatorInspector() {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "\n [%s:-:b]%s[-:-:-]\n", t.TagTextPrimary, tview.Escape(truncate(ind.Value, 60)))
+	// The whole value, wrapped rather than cut. A hash is only useful entire —
+	// 41 of its 64 characters cannot be pasted into anything — and this panel
+	// is where an analyst comes to read what the row could not show.
+	b.WriteString("\n")
+	for _, line := range wrapText(ind.Value, ui.inspectorWidth()-2) {
+		fmt.Fprintf(&b, " [%s:-:b]%s[-:-:-]\n", t.TagTextPrimary, tview.Escape(line))
+	}
 
 	findings, events, ok := v.context.get(ind.TypeID, ind.Value)
 	if !ok {
