@@ -35,10 +35,15 @@ const briefingTwoColumnWidth = 104
 
 // briefingData is everything the briefing draws from.
 type briefingData struct {
-	Case   store.Case
-	Brief  store.Briefing
-	Events []store.Event
-	Pinned map[string]bool
+	Case  store.Case
+	Brief store.Briefing
+	// Findings and Events are the case's members as they are now. The counts
+	// line used to read Case.FindingCount — the denormalised column — while
+	// every other count on the screen came from the loaded records, so the two
+	// could disagree a row apart.
+	Findings []store.Finding
+	Events   []store.Event
+	Pinned   map[string]bool
 }
 
 // loadBriefing gathers a case's briefing. Errors are returned rather than
@@ -54,6 +59,9 @@ func (ui *UI) loadBriefing(c store.Case) (briefingData, error) {
 
 	if events, err := ui.store.GetCaseEventMembers(ui.ctx, c.ID); err == nil {
 		d.Events = events
+	}
+	if findings, err := ui.store.GetCaseFindings(ui.ctx, c.ID); err == nil {
+		d.Findings = findings
 	}
 	if pinned, err := ui.store.GetPinnedMemberIDs(ui.ctx, c.ID, store.MemberTypeEvent); err == nil {
 		d.Pinned = pinned
@@ -95,7 +103,7 @@ func renderBriefing(d briefingData, t Theme, width int) string {
 
 // briefingStatement writes the incident statement, or asks for one.
 func briefingStatement(b *strings.Builder, d briefingData, t Theme, width int) {
-	fmt.Fprintf(b, "\n [%s]INCIDENT STATEMENT[-]\n", t.TagMuted)
+	fmt.Fprintf(b, "\n %s\n", briefingHeading("INCIDENT STATEMENT", t))
 
 	if s := strings.TrimSpace(d.Brief.Statement); s != "" {
 		for _, line := range wrapText(s, maxInt(width-4, 30)) {
@@ -122,6 +130,15 @@ func briefingStatement(b *strings.Builder, d briefingData, t Theme, width int) {
 }
 
 // scopeLines summarises what the case covers.
+// briefingHeading is a section title.
+//
+// A role of its own. Every heading on this screen was TagMuted — the same grey
+// as the labels underneath them — so the page had no structure you could see,
+// only structure you could find by reading.
+func briefingHeading(title string, t Theme) string {
+	return fmt.Sprintf("[%s::b]%s[-:-:-]", tagColor(t.Header), title)
+}
+
 // windowLabel renders the span a set of events covers. Shared, so the briefing
 // and the copilot's suggestions describe the same window the same way.
 func windowLabel(first, last time.Time) string {
@@ -134,14 +151,28 @@ func windowLabel(first, last time.Time) string {
 func scopeLines(d briefingData, t Theme) []string {
 	hosts, users, first, last := scopeOf(d.Events)
 
+	// The label stays quiet; the value is coloured by what it is. Which hosts
+	// and which users are the two facts an analyst reads a scope for, and they
+	// were the same cream as the word "hosts" beside them.
 	row := func(label, value string) string {
-		return fmt.Sprintf("  [%s]%-9s[-] [%s]%s[-]", t.TagMuted, label, t.TagTextPrimary, tview.Escape(value))
+		return fmt.Sprintf("  [%s]%-9s[-] %s", t.TagMuted, label, value)
 	}
+	plain := func(v string) string {
+		return fmt.Sprintf("[%s]%s[-]", t.TagTextPrimary, tview.Escape(v))
+	}
+	entities := func(values []string, class entityClass) string {
+		if len(values) == 0 {
+			return plain("none")
+		}
+		return paintEntities(values, class, t)
+	}
+
 	return []string{
-		row("hosts", orNone(strings.Join(hosts, ", "))),
-		row("users", orNone(strings.Join(users, ", "))),
-		row("window", windowLabel(first, last)),
-		row("counts", fmt.Sprintf("%d findings · %d evidence", d.Case.FindingCount, len(d.Events))),
+		row("hosts", entities(hosts, entityHost)),
+		row("users", entities(users, entityUser)),
+		row("window", plain(windowLabel(first, last))),
+		row("counts", plain(fmt.Sprintf("%d findings · %d evidence",
+			len(d.Findings), len(d.Events)))),
 	}
 }
 
@@ -253,14 +284,14 @@ func pinnedEvidenceLines(d briefingData, t Theme) []string {
 		}
 		out = append(out, fmt.Sprintf("  [%s]★[-] [%s]%s[-]  [%s]%s[-]",
 			t.TagWarning, t.TagMuted, e.Timestamp.Format("15:04:05"),
-			t.TagTextPrimary, tview.Escape(truncate(e.Message, 76))))
+			t.TagTextPrimary, paintText(truncate(e.Message, 76), t)))
 	}
 	return out
 }
 
 // briefingBlock writes a titled block at full width.
 func briefingBlock(b *strings.Builder, t Theme, title string, lines []string) {
-	fmt.Fprintf(b, "\n [%s]%s[-]\n", t.TagMuted, title)
+	fmt.Fprintf(b, "\n %s\n", briefingHeading(title, t))
 	for _, l := range lines {
 		b.WriteString(l + "\n")
 	}
@@ -268,8 +299,8 @@ func briefingBlock(b *strings.Builder, t Theme, title string, lines []string) {
 
 // briefingHeadings writes two block titles side by side.
 func briefingHeadings(b *strings.Builder, t Theme, left, right string, col int) {
-	l := fmt.Sprintf(" [%s]%s[-]", t.TagMuted, left)
-	fmt.Fprintf(b, "%s%s [%s]%s[-]\n", l, strings.Repeat(" ", pad(visibleWidth(l), col)), t.TagMuted, right)
+	l := " " + briefingHeading(left, t)
+	fmt.Fprintf(b, "%s%s %s\n", l, strings.Repeat(" ", pad(visibleWidth(l), col)), briefingHeading(right, t))
 }
 
 // briefingColumns writes two blocks side by side.

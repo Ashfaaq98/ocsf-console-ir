@@ -116,10 +116,7 @@ func buildTimeline(events []store.Event, findings []store.Finding, notes []store
 	//
 	// Briefing notes are the summary, not the narrative, and IOC notes are
 	// indicators; both belong to their own tabs.
-	for _, n := range notes {
-		if store.IsBriefingNote(n) || strings.EqualFold(n.LinkedType, "ioc") {
-			continue
-		}
+	for _, n := range caseLogNotes(notes) {
 		entries = append(entries, timelineEntry{
 			At: n.CreatedAt, Kind: timelineNote,
 			Label: oneLine(n.Content), Detail: noteAuthor(n), Count: 1,
@@ -224,7 +221,8 @@ func renderTimeline(table *tview.Table, entries []timelineEntry, expanded string
 		table.SetCell(row, 0, tview.NewTableCell(" "+e.At.Format("15:04")).SetTextColor(t.TextMuted))
 		table.SetCell(row, 1, tview.NewTableCell(fmt.Sprintf("[%s]%s[-]", colour, glyph)))
 		table.SetCell(row, 2, tview.NewTableCell(fmt.Sprintf("[%s]%s[-]", t.TagWarning, mark)))
-		table.SetCell(row, 3, tview.NewTableCell(tview.Escape(e.Label)+open).
+		table.SetCell(row, 3, tview.NewTableCell(
+			paintTextOn(e.Label, tagColor(t.TextPrimary), t)+open).
 			SetTextColor(t.TextPrimary).SetExpansion(1))
 		table.SetCell(row, 4, tview.NewTableCell(e.Detail).SetTextColor(t.TextMuted))
 		row++
@@ -234,7 +232,8 @@ func renderTimeline(table *tview.Table, entries []timelineEntry, expanded string
 				table.SetCell(row, 0, tview.NewTableCell("").SetSelectable(false))
 				table.SetCell(row, 1, tview.NewTableCell(rail).SetTextColor(t.TextMuted).SetSelectable(false))
 				table.SetCell(row, 3, tview.NewTableCell(
-					ev.Timestamp.Format("15:04:05")+"  "+tview.Escape(oneLine(ev.Message))).
+					ev.Timestamp.Format("15:04:05")+"  "+
+						paintTextOn(oneLine(ev.Message), tagColor(t.TextMuted), t)).
 					SetTextColor(t.TextMuted).SetSelectable(false).SetExpansion(1))
 				row++
 			}

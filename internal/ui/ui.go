@@ -59,6 +59,15 @@ type Theme struct {
 	TableZebra1   tcell.Color
 	TableZebra2   tcell.Color
 
+	// Entity is the colour ramp for the four kinds of thing an incident is
+	// made of — host, user, network, artifact — indexed by entityClass.
+	//
+	// Separate from the severity ramp on purpose: severity says how bad, an
+	// entity says what. A palette may leave it zero, and every value then draws
+	// in the ordinary text colour rather than borrowing a hue that would claim
+	// a meaning the palette has not defined.
+	Entity [entityClassCount]tcell.Color
+
 	// Severity (widgets)
 	SeverityCritical tcell.Color
 	SeverityHigh     tcell.Color
@@ -109,6 +118,11 @@ func themeDark() Theme {
 		TableZebra1:   hex("#161c27"),
 		TableZebra2:   hex("#121823"),
 
+		// host · user · network · artifact
+		Entity: [entityClassCount]tcell.Color{
+			hex("#e879f9"), hex("#00c48f"), hex("#00aaff"), hex("#e69f00"),
+		},
+
 		SeverityCritical: hex("#ff5f5f"),
 		SeverityHigh:     hex("#ff9e3d"),
 		SeverityMedium:   hex("#ffe066"),
@@ -154,6 +168,11 @@ func themeMidnight() Theme {
 		TableZebra1:   hex("#111923"),
 		TableZebra2:   hex("#0b1016"),
 
+		// host · user · network · artifact
+		Entity: [entityClassCount]tcell.Color{
+			hex("#e879f9"), hex("#00c48f"), hex("#00aaff"), hex("#e69f00"),
+		},
+
 		SeverityCritical: hex("#ff5c70"),
 		SeverityHigh:     hex("#ff8c33"),
 		SeverityMedium:   hex("#f6d365"),
@@ -198,6 +217,11 @@ func themeHighContrast() Theme {
 		TableRowMuted: hex("#cccccc"),
 		TableZebra1:   hex("#1a1a1a"),
 		TableZebra2:   hex("#000000"),
+
+		// host · user · network · artifact
+		Entity: [entityClassCount]tcell.Color{
+			hex("#ff00ff"), hex("#00c48f"), hex("#00aaff"), hex("#e69f00"),
+		},
 
 		SeverityCritical: hex("#ff0000"),
 		SeverityHigh:     hex("#ffaa00"),
@@ -250,6 +274,11 @@ func themeColorblind() Theme {
 		// palette exists to avoid. This set keeps the familiar
 		// red-orange-yellow-green-blue and stays 69 apart at worst under
 		// protanopia, deuteranopia and tritanopia alike.
+		// host · user · network · artifact
+		Entity: [entityClassCount]tcell.Color{
+			hex("#e879f9"), hex("#00c48f"), hex("#00aaff"), hex("#e69f00"),
+		},
+
 		SeverityCritical: hex("#cc3311"),
 		SeverityHigh:     hex("#ee7733"),
 		SeverityMedium:   hex("#f0e442"), // Yellow
@@ -295,6 +324,11 @@ func themeGruvbox() Theme {
 		TableRowMuted: hex("#a89984"), // fg4
 		TableZebra1:   hex("#32302f"),
 		TableZebra2:   hex("#282828"),
+
+		// host · user · network · artifact
+		Entity: [entityClassCount]tcell.Color{
+			hex("#e879f9"), hex("#00c48f"), hex("#00aaff"), hex("#e69f00"),
+		},
 
 		SeverityCritical: hex("#fb4934"), // red
 		SeverityHigh:     hex("#fe8019"), // orange
@@ -342,6 +376,11 @@ func themeLight() Theme {
 		TableZebra1:   hex("#ffffff"),
 		TableZebra2:   hex("#f8fafc"),
 
+		// host · user · network · artifact
+		Entity: [entityClassCount]tcell.Color{
+			hex("#9b5de5"), hex("#009e73"), hex("#2563eb"), hex("#d65d0e"),
+		},
+
 		SeverityCritical: hex("#b91c1c"),
 		SeverityHigh:     hex("#ea580c"),
 		SeverityMedium:   hex("#a16207"),
@@ -388,6 +427,11 @@ func themeBasic() Theme {
 		TableRowMuted: tcell.ColorGray,
 		TableZebra1:   tcell.ColorBlack,
 		TableZebra2:   tcell.ColorBlack,
+
+		// host · user · network · artifact
+		Entity: [entityClassCount]tcell.Color{
+			hex("#e879f9"), hex("#00c48f"), hex("#00aaff"), hex("#e69f00"),
+		},
 
 		SeverityCritical: tcell.ColorRed,
 		SeverityHigh:     tcell.ColorFuchsia,

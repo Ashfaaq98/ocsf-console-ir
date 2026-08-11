@@ -599,3 +599,60 @@ func TestTheTabsAreSeparated(t *testing.T) {
 		t.Errorf("the strip has %d separators, want 5:\n%s", n, cm.tabBar.GetText(true))
 	}
 }
+
+// The Notes tab counts what the Notes tab shows.
+//
+// A case's briefing is stored as notes — the statement, each hypothesis, each
+// next action, the summary — and so are hand-added indicators. The table and the
+// timeline both filter them out; the strip's count did not, so a demo case read
+// "Notes 15" above a list of four.
+func TestTheNotesCountMatchesTheNotesTab(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	cm.notes = []store.Note{
+		{Content: "Contained the host", Author: "p.osei"},
+		{Content: "Rotated the credentials", Author: "p.osei"},
+		{Content: "A macro-enabled invoice reached j.rivera", LinkedType: "statement"},
+		{Content: `{"text":"Initial access was the attachment","confidence":"confirmed"}`,
+			LinkedType: "hypothesis"},
+		{Content: `{"text":"Isolate workstation-14","done":true}`, LinkedType: "next_action"},
+		{Content: "Generated summary", LinkedType: "summary"},
+		{Content: "ioc_type:ip", LinkedType: "ioc", LinkedID: "10.20.4.14"},
+	}
+	cm.updateNotesText()
+	cm.renderTabBar()
+
+	if got := cm.caseTabCount(tabNotes); got != 2 {
+		t.Errorf("the strip counts %d notes, want the 2 the tab lists", got)
+	}
+
+	// And the tab really does list two — the notes table has no header row.
+	if got := cm.notesTable.GetRowCount(); got != 2 {
+		t.Errorf("the notes tab has %d rows, want the 2 notes", got)
+	}
+}
+
+// The briefing's counts come from the loaded records, like every other count on
+// the screen — not from the denormalised column, which can disagree with them.
+func TestTheBriefingCountsTheLoadedRecords(t *testing.T) {
+	th := themeGruvbox()
+	d := briefingData{
+		// The column says nine; the case holds two findings and three events.
+		Case:     store.Case{FindingCount: 9, EventCount: 9},
+		Findings: make([]store.Finding, 2),
+		Events: []store.Event{
+			{ID: "e1", Host: "a", Timestamp: time.Now()},
+			{ID: "e2", Host: "b", Timestamp: time.Now()},
+			{ID: "e3", Host: "c", Timestamp: time.Now()},
+		},
+	}
+
+	got := stripTags(strings.Join(scopeLines(d, th), "\n"))
+	if !strings.Contains(got, "2 findings · 3 evidence") {
+		t.Errorf("the counts do not match the loaded records:\n%s", got)
+	}
+	if strings.Contains(got, "9 findings") {
+		t.Errorf("the counts still come from the denormalised column:\n%s", got)
+	}
+}

@@ -12,6 +12,10 @@ func sampleBriefing() briefingData {
 	base := time.Date(2026, 8, 1, 9, 42, 0, 0, time.UTC)
 	return briefingData{
 		Case: store.Case{Title: "C2 beaconing on FIN-02", FindingCount: 7},
+		// The loaded members, which is what the counts line reads. The column
+		// above is left disagreeing on purpose — it is what the briefing used
+		// to count, and the strip counts the records.
+		Findings: make([]store.Finding, 7),
 		Brief: store.Briefing{
 			Statement: "A phishing attachment on FIN-02 led to encoded PowerShell and outbound C2.",
 			Hypotheses: []store.Hypothesis{

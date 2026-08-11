@@ -56,8 +56,9 @@ func (cm *CaseManagement) loadCaseFindings() {
 		cm.queueUpdate(func() {
 			cm.caseFindings = findings
 			cm.renderCaseFindings()
-			// The tab strip counts them.
+			// The tab strip counts them, and so does the briefing's scope.
 			cm.renderTabBar()
+			cm.renderBriefing()
 		})
 	}
 
