@@ -32,13 +32,13 @@ import (
 // two could disagree by a row's distance. The strip is the live number; the
 // header does not repeat it.
 
-// caseHeaderHeight is the header's height with its two rows of fact. It grows by
-// one when the next-action prompt has something to say.
-//
-// There is no border. It cost two rows of chrome around two rows of content,
-// and the tab bar below is a filled band that separates the header from the
-// panel better than a box drawn around it did.
-const caseHeaderHeight = 2
+// caseHeaderHeight is the header's height: its two rows of fact and the two the
+// border costs. It grows by one when the next-action prompt has something to
+// say.
+const caseHeaderHeight = 4
+
+// caseHeaderInset is the columns the border takes from each side.
+const caseHeaderInset = 1
 
 // staleCaseAfter is how long a case may go without activity before the header
 // says so.
@@ -139,13 +139,59 @@ func headerRow(width int, left, right string) string {
 	return left + strings.Repeat(" ", gap) + right
 }
 
-// headerWidth is the columns the header may draw, from the same measurement the
-// tab strip uses.
+// headerWidth is the columns the header may draw: the terminal, as the tab strip
+// measures it, less what the border takes from each side.
 func (cm *CaseManagement) headerWidth() int {
-	if w := cm.barWidth(); w > 0 {
-		return w
+	if w := cm.barWidth(); w > 2*caseHeaderInset {
+		return w - 2*caseHeaderInset
 	}
 	return 0
+}
+
+// heavyBorder draws a box in the heavy box-drawing runes and returns the rect
+// inside it.
+//
+// Drawn rather than asked for. tview's border runes live in a package-level
+// Borders struct, so switching them to the heavy set would change every
+// bordered box in the application; and its per-box alternative is the bold
+// *attribute*, which most terminals render by brightening the light rune rather
+// than thickening it. The header is the one frame that should read as a frame,
+// so it draws its own — and falls back to the light runes where the terminal
+// has no UTF-8.
+func heavyBorder(box *tview.Box, title string, t Theme) {
+	box.SetDrawFunc(func(screen tcell.Screen, x, y, width, height int) (int, int, int, int) {
+		if width < 2 || height < 2 {
+			return x, y, width, height
+		}
+		tl, tr, bl, br, h, v := '┏', '┓', '┗', '┛', '━', '┃'
+		if !supportsUnicode() {
+			tl, tr, bl, br, h, v = '+', '+', '+', '+', '-', '|'
+		}
+
+		style := tcell.StyleDefault.
+			Foreground(t.Border).Background(t.Surface).Bold(true)
+
+		for col := x + 1; col < x+width-1; col++ {
+			screen.SetContent(col, y, h, nil, style)
+			screen.SetContent(col, y+height-1, h, nil, style)
+		}
+		for row := y + 1; row < y+height-1; row++ {
+			screen.SetContent(x, row, v, nil, style)
+			screen.SetContent(x+width-1, row, v, nil, style)
+		}
+		screen.SetContent(x, y, tl, nil, style)
+		screen.SetContent(x+width-1, y, tr, nil, style)
+		screen.SetContent(x, y+height-1, bl, nil, style)
+		screen.SetContent(x+width-1, y+height-1, br, nil, style)
+
+		// The title sits in the top rule, which is where a frame says what it
+		// frames without spending a row on it.
+		if title != "" && width > len([]rune(title))+6 {
+			tview.Print(screen, " "+title+" ", x+2, y, width-4, tview.AlignLeft, t.TextMuted)
+		}
+
+		return x + caseHeaderInset, y + 1, width - 2*caseHeaderInset, height - 2
+	})
 }
 
 // shortCaseID is the identifier as the header shows it.

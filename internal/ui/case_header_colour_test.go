@@ -117,7 +117,7 @@ func TestTheHeaderEmitsNoStrayTags(t *testing.T) {
 	cm.lastWidth = 150
 	cm.updateMetadataBar()
 
-	for _, line := range renderPrimitive(t, cm.metadataBar, 150, 3) {
+	for _, line := range renderPrimitive(t, cm.metadataBar, 150, 5) {
 		if strings.Contains(line, "[-") || strings.Contains(line, "[#") {
 			t.Errorf("a colour tag reached the screen: %q", line)
 		}
@@ -188,13 +188,15 @@ func TestTheHeaderUsesBothMargins(t *testing.T) {
 		cm.lastWidth = width
 		cm.updateMetadataBar()
 
-		row := renderPrimitive(t, cm.metadataBar, width, 3)[0]
-		trimmed := strings.TrimRight(row, " ")
-		if w := len([]rune(trimmed)); w < width-3 || w > width {
-			t.Errorf("at %d columns the first row ends at %d: %q", width, w, trimmed)
+		// Row 0 is the border; row 1 is the first row of fact, inside it.
+		row := []rune(renderPrimitive(t, cm.metadataBar, width, 5)[1])
+		inner := strings.TrimRight(string(row[1:len(row)-1]), " ")
+
+		if w := len([]rune(inner)); w < width-5 || w > width-2 {
+			t.Errorf("at %d columns the first row ends at %d: %q", width, w, inner)
 		}
-		if !strings.HasSuffix(trimmed, "OPEN") {
-			t.Errorf("at %d columns the status is not at the right margin: %q", width, trimmed)
+		if !strings.HasSuffix(inner, "OPEN") {
+			t.Errorf("at %d columns the status is not at the right margin: %q", width, inner)
 		}
 	}
 
@@ -234,5 +236,67 @@ func TestOTakesTheCase(t *testing.T) {
 	if stored.AssignedTo != me {
 		t.Errorf("the database kept %q, want %q — ownership did not persist",
 			stored.AssignedTo, me)
+	}
+}
+
+// The header is framed, in the heavy runes.
+//
+// tview's border runes are a package-level global, so switching them to the
+// heavy set would change every bordered box in the application, and its per-box
+// alternative is the bold attribute — which most terminals render by brightening
+// the light rune rather than thickening it. The header draws its own.
+func TestTheHeaderIsFramed(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+	cm.lastWidth = 150
+
+	frame := renderPrimitive(t, cm.metadataBar, 150, 5)
+	top, bottom := []rune(frame[0]), []rune(frame[len(frame)-1])
+
+	if top[0] != '┏' || top[len(top)-1] != '┓' {
+		t.Errorf("the top of the frame is %q", string(top[:8]))
+	}
+	if bottom[0] != '┗' || bottom[len(bottom)-1] != '┛' {
+		t.Errorf("the bottom of the frame is %q", string(bottom[:8]))
+	}
+	if !strings.Contains(frame[0], "CASE") {
+		t.Errorf("the frame does not name what it frames: %q", frame[0])
+	}
+	for _, row := range frame[1 : len(frame)-1] {
+		r := []rune(row)
+		if r[0] != '┃' || r[len(r)-1] != '┃' {
+			t.Errorf("a row is not inside the frame: %q", row)
+		}
+	}
+}
+
+// The frame is drawn rather than themed by the widget, so it has to be
+// reinstalled when the theme changes — otherwise t leaves the old palette's
+// border around the new palette's header.
+func TestTheFrameFollowsTheTheme(t *testing.T) {
+	ui, _ := newTestUI(t)
+	ui.hasTrueColor = true
+	ui.setTheme("gruvbox")
+	cm := openCase(t, ui)
+	cm.lastWidth = 150
+
+	ui.setTheme("light")
+	cm.OnThemeChanged(ui.theme)
+
+	screen := tcell.NewSimulationScreen("UTF-8")
+	if err := screen.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer screen.Fini()
+	screen.SetSize(150, 5)
+	cm.metadataBar.SetRect(0, 0, 150, 5)
+	cm.metadataBar.Draw(screen)
+	// The simulation screen only publishes to the front buffer on Show.
+	screen.Show()
+
+	cells, _, _ := screen.GetContents()
+	fg, _, _ := cells[0].Style.Decompose()
+	if fg != ui.theme.Border {
+		t.Errorf("the frame is drawn in %v, the theme's border is %v", fg, ui.theme.Border)
 	}
 }

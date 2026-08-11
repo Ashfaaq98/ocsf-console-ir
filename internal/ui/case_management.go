@@ -276,6 +276,7 @@ func (cm *CaseManagement) setupLayout() {
 	cm.metadataBar = tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignLeft)
+	heavyBorder(cm.metadataBar.Box, "CASE", cm.theme)
 	cm.updateMetadataBar()
 
 	// Events table (left)
@@ -2751,6 +2752,8 @@ func (cm *CaseManagement) severityTag(severity string) string {
 func (cm *CaseManagement) applyTheme() {
 	// Apply theme colors to all components
 	cm.metadataBar.SetBackgroundColor(cm.theme.Surface)
+	// The border draws itself, so it holds the theme it was installed with.
+	heavyBorder(cm.metadataBar.Box, "CASE", cm.theme)
 	cm.metadataBar.SetTextColor(cm.theme.TextPrimary)
 
 	cm.eventsTable.SetBackgroundColor(cm.theme.Surface)
