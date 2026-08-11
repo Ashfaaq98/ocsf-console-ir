@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -236,5 +237,107 @@ func TestTheNotesKeysAreDescribedConsistently(t *testing.T) {
 	}
 	if strings.Contains(edit, "Ctrl+s") {
 		t.Errorf("the editor spells the save key differently from the panel title: %s", edit)
+	}
+}
+
+// Space says why it did nothing, rather than appearing broken.
+//
+// It only ever acted on the analyst's own entries — the rest of the list is
+// observables pulled out of the case's evidence — while the status line
+// advertised it for every row. On a case whose indicators all came from
+// evidence, which is most of them, the key looked dead.
+func TestSpaceOnAnExtractedIndicatorSaysWhy(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	cm.caseIndicators = []store.CaseIndicator{
+		{TypeID: 2, Type: "IP Address", Value: "45.147.230.11", Source: "asserted"},
+	}
+	cm.iocRowToManualID = map[int]string{}
+	cm.iocsTable.Select(1, 0)
+
+	cm.toggleManualIOC()
+
+	got := stripTags(cm.statusBar.GetText(true))
+	if !strings.Contains(got, "came from the evidence") {
+		t.Errorf("Space on an extracted indicator said nothing useful: %s", got)
+	}
+	if len(cm.selectedManualIOCIDs) != 0 {
+		t.Error("an extracted indicator was marked for deletion")
+	}
+}
+
+// And it works on the analyst's own — through the real path, because Space
+// re-renders the list, which rebuilds the row-to-note map from the database.
+func TestSpaceSelectsYourOwnIndicator(t *testing.T) {
+	ui, st := newTestUI(t)
+	seedCases(t, ui, st, 1)
+	c := ui.cases[0]
+
+	if _, err := st.AddNote(context.Background(), store.Note{
+		CaseID: c.ID, Content: "ioc_type:ip", Author: "analyst",
+		LinkedType: "ioc", LinkedID: "10.0.0.1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cm := NewCaseManagement(ui, c)
+	ui.activeCM = cm
+	t.Cleanup(func() { ui.activeCM = nil })
+	awaitIdle(t, ui)
+	cm.renderIOCs()
+
+	row := 0
+	for i, ind := range cm.caseIndicators {
+		if ind.Value == "10.0.0.1" {
+			row = i + 1
+		}
+	}
+	if row == 0 {
+		t.Fatalf("the analyst's own indicator is not in the list: %+v", cm.caseIndicators)
+	}
+	cm.iocsTable.Select(row, 0)
+
+	cm.toggleManualIOC()
+	if len(cm.selectedManualIOCIDs) != 1 {
+		t.Fatalf("Space selected %d indicators, want the one the analyst added",
+			len(cm.selectedManualIOCIDs))
+	}
+	if got := stripTags(cm.statusBar.GetText(true)); !strings.Contains(got, "1 indicator selected") {
+		t.Errorf("selecting one said: %s", got)
+	}
+
+	cm.toggleManualIOC()
+	if len(cm.selectedManualIOCIDs) != 0 {
+		t.Errorf("Space did not deselect: %v", cm.selectedManualIOCIDs)
+	}
+}
+
+// A pivot asks before it leaves.
+//
+// It spans the whole database, which a case screen cannot show, so answering it
+// closes the case and opens the Events screen. Doing that silently on Enter —
+// the key least likely to be read as "leave" — threw the analyst out of the
+// investigation they were in.
+func TestPivotingFromACaseAsksFirst(t *testing.T) {
+	ui, st := newTestUI(t)
+	seedCases(t, ui, st, 1)
+	cm := NewCaseManagement(ui, ui.cases[0])
+	ui.activeCM = cm
+	t.Cleanup(func() { ui.activeCM = nil })
+	awaitIdle(t, ui)
+
+	cm.caseIndicators = []store.CaseIndicator{
+		{TypeID: 2, Type: "IP Address", Value: "45.147.230.11", Source: "asserted"},
+	}
+	cm.iocsTable.Select(1, 0)
+
+	cm.pivotSelectedIndicator()
+
+	if !cm.modalActive {
+		t.Fatal("the pivot left the case without asking")
+	}
+	if ui.pivot != nil {
+		t.Error("the pivot happened before it was confirmed")
 	}
 }

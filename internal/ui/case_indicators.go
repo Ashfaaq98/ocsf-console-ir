@@ -215,12 +215,37 @@ func (cm *CaseManagement) pivotSelectedIndicator() {
 		cm.updateStatus("Pivot needs the main window")
 		return
 	}
-	cm.close()
-	cm.parentUI.pivotTo(pivotTarget{
-		TypeID: ind.TypeID,
-		Value:  ind.Value,
-		Kind:   orDash(ind.Type),
-	})
+
+	// Asked first, because it leaves.
+	//
+	// A pivot spans the whole database, which a case screen cannot show — so
+	// answering it means closing the case and opening the Events screen. Doing
+	// that silently on Enter, the key least likely to be read as "leave", threw
+	// the analyst out of the investigation they were in with no warning and no
+	// way back to where they were.
+	modal := tview.NewModal().
+		SetText(fmt.Sprintf(
+			"Pivot on %s?\n\nThis shows every event and finding that carries it, "+
+				"across the whole database — so it closes this case and opens the Events screen.",
+			ind.Value)).
+		AddButtons([]string{"Pivot", "Stay in the case"}).
+		SetDoneFunc(func(_ int, label string) {
+			cm.popModalRoot()
+			if label != "Pivot" {
+				return
+			}
+			cm.close()
+			cm.parentUI.pivotTo(pivotTarget{
+				TypeID: ind.TypeID,
+				Value:  ind.Value,
+				Kind:   orDash(ind.Type),
+			})
+		})
+
+	modal.SetBackgroundColor(cm.theme.Surface)
+	modal.SetTextColor(cm.theme.TextPrimary)
+	modal.SetBorderColor(cm.theme.FocusBorder)
+	cm.pushModalRoot(modal)
 }
 
 // mergeIndicators combines the same indicator seen in several cases.

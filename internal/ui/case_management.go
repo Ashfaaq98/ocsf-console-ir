@@ -1593,24 +1593,8 @@ func (cm *CaseManagement) buildTabs() {
 				cm.deleteSelectedManualIOCs()
 				return nil
 			case ' ':
-				// toggle selection for manual IOC rows
-				row, _ := cm.iocsTable.GetSelection()
-				if row > 0 && cm.iocRowToManualID != nil {
-					if id, ok := cm.iocRowToManualID[row]; ok && id != "" {
-						if cm.selectedManualIOCIDs == nil {
-							cm.selectedManualIOCIDs = map[string]bool{}
-						}
-						if cm.selectedManualIOCIDs[id] {
-							delete(cm.selectedManualIOCIDs, id)
-							cm.updateStatus("IOC deselected")
-						} else {
-							cm.selectedManualIOCIDs[id] = true
-							cm.updateStatus("IOC selected")
-						}
-						cm.renderIOCs()
-						return nil
-					}
-				}
+				cm.toggleManualIOC()
+				return nil
 			}
 		}
 		return event
@@ -2595,7 +2579,9 @@ func (cm *CaseManagement) setFocusPane(pane int) {
 		if cm.iocsTable != nil {
 			cm.app.SetFocus(cm.iocsTable)
 		}
-		cm.updateStatus("Focus: IOCs - +add d=delete Space=select Up/Down=browse")
+		// Arrow keys move in every table; saying so spends the line that should
+		// name the keys nobody could guess. And d only removes what you added.
+		cm.updateStatus("Focus: Indicators · + add · Space select your own · d delete selected · p pivot (leaves the case)")
 	case FocusNotes:
 		if cm.isEditingNotes {
 			if cm.notesEditor != nil {
@@ -3802,7 +3788,9 @@ func (cm *CaseManagement) showAddIOCModal() {
 // deleteSelectedManualIOCs removes selected manual IOCs (linked notes with LinkedType=ioc).
 func (cm *CaseManagement) deleteSelectedManualIOCs() {
 	if len(cm.selectedManualIOCIDs) == 0 {
-		cm.updateStatus("No manual IOCs selected")
+		// Naming the key, because the reason nothing is selected is usually
+		// that Space was pressed on a row it does not apply to.
+		cm.updateStatus("Nothing selected — Space marks an indicator you added")
 		return
 	}
 	ids := make([]string, 0, len(cm.selectedManualIOCIDs))
@@ -3811,7 +3799,7 @@ func (cm *CaseManagement) deleteSelectedManualIOCs() {
 	}
 	// Confirm deletion
 	modal := tview.NewModal().
-		SetText(fmt.Sprintf("Delete %d manual IOC(s)?", len(ids))).
+		SetText(fmt.Sprintf("Delete %s you added?\n\nIndicators extracted from the evidence are not affected.", plural(len(ids), "indicator"))).
 		AddButtons([]string{"Delete", "Cancel"}).
 		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 			if buttonLabel != "Delete" {
@@ -4397,4 +4385,40 @@ func (cm *CaseManagement) queueUpdate(fn func()) {
 		return
 	}
 	cm.app.QueueUpdateDraw(fn)
+}
+
+// toggleManualIOC marks one of the analyst's own entries for deletion.
+//
+// Only their own. The rest of this list is observables pulled out of the case's
+// evidence — deleting one would mean deleting a fact the data carries, which is
+// not something a case screen should offer. Space did nothing at all on those
+// rows while the status line advertised it for every row, so the key read as
+// broken rather than as inapplicable.
+func (cm *CaseManagement) toggleManualIOC() {
+	row, _ := cm.iocsTable.GetSelection()
+	if row <= 0 {
+		return
+	}
+
+	id := ""
+	if cm.iocRowToManualID != nil {
+		id = cm.iocRowToManualID[row]
+	}
+	if id == "" {
+		cm.updateStatus("Only indicators you added can be selected — this one came from the evidence")
+		return
+	}
+
+	if cm.selectedManualIOCIDs == nil {
+		cm.selectedManualIOCIDs = map[string]bool{}
+	}
+	if cm.selectedManualIOCIDs[id] {
+		delete(cm.selectedManualIOCIDs, id)
+	} else {
+		cm.selectedManualIOCIDs[id] = true
+	}
+
+	cm.renderIOCs()
+	cm.updateStatus(fmt.Sprintf("%s selected for deletion",
+		plural(len(cm.selectedManualIOCIDs), "indicator")))
 }
