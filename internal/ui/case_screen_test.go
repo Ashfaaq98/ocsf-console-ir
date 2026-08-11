@@ -550,3 +550,119 @@ func TestHMovesLeftAndLMovesRight(t *testing.T) {
 		t.Errorf("h moved right: pane %d", cm.focusedPane)
 	}
 }
+
+// The findings pane takes the focus highlight like every other pane.
+//
+// updateFocusStyles was a reset written out pane by pane and then a switch that
+// repeated the same list, and Findings was in neither — so its frame stayed the
+// resting grey while it had the keyboard, and its title never took a theme
+// colour at all.
+func TestEveryPaneShowsWhenItHasTheKeyboard(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	for _, pane := range casePanes {
+		frame := cm.paneFrame(pane)
+		if frame == nil {
+			t.Errorf("pane %d has no frame to highlight", pane)
+			continue
+		}
+
+		cm.setFocusPane(pane)
+		if got := frame.GetBorderColor(); got != cm.theme.FocusBorder {
+			t.Errorf("pane %d keeps border %v while focused, want %v",
+				pane, got, cm.theme.FocusBorder)
+		}
+
+		// And gives it back.
+		cm.setFocusPane(FocusEvents)
+		if pane == FocusEvents {
+			continue
+		}
+		if got := frame.GetBorderColor(); got != cm.theme.Border {
+			t.Errorf("pane %d keeps the focus border after focus moved away", pane)
+		}
+	}
+}
+
+// Re-rendering a pane does not undo the focus highlight.
+//
+// renderCaseFindings stamped the resting border colour on every paint, so the
+// findings pane lost its highlight whenever its data reloaded.
+func TestRenderingAPaneKeepsItsFocusBorder(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	cm.setFocusPane(FocusFindings)
+	cm.renderCaseFindings()
+
+	if got := cm.findingsTable.GetBorderColor(); got != cm.theme.FocusBorder {
+		t.Errorf("re-rendering repainted the border %v over the focus highlight %v",
+			got, cm.theme.FocusBorder)
+	}
+}
+
+// The panes are titled alike.
+func TestThePanesAreTitledAlike(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+	cm.renderCaseFindings()
+
+	for _, pane := range casePanes {
+		frame := cm.paneFrame(pane)
+		if frame == nil {
+			continue
+		}
+		title := strings.TrimSpace(frame.GetTitle())
+		if title == "" {
+			continue
+		}
+		if title != strings.ToUpper(title) {
+			t.Errorf("pane %d is titled %q while the rest are upper case", pane, title)
+		}
+		// The tab strip carries the counts, from the same slices.
+		if strings.ContainsAny(title, "0123456789") {
+			t.Errorf("pane %d repeats a count the tab strip already has: %q", pane, title)
+		}
+	}
+}
+
+// Every cell of the copilot drawer paints a theme colour.
+//
+// Three of its widgets were never in the theming pass — the provider line, the
+// page container holding the suggestions and the transcript, and the dropdown's
+// own box — and a widget with no background falls back to tview's global
+// default, which is black. So the drawer had dark bands across it on every
+// palette whose surface is not black.
+func TestTheCopilotDrawerPaintsTheTheme(t *testing.T) {
+	ui, _ := newTestUI(t)
+	ui.hasTrueColor = true
+	ui.setTheme("gruvbox")
+	cm := openCase(t, ui)
+	cm.toggleCaseCopilot()
+	awaitIdle(t, ui)
+
+	screen := tcell.NewSimulationScreen("UTF-8")
+	if err := screen.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer screen.Fini()
+	screen.SetSize(60, 24)
+	cm.copilotPanel.SetRect(0, 0, 60, 24)
+	cm.copilotPanel.Draw(screen)
+	screen.Show()
+
+	cells, w, h := screen.GetContents()
+	stray := map[string]int{}
+	for i := 0; i < w*h; i++ {
+		_, bg, _ := cells[i].Style.Decompose()
+		switch bg {
+		case ui.theme.Surface, ui.theme.SurfaceRaised, ui.theme.Bg, ui.theme.SelectionBg:
+		default:
+			stray[tagColor(bg)]++
+		}
+	}
+	if len(stray) > 0 {
+		t.Errorf("the copilot drawer paints colours from outside the theme: %v", stray)
+	}
+}

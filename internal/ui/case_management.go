@@ -284,7 +284,7 @@ func (cm *CaseManagement) setupLayout() {
 		SetBorders(false).
 		SetSelectable(true, false).
 		SetFixed(1, 0) // Fixed header row
-	cm.eventsTable.SetBorder(true).SetTitle(" Events ").SetTitleAlign(tview.AlignLeft)
+	cm.eventsTable.SetBorder(true).SetTitle(" EVENTS ").SetTitleAlign(tview.AlignLeft)
 	cm.setupEventsTable()
 
 	// Findings the case is about
@@ -497,7 +497,7 @@ func (cm *CaseManagement) setupCopilotPanel() {
 	// Inline token estimate (one-line)
 	cm.copilotEstimate = tview.NewTextView().
 		SetDynamicColors(true)
-	cm.copilotEstimate.SetText("[gray]Est:[-] 0 tok  ~$0.0000")
+	cm.copilotEstimate.SetText(fmt.Sprintf("[%s]Est:[-] 0 tok  ~$0.0000", cm.theme.TagMuted))
 
 	// Input field
 	cm.copilotInput = tview.NewInputField().
@@ -524,7 +524,7 @@ func (cm *CaseManagement) setupCopilotPanel() {
 		AddItem(cm.copilotEstimate, 1, 0, false).
 		AddItem(cm.copilotInput, 1, 0, false)
 
-	cm.copilotPanel.SetBorder(true).SetTitle(" Copilot ").SetTitleAlign(tview.AlignLeft)
+	cm.copilotPanel.SetBorder(true).SetTitle(" COPILOT ").SetTitleAlign(tview.AlignLeft)
 }
 
 // setupNotesPanel creates a two-mode Notes panel (View/TextView vs Edit/TextArea) within a Pages container.
@@ -2149,7 +2149,8 @@ func (cm *CaseManagement) updateTokenEstimate(text string) {
 	}
 	tokens := cm.llm.EstimateTokens(text)
 	cost := float64(tokens) * 0.002 / 1000.0
-	cm.copilotEstimate.SetText(fmt.Sprintf("[gray]Est:[-] %d tok  ~$%.4f", tokens, cost))
+	cm.copilotEstimate.SetText(fmt.Sprintf("[%s]Est:[-] %d tok  ~$%.4f",
+		cm.theme.TagMuted, tokens, cost))
 }
 
 // runCaseSummary assembles a prompt from case metadata, events, and enrichments,
@@ -2623,7 +2624,24 @@ func (cm *CaseManagement) cycleFocus() {
 // stopped working until you changed tabs. A pane added later cannot go missing
 // from one of two lists any more.
 func (cm *CaseManagement) paneWidget(pane int) tview.Primitive {
+	if w := cm.paneWidgetStrict(pane); w != nil {
+		return w
+	}
+	// The events table is always built, so the keyboard always lands somewhere.
+	if cm.eventsTable != nil {
+		return cm.eventsTable
+	}
+	return nil
+}
+
+// paneWidgetStrict is the same answer without the fallback: nil means this pane
+// has no widget, which a styling pass needs to know and a focus move does not.
+func (cm *CaseManagement) paneWidgetStrict(pane int) tview.Primitive {
 	switch pane {
+	case FocusEvents:
+		if cm.eventsTable != nil {
+			return cm.eventsTable
+		}
 	case FocusOverview:
 		if cm.overviewView != nil {
 			return cm.overviewView
@@ -2655,10 +2673,6 @@ func (cm *CaseManagement) paneWidget(pane int) tview.Primitive {
 		if cm.copilotInput != nil {
 			return cm.copilotInput
 		}
-	}
-	// The events table is always built, so the keyboard always lands somewhere.
-	if cm.eventsTable != nil {
-		return cm.eventsTable
 	}
 	return nil
 }
@@ -2756,21 +2770,53 @@ func (cm *CaseManagement) applyTheme() {
 
 	cm.copilotPanel.SetBackgroundColor(cm.theme.Surface)
 
-	// Copilot sub-controls
+	// The copilot's own widgets, all of them.
+	//
+	// The drawer is built once and coloured from this one pass, and three of
+	// its parts were never in it: the provider line, the page container that
+	// holds the suggestions and the transcript, and the dropdown's own box. A
+	// widget with no background falls back to tview's global default, which is
+	// black — which is why the panel had dark bands across it on every palette
+	// whose surface is not black.
 	if cm.copilotDropdown != nil {
+		cm.copilotDropdown.SetBackgroundColor(cm.theme.Surface)
 		cm.copilotDropdown.SetFieldBackgroundColor(cm.theme.Surface)
 		cm.copilotDropdown.SetFieldTextColor(cm.theme.TextPrimary)
-		cm.copilotDropdown.SetLabelColor(cm.theme.TextPrimary)
+		cm.copilotDropdown.SetLabelColor(cm.theme.TextMuted)
+		// The list that drops down is a widget of its own, and tview styles it
+		// its own blue unless told otherwise.
+		cm.copilotDropdown.SetListStyles(
+			tcell.StyleDefault.Background(cm.theme.SurfaceRaised).Foreground(cm.theme.TextPrimary),
+			tcell.StyleDefault.Background(cm.theme.SelectionBg).Foreground(cm.theme.SelectionFg))
+	}
+	if cm.copilotProvider != nil {
+		cm.copilotProvider.SetBackgroundColor(cm.theme.Surface)
+		cm.copilotProvider.SetTextColor(cm.theme.TextMuted)
+		// The text carries its own colour tag, written when the panel was
+		// built under whichever theme was then in force.
+		cm.copilotProvider.SetText(fmt.Sprintf("[%s]%s[-]",
+			cm.theme.TagMuted, copilotProviderLine(activeLLMProvider(), true)))
+	}
+	if cm.copilotPages != nil {
+		cm.copilotPages.SetBackgroundColor(cm.theme.Surface)
 	}
 
 	cm.copilotTranscript.SetBackgroundColor(cm.theme.Surface)
+	cm.copilotTranscript.SetSelectedStyle(tcell.StyleDefault.
+		Background(cm.theme.SelectionBg).Foreground(cm.theme.SelectionFg))
 	if cm.copilotSuggestions != nil {
 		cm.copilotSuggestions.SetBackgroundColor(cm.theme.Surface)
+		cm.copilotSuggestions.SetSelectedStyle(tcell.StyleDefault.
+			Background(cm.theme.SelectionBg).Foreground(cm.theme.SelectionFg))
 	}
 
 	if cm.copilotEstimate != nil {
 		cm.copilotEstimate.SetBackgroundColor(cm.theme.Surface)
 		cm.copilotEstimate.SetTextColor(cm.theme.TextPrimary)
+		if cm.copilotInput != nil {
+			// Repaint the line so its tag picks up the new palette.
+			cm.updateTokenEstimate(cm.copilotInput.GetText())
+		}
 	}
 
 	if cm.notesTable != nil {
@@ -2800,7 +2846,7 @@ func (cm *CaseManagement) applyTheme() {
 	for _, box := range []*tview.Box{
 		boxOf(cm.layout), boxOf(cm.caseBody), boxOf(cm.tabsPages),
 		boxOf(cm.overviewView), boxOf(cm.activityTable),
-		boxOf(cm.notesViewer), boxOf(cm.copilotInput),
+		boxOf(cm.notesViewer),
 	} {
 		if box != nil {
 			box.SetBackgroundColor(cm.theme.Bg)
@@ -2818,39 +2864,23 @@ func (cm *CaseManagement) applyTheme() {
 		cm.notesViewer.SetBackgroundColor(cm.theme.Surface)
 	}
 	if cm.copilotInput != nil {
+		// On the panel's own surface. It was set to Bg inside a Surface drawer,
+		// so the ask line drew as a darker band across the bottom of the panel.
 		cm.copilotInput.SetFieldBackgroundColor(cm.theme.Surface)
 		cm.copilotInput.SetFieldTextColor(cm.theme.TextPrimary)
 		cm.copilotInput.SetLabelColor(cm.theme.TextMuted)
-		cm.copilotInput.SetBackgroundColor(cm.theme.Bg)
+		cm.copilotInput.SetBackgroundColor(cm.theme.Surface)
 	}
 
 	cm.statusBar.SetBackgroundColor(cm.theme.Surface)
 	cm.statusBar.SetTextColor(cm.theme.TextPrimary)
 
-	// Apply borders
-	cm.eventsTable.SetBorderColor(cm.theme.Border)
-	if cm.findingsTable != nil {
-		cm.findingsTable.SetBorderColor(cm.theme.Border)
-	}
-	cm.timelineView.SetBorderColor(cm.theme.Border)
-	cm.copilotPanel.SetBorderColor(cm.theme.Border)
-	if cm.notesTable != nil {
-		cm.notesTable.SetBorderColor(cm.theme.Border)
-	}
-	if cm.notesEditor != nil {
-		cm.notesEditor.SetBorderColor(cm.theme.Border)
-	}
-	if cm.overviewView != nil {
-		cm.overviewView.SetBorderColor(cm.theme.Border)
-	}
-	if cm.iocsTable != nil {
-		cm.iocsTable.SetBorderColor(cm.theme.Border)
-	}
 	if cm.activityTable != nil {
-		cm.activityTable.SetBorderColor(cm.theme.Border)
 		cm.activityTable.SetSelectedStyle(tcell.StyleDefault.
 			Background(cm.theme.SelectionBg).Foreground(cm.theme.SelectionFg))
 	}
+	// Borders and titles are updateFocusStyles', below: one pass over the panes
+	// rather than a second list here that has to be kept in step with it.
 
 	// Re-render the findings table so its cell colours follow the theme; the
 	// widget-level calls above only restyle the frame.
@@ -2996,73 +3026,55 @@ func (cm *CaseManagement) exportSelectedEvents() {
 	}()
 }
 
-func (cm *CaseManagement) updateFocusStyles() {
-	// Reset titles and borders
-	cm.eventsTable.SetBorderColor(cm.theme.Border)
-	cm.eventsTable.SetTitleColor(cm.theme.TextPrimary)
-	cm.timelineView.SetBorderColor(cm.theme.Border)
-	cm.timelineView.SetTitleColor(cm.theme.TextPrimary)
-	cm.copilotPanel.SetBorderColor(cm.theme.Border)
-	cm.copilotPanel.SetTitleColor(cm.theme.TextPrimary)
-	if cm.notesTable != nil {
-		cm.notesTable.SetBorderColor(cm.theme.Border)
-		cm.notesTable.SetTitleColor(cm.theme.TextPrimary)
+// paneFrame is the box that carries a pane's border and title.
+//
+// Usually the widget itself, but the copilot's keyboard lives in its input
+// field while its frame belongs to the drawer around it — so styling the widget
+// would set a border on something that has none and leave the panel grey while
+// focused.
+func (cm *CaseManagement) paneFrame(pane int) *tview.Box {
+	if pane == FocusCopilot {
+		return boxOf(cm.copilotPanel)
 	}
-	if cm.notesEditor != nil {
-		cm.notesEditor.SetBorderColor(cm.theme.Border)
-	}
-	// Additional tab views
-	if cm.overviewView != nil {
-		cm.overviewView.SetBorderColor(cm.theme.Border)
-		cm.overviewView.SetTitleColor(cm.theme.TextPrimary)
-	}
-	if cm.iocsTable != nil {
-		cm.iocsTable.SetBorderColor(cm.theme.Border)
-		cm.iocsTable.SetTitleColor(cm.theme.TextPrimary)
-	}
-	if cm.activityTable != nil {
-		cm.activityTable.SetBorderColor(cm.theme.Border)
-		cm.activityTable.SetTitleColor(cm.theme.TextPrimary)
-	}
-	// TextArea does not support SetTitleColor; leave title color implicit via border focus.
+	return boxOf(cm.paneWidgetStrict(pane))
+}
 
-	// Apply focus highlight
-	switch cm.focusedPane {
-	case FocusEvents:
-		cm.eventsTable.SetBorderColor(cm.theme.FocusBorder)
-		cm.eventsTable.SetTitleColor(cm.theme.FocusBorder)
-	case FocusTimeline:
-		cm.timelineView.SetBorderColor(cm.theme.FocusBorder)
-		cm.timelineView.SetTitleColor(cm.theme.FocusBorder)
-	case FocusCopilot:
-		cm.copilotPanel.SetBorderColor(cm.theme.FocusBorder)
-		cm.copilotPanel.SetTitleColor(cm.theme.FocusBorder)
-	case FocusNotes:
-		if cm.isEditingNotes {
-			if cm.notesEditor != nil {
-				cm.notesEditor.SetBorderColor(cm.theme.FocusBorder)
-			}
-		} else {
-			if cm.notesTable != nil {
-				cm.notesTable.SetBorderColor(cm.theme.FocusBorder)
-				cm.notesTable.SetTitleColor(cm.theme.FocusBorder)
-			}
+// casePanes is every pane the tab strip can reach, in tab order.
+var casePanes = []int{
+	FocusOverview, FocusFindings, FocusEvents, FocusTimeline,
+	FocusIOCs, FocusNotes, FocusActivity, FocusCopilot,
+}
+
+// updateFocusStyles marks which pane has the keyboard.
+//
+// Over the panes, not through a list of them. This was a reset written out pane
+// by pane and then a switch that repeated the same list — and the Findings tab
+// was in neither, so its frame stayed the resting grey while every other pane
+// went blue on focus, and its title never took a theme colour at all. That is
+// the third list of panes in this file to have gone out of step with the tabs;
+// paneWidget is the only one now.
+func (cm *CaseManagement) updateFocusStyles() {
+	for _, pane := range casePanes {
+		box := cm.paneFrame(pane)
+		if box == nil {
+			continue
 		}
-	case FocusOverview:
-		if cm.overviewView != nil {
-			cm.overviewView.SetBorderColor(cm.theme.FocusBorder)
-			cm.overviewView.SetTitleColor(cm.theme.FocusBorder)
+		border, title := cm.theme.Border, cm.theme.TextPrimary
+		if pane == cm.focusedPane {
+			border, title = cm.theme.FocusBorder, cm.theme.FocusBorder
 		}
-	case FocusIOCs:
-		if cm.iocsTable != nil {
-			cm.iocsTable.SetBorderColor(cm.theme.FocusBorder)
-			cm.iocsTable.SetTitleColor(cm.theme.FocusBorder)
+		box.SetBorderColor(border)
+		box.SetTitleColor(title)
+	}
+
+	// The notes editor replaces the notes table in place and carries no title;
+	// tview's TextArea has no SetTitleColor.
+	if cm.notesEditor != nil {
+		border := cm.theme.Border
+		if cm.focusedPane == FocusNotes && cm.isEditingNotes {
+			border = cm.theme.FocusBorder
 		}
-	case FocusActivity:
-		if cm.activityTable != nil {
-			cm.activityTable.SetBorderColor(cm.theme.FocusBorder)
-			cm.activityTable.SetTitleColor(cm.theme.FocusBorder)
-		}
+		cm.notesEditor.SetBorderColor(border)
 	}
 }
 
