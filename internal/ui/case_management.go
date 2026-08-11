@@ -276,7 +276,6 @@ func (cm *CaseManagement) setupLayout() {
 	cm.metadataBar = tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignLeft)
-	cm.metadataBar.SetBorder(true).SetTitle(" Case Details ").SetTitleAlign(tview.AlignLeft)
 	cm.updateMetadataBar()
 
 	// Events table (left)
@@ -346,7 +345,7 @@ func (cm *CaseManagement) setupLayout() {
 
 	// Two-row metadata (increase height), then main content, then status bar
 	cm.layout = tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(cm.metadataBar, caseHeaderRows, 0, false).
+		AddItem(cm.metadataBar, caseHeaderHeight, 0, false).
 		AddItem(main, 0, 1, true).
 		AddItem(cm.statusBar, 1, 0, false)
 
@@ -361,6 +360,8 @@ func (cm *CaseManagement) setupLayout() {
 		if width != cm.lastWidth {
 			cm.lastWidth = width
 			cm.renderTabBar()
+			// The header lays its two halves against the same width.
+			cm.updateMetadataBar()
 		}
 		// The layout has no border, so its inner rect is its rect. Shrinking it
 		// here would inset the whole case screen by a column.
@@ -640,6 +641,11 @@ func (cm *CaseManagement) setupKeybindings() {
 				return nil
 			case 'S':
 				cm.quickCycleStatus()
+				return nil
+			case 'o':
+				// The header's next-action prompt has named this key since it
+				// was written, and nothing handled it.
+				cm.takeOwnership()
 				return nil
 			case 'L':
 				// Global hotkey: Shift+L opens LLM Settings anywhere in Case Management
@@ -925,59 +931,6 @@ func (cm *CaseManagement) refreshCaseData() {
 }
 
 // UI update methods
-
-func (cm *CaseManagement) updateMetadataBar() {
-	lbl := cm.theme.TagWarning
-	val := cm.theme.TagTextPrimary
-	acc := cm.theme.TagAccent
-
-	// Shorten case ID (first 6 chars) and owner fallback
-	shortID := cm.caseData.ID
-	if len(shortID) > 10 {
-		shortID = shortID[:10]
-	}
-	owner := strings.TrimSpace(cm.caseData.AssignedTo)
-	if owner == "" {
-		owner = "Unassigned"
-	}
-
-	verdict := cm.caseData.VerdictName()
-	if verdict == "" {
-		verdict = "—"
-	}
-
-	// Two rows of fact, and a third only when there is something to do about
-	// it. The third row used to be a list of hotkeys, two of which named keys
-	// that never worked — digits are globally reserved and never reach a case.
-	line1 := fmt.Sprintf(" [%s]CASE[-]  ·  [%s:-:b]%s[-:-:-]        %s  %s",
-		lbl, acc, tview.Escape(cm.caseData.Title),
-		formatSeverityBadge(cm.caseData.Severity, cm.theme),
-		formatCaseStatus(cm.caseData.Status, cm.theme))
-
-	line2 := fmt.Sprintf(" [%s]owner[-] [%s]%s[-] · [%s]%s old[-] · [%s]%d findings[-] · [%s]%d evidence[-] · [%s]verdict %s[-]",
-		lbl, val, tview.Escape(owner),
-		val, renderRelativeTime(cm.caseData.CreatedAt),
-		val, cm.caseData.FindingCount,
-		val, cm.caseData.EventCount,
-		val, tview.Escape(verdict))
-
-	line3 := cm.nextActionPrompt()
-
-	text := line1 + "\n" + line2
-	rows := caseHeaderRows
-	if line3 != "" {
-		text += "\n" + line3
-		rows++
-	}
-	cm.metadataBar.SetText(text)
-
-	// The header grows by a row when the prompt is present. Fixed at four, the
-	// prompt was written and then clipped by the border — present in the widget
-	// and invisible on screen.
-	if cm.layout != nil {
-		cm.layout.ResizeItem(cm.metadataBar, rows, 0)
-	}
-}
 
 func (cm *CaseManagement) updateEventsTable() {
 	// Clear existing rows (keep header)
@@ -1678,6 +1631,11 @@ func (cm *CaseManagement) barWidth() int {
 	// Last resort, and only once the widget has been drawn at least once: an
 	// undrawn TextView answers with a default that has nothing to do with this
 	// screen.
+	// The header measures itself against this too, and it is painted while the
+	// layout is still being built — before the tab bar exists.
+	if cm.tabBar == nil {
+		return 0
+	}
 	if _, _, w, _ := cm.tabBar.GetInnerRect(); w > caseTabBarMinRect {
 		return w
 	}
@@ -4208,44 +4166,6 @@ func (cm *CaseManagement) toggleCaseCopilot() {
 	cm.pendingWidthShift = 0
 	cm.focusCopilotEntry()
 	cm.updateStatus("Copilot open — [ closes it")
-}
-
-// caseHeaderRows is the header's height with its border and two rows of fact.
-// It grows by one when the next-action prompt has something to say.
-const caseHeaderRows = 4
-
-// staleCaseAfter is how long a case may go without activity before the header
-// says so.
-const staleCaseAfter = 24 * time.Hour
-
-// nextActionPrompt returns the one thing to do about a case that is drifting,
-// or empty when there is nothing to say.
-//
-// One prompt, not a list: a header that always carries advice is a header
-// nobody reads. It appears when a case has no owner, no note, or has gone
-// quiet — the three states in which a case is quietly rotting rather than
-// being worked.
-func (cm *CaseManagement) nextActionPrompt() string {
-	acc, muted := cm.theme.TagAccent, cm.theme.TagMuted
-
-	if strings.TrimSpace(cm.caseData.AssignedTo) == "" {
-		return fmt.Sprintf(" [%s]▸ NEXT:[-] [%s]no owner — press o to take it[-]", acc, muted)
-	}
-
-	var lastNote time.Time
-	for _, n := range cm.notes {
-		if n.CreatedAt.After(lastNote) {
-			lastNote = n.CreatedAt
-		}
-	}
-	if lastNote.IsZero() {
-		return fmt.Sprintf(" [%s]▸ NEXT:[-] [%s]no note yet — press n to record where this stands[-]", acc, muted)
-	}
-	if time.Since(lastNote) > staleCaseAfter {
-		return fmt.Sprintf(" [%s]▸ NEXT:[-] [%s]nothing recorded in %s — press n to say where this stands[-]",
-			acc, muted, renderRelativeTime(lastNote))
-	}
-	return ""
 }
 
 // togglePinnedEvent stars or unstars the evidence under the cursor.

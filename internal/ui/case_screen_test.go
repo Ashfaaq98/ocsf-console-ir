@@ -90,10 +90,13 @@ func TestTheCaseScreenPaintsTheTheme(t *testing.T) {
 		stray := map[string]int{}
 		for j := 0; j < w*h; j++ {
 			_, bg, _ := cells[j].Style.Decompose()
-			// Accent is a background too: the active tab chip is filled with it.
+			// Filled chips make backgrounds of the semantic colours: the active
+			// tab is accent, and the header's status chip is whichever of
+			// warning, success, accent or muted the status maps to.
 			if bg != ui.theme.Bg && bg != ui.theme.Surface && bg != ui.theme.SurfaceRaised &&
 				bg != ui.theme.SelectionBg && bg != ui.theme.TableHeaderBg &&
-				bg != ui.theme.Accent {
+				bg != ui.theme.Accent && bg != ui.theme.Warning &&
+				bg != ui.theme.Success && bg != ui.theme.TextMuted {
 				stray[fmt.Sprint(bg)]++
 			}
 		}

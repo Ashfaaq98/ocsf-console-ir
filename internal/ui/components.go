@@ -87,17 +87,9 @@ func badge(kind BadgeKind, label string, theme Theme) string {
 			color = theme.TagSeverityInfo
 		}
 	case BadgeKindStatus:
-		upper := strings.ToUpper(label)
-		switch upper {
-		case "OPEN", "NEW", "UNRESOLVED", "INVESTIGATING":
-			color = theme.TagWarning
-		case "CLOSED", "RESOLVED", "COMPLETED":
-			color = theme.TagSuccess
-		case "IN_PROGRESS", "TRIAGED":
-			color = theme.TagAccent
-		default:
-			color = theme.TagMuted
-		}
+		// Through the one mapping, so a status cannot be amber in the case
+		// header and grey in the list that led to it.
+		color = tagColor(caseStatusColour(label, theme))
 	case BadgeKindVerdict:
 		upper := strings.ToUpper(label)
 		switch upper {
