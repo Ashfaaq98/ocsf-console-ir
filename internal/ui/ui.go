@@ -2569,12 +2569,13 @@ func (ui *UI) buildHelpCard(close func()) (tview.Primitive, tview.Primitive) {
 		addSection("CONTEXT: CASE MANAGEMENT")
 		// What the case screen's own handler does, since it owns every key
 		// while it is open. `e` used to be listed as "escalate to an external
-		// system", which does not exist — it exports the selected events.
+		// system", which does not exist.
 		addKey("Tab / Shift+Tab", "Next and previous tab")
 		addKey("[, ]", "Close and open the copilot")
+		addKey("Space", "Pin the event under the cursor as evidence")
 		addKey("E", "Write the case up as a report")
-		addKey("J", "Export the case as JSON")
-		addKey("e", "Export the selected events")
+		addKey("J", "Export the whole case as JSON")
+		addKey("e", "Export the pinned evidence as JSON")
 		addKey("t", "Change the theme")
 		addKey("Esc", "Leave the case")
 	}

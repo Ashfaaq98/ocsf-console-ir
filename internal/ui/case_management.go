@@ -131,7 +131,6 @@ type CaseManagement struct {
 	caseFindings  []store.Finding
 
 	// State management
-	selectedEventIDs   map[string]bool
 	selectedEventIndex int
 	pinnedEvents       map[string]bool
 	chatHistory        []llm.ChatMessage
@@ -253,7 +252,6 @@ func NewCaseManagement(parentUI *UI, caseData store.Case) *CaseManagement {
 		theme:              parentUI.theme,
 		ctx:                parentUI.ctx,
 		caseData:           caseData,
-		selectedEventIDs:   make(map[string]bool),
 		selectedEventIndex: -1,
 		pinnedEvents:       make(map[string]bool),
 		chatHistory:        []llm.ChatMessage{},
@@ -1812,9 +1810,11 @@ func (cm *CaseManagement) updateStatus(message string) {
 		sep, message,
 	)
 
-	// Only show selection info when there is at least one selection
-	if len(cm.selectedEventIDs) > 0 {
-		statusText = fmt.Sprintf("%s%s[%s]%d[-] selected", statusText, sep, acc, len(cm.selectedEventIDs))
+	// The pinned count, which is this screen's selection: it is what the
+	// briefing lists, what the report quotes and what `e` exports. The badge
+	// used to count a selection map nothing wrote, so it never appeared.
+	if n := len(cm.pinnedEvents); n > 0 {
+		statusText = fmt.Sprintf("%s%s[%s]%d[-] pinned", statusText, sep, acc, n)
 	}
 
 	// Standard navigation hints
@@ -1911,24 +1911,6 @@ func (cm *CaseManagement) onEventSelected(row int) {
 	_ = event
 	cm.updateTimelineView()
 	cm.updateStatus(fmt.Sprintf("Selected event: %s", truncate(event.Message, 80)))
-}
-
-func (cm *CaseManagement) toggleEventSelection() {
-	// Use the table's authoritative current selection so Space toggles the highlighted row.
-	row, _ := cm.eventsTable.GetSelection()
-	if row <= 0 || row-1 >= len(cm.events) {
-		return
-	}
-	idx := row - 1
-	event := cm.events[idx]
-	if cm.selectedEventIDs[event.ID] {
-		delete(cm.selectedEventIDs, event.ID)
-		cm.updateStatus("Event deselected")
-	} else {
-		cm.selectedEventIDs[event.ID] = true
-		cm.updateStatus("Event selected")
-	}
-	cm.updateEventsTable()
 }
 
 func (cm *CaseManagement) pinCurrentEvent() {
@@ -2560,53 +2542,89 @@ func (cm *CaseManagement) cycleFocus() {
 	cm.toggleLeftRightFocus()
 }
 
-func (cm *CaseManagement) setFocusPane(pane int) {
-	cm.focusedPane = pane
+// paneWidget is the widget that owns the keyboard for a pane.
+//
+// One table, because the answer was written out twice: setFocusPane knew about
+// the Findings tab and popModalRoot's copy did not, so closing a finding left
+// the focus on a primitive that was no longer in the tree and the arrow keys
+// stopped working until you changed tabs. A pane added later cannot go missing
+// from one of two lists any more.
+func (cm *CaseManagement) paneWidget(pane int) tview.Primitive {
 	switch pane {
 	case FocusOverview:
 		if cm.overviewView != nil {
-			cm.app.SetFocus(cm.overviewView)
+			return cm.overviewView
 		}
-		cm.updateStatus("Focus: Overview")
 	case FocusFindings:
 		if cm.findingsTable != nil {
-			cm.app.SetFocus(cm.findingsTable)
+			return cm.findingsTable
 		}
-		cm.updateStatus("Focus: Findings - Enter=open, the findings this case is about")
-	case FocusEvents:
-		cm.app.SetFocus(cm.eventsTable)
-		cm.updateStatus("Focus: Events - Space=select, e=export, f/F=filter/clear")
 	case FocusTimeline:
-		cm.app.SetFocus(cm.timelineView)
-		cm.updateStatus("Focus: Timeline - p=pin")
+		if cm.timelineView != nil {
+			return cm.timelineView
+		}
 	case FocusIOCs:
 		if cm.iocsTable != nil {
-			cm.app.SetFocus(cm.iocsTable)
+			return cm.iocsTable
 		}
+	case FocusNotes:
+		if cm.isEditingNotes && cm.notesEditor != nil {
+			return cm.notesEditor
+		}
+		if cm.notesTable != nil {
+			return cm.notesTable
+		}
+	case FocusActivity:
+		if cm.activityTable != nil {
+			return cm.activityTable
+		}
+	case FocusCopilot:
+		if cm.copilotInput != nil {
+			return cm.copilotInput
+		}
+	}
+	// The events table is always built, so the keyboard always lands somewhere.
+	if cm.eventsTable != nil {
+		return cm.eventsTable
+	}
+	return nil
+}
+
+// focusCurrentPane puts the keyboard back where it was, without touching the
+// status line — used when returning from a modal, which should not narrate.
+func (cm *CaseManagement) focusCurrentPane() {
+	if w := cm.paneWidget(cm.focusedPane); w != nil {
+		cm.app.SetFocus(w)
+	}
+}
+
+func (cm *CaseManagement) setFocusPane(pane int) {
+	cm.focusedPane = pane
+	if w := cm.paneWidget(pane); w != nil {
+		cm.app.SetFocus(w)
+	}
+	switch pane {
+	case FocusOverview:
+		cm.updateStatus("Focus: Overview")
+	case FocusFindings:
+		cm.updateStatus("Focus: Findings - Enter=open, the findings this case is about")
+	case FocusEvents:
+		cm.updateStatus("Focus: Events · Space pin as evidence · e export · f/F filter/clear")
+	case FocusTimeline:
+		cm.updateStatus("Focus: Timeline - p=pin")
+	case FocusIOCs:
 		// Arrow keys move in every table; saying so spends the line that should
 		// name the keys nobody could guess. And d only removes what you added.
 		cm.updateStatus("Focus: Indicators · + add · Space select your own · d delete selected · p pivot (leaves the case)")
 	case FocusNotes:
 		if cm.isEditingNotes {
-			if cm.notesEditor != nil {
-				cm.app.SetFocus(cm.notesEditor)
-			}
-			// Edit mode status (themed)
 			cm.setStatusDirect(cm.notesEditStatusText())
 		} else {
-			if cm.notesTable != nil {
-				cm.app.SetFocus(cm.notesTable)
-			}
-			// View mode status (themed)
 			cm.setStatusDirect(cm.notesViewStatusText())
 		}
 	case FocusActivity:
-		if cm.activityTable != nil {
-			cm.app.SetFocus(cm.activityTable)
-		}
 		cm.updateStatus("Focus: Activity - r=refresh")
 	case FocusCopilot:
-		cm.app.SetFocus(cm.copilotInput)
 		cm.updateStatus("Focus: Copilot - Type message, Enter=send, [ / ] persona")
 	}
 	cm.updateFocusStyles()
@@ -2772,181 +2790,13 @@ func (cm *CaseManagement) applyTheme() {
 
 // Modal and action handlers
 
-func (cm *CaseManagement) addEventsToCase() {
-	if len(cm.selectedEventIDs) == 0 {
-		cm.updateStatus("No events selected to add to case")
-		return
-	}
-
-	cm.showAddToCaseModal()
-}
-
-func (cm *CaseManagement) showCreateCaseModal() {
-	form := tview.NewForm()
-	form.SetTitle(" Create New Case ")
-	form.SetBorder(true)
-	cm.applyModalTheme(form)
-
-	var title, description, assignedTo string
-	severity := "medium"
-
-	form.AddInputField("Title", "", 50, nil, func(text string) {
-		title = text
-	})
-	form.AddTextArea("Description", "", 50, 3, 0, func(text string) {
-		description = text
-	})
-	form.AddDropDown("Severity", []string{"low", "medium", "high", "critical"}, 1, func(option string, optionIndex int) {
-		severity = option
-	})
-	form.AddInputField("Assigned To", "", 30, nil, func(text string) {
-		assignedTo = text
-	})
-
-	form.AddButton("Create", func() {
-		if title == "" {
-			cm.updateStatus("Title is required")
-			return
-		}
-		cm.executeCreateCase(title, description, severity, assignedTo)
-		cm.popModalRoot()
-	})
-	form.AddButton("Cancel", func() {
-		cm.popModalRoot()
-	})
-
-	cm.pushModalRoot(form)
-}
-
-func (cm *CaseManagement) showAddToCaseModal() {
-	// Get list of cases for selection
-	go func() {
-		cases, err := cm.store.ListCases(cm.ctx)
-		if err != nil {
-			cm.app.QueueUpdate(func() {
-				cm.updateStatus(fmt.Sprintf("Error loading cases: %v", err))
-			})
-			return
-		}
-
-		cm.app.QueueUpdate(func() {
-			cm.displayAddToCaseModal(cases)
-		})
-	}()
-}
-
-func (cm *CaseManagement) displayAddToCaseModal(cases []store.Case) {
-	if len(cases) == 0 {
-		cm.updateStatus("No other cases available")
-		return
-	}
-
-	form := tview.NewForm()
-	form.SetTitle(" Add Events to Case ")
-	form.SetBorder(true)
-	cm.applyModalTheme(form)
-
-	caseOptions := make([]string, len(cases))
-	for i, c := range cases {
-		caseOptions[i] = fmt.Sprintf("%s (ID: %s)", c.Title, c.ID)
-	}
-
-	selectedCaseIndex := 0
-	form.AddDropDown("Target Case", caseOptions, 0, func(option string, optionIndex int) {
-		selectedCaseIndex = optionIndex
-	})
-
-	form.AddButton("Add Events", func() {
-		if selectedCaseIndex >= len(cases) {
-			return
-		}
-		targetCase := cases[selectedCaseIndex]
-		cm.executeAddToCase(targetCase.ID)
-		cm.popModalRoot()
-	})
-	form.AddButton("Cancel", func() {
-		cm.popModalRoot()
-	})
-
-	cm.pushModalRoot(form)
-}
-
-func (cm *CaseManagement) executeCreateCase(title, description, severity, assignedTo string) {
-	cm.updateStatus("Creating case...")
-
-	go func() {
-		// Create the case
-		newCase := store.Case{
-			Title:       title,
-			Description: description,
-			Severity:    severity,
-			Status:      "open",
-			AssignedTo:  assignedTo,
-		}
-
-		caseID, err := cm.store.CreateOrUpdateCase(cm.ctx, newCase)
-		if err != nil {
-			cm.app.QueueUpdate(func() {
-				cm.updateStatus(fmt.Sprintf("Error creating case: %v", err))
-			})
-			return
-		}
-
-		// Assign selected events to the new case
-		successCount := 0
-		for eventID := range cm.selectedEventIDs {
-			if err := cm.store.AssignEventToCase(cm.ctx, eventID, caseID); err == nil {
-				successCount++
-			}
-		}
-
-		// Update case event count
-		_ = cm.store.UpdateCaseEventCount(cm.ctx, caseID)
-
-		// Log the action
-		_ = cm.store.LogCaseAction(cm.ctx, caseID, "case_created_from_events", cm.getCurrentAnalyst(),
-			map[string]interface{}{
-				"source_case_id": cm.caseData.ID,
-				"events_moved":   successCount,
-			})
-
-		cm.app.QueueUpdate(func() {
-			cm.selectedEventIDs = make(map[string]bool) // Clear selection
-			cm.refreshCaseData()                        // Reload current case data
-			cm.updateStatus(fmt.Sprintf("Created case with %d events", successCount))
-		})
-	}()
-}
-
-func (cm *CaseManagement) executeAddToCase(targetCaseID string) {
-	cm.updateStatus("Adding events to case...")
-
-	go func() {
-		successCount := 0
-		for eventID := range cm.selectedEventIDs {
-			if err := cm.store.AssignEventToCase(cm.ctx, eventID, targetCaseID); err == nil {
-				successCount++
-			}
-		}
-
-		// Update case event counts
-		_ = cm.store.UpdateCaseEventCount(cm.ctx, targetCaseID)
-		_ = cm.store.UpdateCaseEventCount(cm.ctx, cm.caseData.ID)
-
-		// Log the action
-		_ = cm.store.LogEventAction(cm.ctx, targetCaseID, "", "events_added", cm.getCurrentAnalyst(),
-			map[string]interface{}{
-				"source_case_id": cm.caseData.ID,
-				"events_moved":   successCount,
-			})
-
-		cm.app.QueueUpdate(func() {
-			cm.selectedEventIDs = make(map[string]bool) // Clear selection
-			cm.refreshCaseData()                        // Reload current case data
-			cm.updateStatus(fmt.Sprintf("Added %d events to case", successCount))
-		})
-	}()
-}
+// The events tab once had a second selection model — a selectedEventIDs map fed
+// by Space, with "add these to another case", "create a case from these" and an
+// export hanging off it. Space became pin, nothing wrote the map again, and
+// every one of those actions could only report "No events selected". They are
+// gone rather than rewired: a case screen is for working one case, moving events
+// between cases belongs on the Events screen, and pinning is the selection that
+// the briefing, the timeline and the report already read.
 
 func (cm *CaseManagement) exportCase() {
 	cm.updateStatus("Exporting case...")
@@ -2997,59 +2847,74 @@ func (cm *CaseManagement) exportCase() {
 	}()
 }
 
+// exportSelectedEvents is `e` on the Events tab: the pinned evidence as JSON.
+//
+// Three exports, three audiences. `E` writes the report — the narrative a human
+// reads. `J` writes the whole case — every event it holds, for an archive or a
+// handover. `e` writes only what is pinned: the handful of events that prove the
+// case, for a ticket, a script or a colleague who does not run Console-IR.
+//
+// It read selectedEventIDs, a second selection map that nothing on this screen
+// has written since Space became pin, so it could only ever answer "No events
+// selected for export". Pinned evidence is the subset an analyst has actually
+// marked, and it is the one the briefing, the timeline and the report already
+// use.
 func (cm *CaseManagement) exportSelectedEvents() {
-	if len(cm.selectedEventIDs) == 0 {
-		cm.updateStatus("No events selected for export")
+	pinned := make([]store.Event, 0, len(cm.pinnedEvents))
+	for _, ev := range cm.events {
+		if cm.pinnedEvents[ev.ID] {
+			pinned = append(pinned, ev)
+		}
+	}
+	if len(pinned) == 0 {
+		cm.updateStatus("Nothing pinned — Space pins the evidence to export, or J exports the whole case")
 		return
 	}
-	cm.updateStatus("Exporting selected events...")
-	go func() {
-		// Gather selected events in the current view order
-		selected := make([]store.Event, 0, len(cm.selectedEventIDs))
-		for _, ev := range cm.events {
-			if cm.selectedEventIDs[ev.ID] {
-				selected = append(selected, ev)
-			}
-		}
 
+	caseID, title := cm.caseData.ID, cm.caseData.Title
+	cm.updateStatus(fmt.Sprintf("Exporting %s…", plural(len(pinned), "pinned event")))
+
+	go func() {
 		payload := struct {
 			CaseID      string        `json:"case_id"`
+			CaseTitle   string        `json:"case_title"`
 			Events      []store.Event `json:"events"`
 			GeneratedAt time.Time     `json:"generated_at"`
 			Count       int           `json:"count"`
 		}{
-			CaseID:      cm.caseData.ID,
-			Events:      selected,
+			CaseID:      caseID,
+			CaseTitle:   title,
+			Events:      pinned,
 			GeneratedAt: time.Now(),
-			Count:       len(selected),
+			Count:       len(pinned),
 		}
 
 		data, err := json.MarshalIndent(payload, "", "  ")
 		if err != nil {
-			cm.app.QueueUpdate(func() {
-				cm.updateStatus(fmt.Sprintf("Export error: %v", err))
-			})
+			cm.queueUpdate(func() { cm.updateStatus(fmt.Sprintf("Export error: %v", err)) })
 			return
 		}
 
-		dir := "exports"
-		_ = os.MkdirAll(dir, 0o755)
-		filename := fmt.Sprintf("case_%s_events_%s.json", cm.caseData.ID, time.Now().Format("20060102_150405"))
-		path := filepath.Join(dir, filename)
+		// Beside the report and the case bundle: the directory the analyst
+		// launched from. "exports/" was resolved against the working directory,
+		// so nobody could predict where the file went.
+		dir, err := os.Getwd()
+		if err != nil {
+			dir = paths.Current().Data
+		}
+		path := filepath.Join(dir, fmt.Sprintf("console-ir-%s-evidence-%s.json",
+			slugify(title), time.Now().Format("2006-01-02-1504")))
 
 		if err := os.WriteFile(path, data, 0o644); err != nil {
-			cm.app.QueueUpdate(func() {
-				cm.updateStatus(fmt.Sprintf("Export error: %v", err))
-			})
+			cm.queueUpdate(func() { cm.updateStatus(fmt.Sprintf("Export error: %v", err)) })
 			return
 		}
 
-		// Log audit entry (non-blocking)
-		go cm.store.LogCaseAction(cm.ctx, cm.caseData.ID, "events_export", cm.getCurrentAnalyst(),
-			map[string]interface{}{"file": path, "events": len(selected)})
+		go cm.store.LogCaseAction(cm.ctx, caseID, "events_export", cm.getCurrentAnalyst(),
+			map[string]interface{}{"file": path, "events": len(pinned)})
 
-		cm.app.QueueUpdate(func() {
-			cm.updateStatus(fmt.Sprintf("Exported %d events to %s", len(selected), path))
+		cm.queueUpdate(func() {
+			cm.updateStatus(fmt.Sprintf("%s exported to %s", plural(len(pinned), "pinned event"), path))
 		})
 	}()
 }
@@ -3229,7 +3094,7 @@ func (cm *CaseManagement) Show() {
 		cm.app.SetInputCapture(cm.globalInputCapture)
 	}
 	cm.app.SetFocus(cm.eventsTable)
-	cm.updateStatus("Focus: Events - Space=select, e=export, f/F=filter/clear")
+	cm.updateStatus("Focus: Events · Space pin as evidence · e export · f/F filter/clear")
 }
 
 // close returns back to the parent UI main layout.
@@ -3903,33 +3768,8 @@ func (cm *CaseManagement) popModalRoot() {
 			// Re-render header and focus visuals
 			cm.renderTabBar()
 			cm.updateFocusStyles()
-			// Restore focus to the last focused pane
-			switch cm.focusedPane {
-			case FocusEvents:
-				cm.app.SetFocus(cm.eventsTable)
-			case FocusTimeline:
-				cm.app.SetFocus(cm.timelineView)
-			case FocusIOCs:
-				if cm.iocsTable != nil {
-					cm.app.SetFocus(cm.iocsTable)
-				}
-			case FocusNotes:
-				if cm.isEditingNotes && cm.notesEditor != nil {
-					cm.app.SetFocus(cm.notesEditor)
-				} else if cm.notesTable != nil {
-					cm.app.SetFocus(cm.notesTable)
-				}
-			case FocusCopilot:
-				cm.app.SetFocus(cm.copilotInput)
-			case FocusOverview:
-				if cm.overviewView != nil {
-					cm.app.SetFocus(cm.overviewView)
-				}
-			case FocusActivity:
-				if cm.activityTable != nil {
-					cm.app.SetFocus(cm.activityTable)
-				}
-			}
+			// Restore focus to the last focused pane.
+			cm.focusCurrentPane()
 		} else {
 			// Still inside nested modal stack (e.g., back to LLM Settings form)
 			cm.modalActive = true

@@ -431,3 +431,79 @@ func TestTimelineLabelsAreNotCutShort(t *testing.T) {
 		t.Errorf("the label lost its tail: %+v", entries)
 	}
 }
+
+// Closing a finding leaves the keyboard on the findings table.
+//
+// popModalRoot restored focus from its own copy of the pane→widget switch, and
+// that copy had no Findings case: closing a finding left the focus on a
+// primitive no longer in the tree, so the arrow keys did nothing until you
+// changed tabs.
+func TestClosingAFindingLeavesTheKeyboardOnTheFindingsTable(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	cm.caseFindings = []store.Finding{
+		{ID: "f1", Title: "Impossible travel", Severity: "high", Status: "new"},
+	}
+	cm.renderCaseFindings()
+	cm.setFocusPane(FocusFindings)
+
+	cm.showCaseFindingModal(cm.caseFindings[0])
+	cm.popModalRoot()
+
+	if got := ui.app.GetFocus(); got != cm.findingsTable {
+		t.Errorf("after closing the finding the keyboard is on %T, not the findings table", got)
+	}
+}
+
+// Every pane the tab strip can reach has a widget to focus, so no future tab
+// can be missing from the restore path.
+func TestEveryCasePaneHasAWidget(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	for _, pane := range []int{FocusOverview, FocusFindings, FocusEvents, FocusTimeline,
+		FocusIOCs, FocusNotes, FocusActivity, FocusCopilot} {
+		if cm.paneWidget(pane) == nil {
+			t.Errorf("pane %d has no widget to focus", pane)
+		}
+	}
+}
+
+// e exports what is pinned, and says so when nothing is.
+//
+// It read a second selection map that nothing has written since Space became
+// pin, so it could only ever answer "No events selected for export".
+func TestExportSaysWhatToPinWhenNothingIs(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	cm.events = []store.Event{{ID: "e1", Message: "an event"}}
+	cm.pinnedEvents = map[string]bool{}
+
+	cm.exportSelectedEvents()
+
+	got := stripTags(cm.statusBar.GetText(true))
+	if strings.Contains(got, "selected") {
+		t.Errorf("export still talks about a selection: %s", got)
+	}
+	if !strings.Contains(got, "pin") {
+		t.Errorf("export did not say what to pin: %s", got)
+	}
+}
+
+// The Events tab's status line names the key Space actually is.
+func TestTheEventsStatusLineSaysSpacePins(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	cm.setFocusPane(FocusEvents)
+
+	got := stripTags(cm.statusBar.GetText(true))
+	if strings.Contains(got, "Space=select") || strings.Contains(got, "Space select") {
+		t.Errorf("Space is bound to pin but the status line calls it select: %s", got)
+	}
+	if !strings.Contains(strings.ToLower(got), "space pin") {
+		t.Errorf("the status line does not say Space pins: %s", got)
+	}
+}
