@@ -116,10 +116,7 @@ func buildTimeline(events []store.Event, findings []store.Finding, notes []store
 	//
 	// Briefing notes are the summary, not the narrative, and IOC notes are
 	// indicators; both belong to their own tabs.
-	for _, n := range notes {
-		if store.IsBriefingNote(n) || strings.EqualFold(n.LinkedType, "ioc") {
-			continue
-		}
+	for _, n := range caseLogNotes(notes) {
 		entries = append(entries, timelineEntry{
 			At: n.CreatedAt, Kind: timelineNote,
 			Label: oneLine(n.Content), Detail: noteAuthor(n), Count: 1,

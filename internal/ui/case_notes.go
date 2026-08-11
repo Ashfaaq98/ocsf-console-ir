@@ -37,15 +37,7 @@ var noteTemplates = []struct {
 func renderNotes(table *tview.Table, notes []store.Note, t Theme) {
 	table.Clear()
 
-	// Briefing content lives in notes too. It belongs to the Briefing tab, and
-	// showing it here would fill the decision log with fragments of a summary.
-	log := make([]store.Note, 0, len(notes))
-	for _, n := range notes {
-		if store.IsBriefingNote(n) || strings.EqualFold(n.LinkedType, "ioc") {
-			continue
-		}
-		log = append(log, n)
-	}
+	log := caseLogNotes(notes)
 
 	if len(log) == 0 {
 		table.SetCell(0, 0, tview.NewTableCell("No notes yet.").
@@ -96,6 +88,27 @@ func firstLine(s string) string {
 		s = s[:i] + " …"
 	}
 	return truncate(s, 96)
+}
+
+// caseLogNotes is the notes that belong to the decision log.
+//
+// Not every note is one. A case's briefing is stored as notes — the statement,
+// each hypothesis, each next action, the accepted summary — and so are the
+// indicators an analyst adds by hand. Both belong to their own tabs, and
+// showing them here would fill the log with fragments of a summary.
+//
+// One filter, because there were three: the notes table had it, the timeline
+// had its own copy, and the tab strip's count had none at all — so the strip
+// said "Notes 15" over a list of four.
+func caseLogNotes(notes []store.Note) []store.Note {
+	log := make([]store.Note, 0, len(notes))
+	for _, n := range notes {
+		if store.IsBriefingNote(n) || strings.EqualFold(n.LinkedType, "ioc") {
+			continue
+		}
+		log = append(log, n)
+	}
+	return log
 }
 
 // updateNotesText paints the Notes tab.

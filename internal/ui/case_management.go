@@ -825,6 +825,12 @@ func (cm *CaseManagement) loadCaseData() {
 	// Through the parent's tracked spawn where there is one, so a caller that
 	// is about to close the database — which in practice means a test — can
 	// wait for the read to finish. A bare goroutine is unobservable.
+	// The id is read here, on the UI goroutine, and the load works from the
+	// copy. Reading cm.caseData from inside the goroutine raced every render —
+	// and raced the constructor, which starts this load and then reads the same
+	// field to start the findings load.
+	caseID := cm.caseData.ID
+
 	work := func() {
 		if cm.ctx.Err() != nil {
 			return
@@ -833,45 +839,45 @@ func (cm *CaseManagement) loadCaseData() {
 		_ = cm.store.SetupAuditTables()
 
 		// Load events for this case
-		cm.reloadCaseRow()
-		events, err := cm.store.GetEventsByCase(cm.ctx, cm.caseData.ID)
+		cm.reloadCaseRow(caseID)
+		events, err := cm.store.GetEventsByCase(cm.ctx, caseID)
 		if err != nil {
 			if strings.Contains(err.Error(), "database is closed") || cm.ctx.Err() != nil {
 				return
 			}
 			if cm.logger != nil {
-				cm.logger.Printf("Error loading events for case %s: %v", cm.caseData.ID, err)
+				cm.logger.Printf("Error loading events for case %s: %v", caseID, err)
 			}
 		}
 
 		// Load notes
-		notes, err := cm.store.GetNotes(cm.ctx, cm.caseData.ID)
+		notes, err := cm.store.GetNotes(cm.ctx, caseID)
 		if err != nil {
 			if strings.Contains(err.Error(), "database is closed") || cm.ctx.Err() != nil {
 				return
 			}
 			if cm.logger != nil {
-				cm.logger.Printf("Error loading notes for case %s: %v", cm.caseData.ID, err)
+				cm.logger.Printf("Error loading notes for case %s: %v", caseID, err)
 			}
 		}
 
 		// Load activity log (audit entries)
-		audits, err := cm.store.GetAuditEntries(cm.ctx, cm.caseData.ID, 0)
+		audits, err := cm.store.GetAuditEntries(cm.ctx, caseID, 0)
 		if err != nil {
 			if strings.Contains(err.Error(), "database is closed") || cm.ctx.Err() != nil {
 				return
 			}
 			if cm.logger != nil {
-				cm.logger.Printf("Error loading audit entries for case %s: %v", cm.caseData.ID, err)
+				cm.logger.Printf("Error loading audit entries for case %s: %v", caseID, err)
 			}
 		}
 
 		// Which of those events the analyst starred. Loaded here so the
 		// briefing and the evidence tab agree without either querying again.
-		pinned, err := cm.store.GetPinnedMemberIDs(cm.ctx, cm.caseData.ID, store.MemberTypeEvent)
+		pinned, err := cm.store.GetPinnedMemberIDs(cm.ctx, caseID, store.MemberTypeEvent)
 		if err != nil {
 			if cm.logger != nil {
-				cm.logger.Warn("could not read pinned evidence for case %s: %v", cm.caseData.ID, err)
+				cm.logger.Warn("could not read pinned evidence for case %s: %v", caseID, err)
 			}
 			pinned = map[string]bool{}
 		}
@@ -915,15 +921,23 @@ func (cm *CaseManagement) loadCaseData() {
 	go work()
 }
 
-// reloadCaseRow re-reads the case so denormalized counts and analyst fields
-// stay accurate after membership changes.
-func (cm *CaseManagement) reloadCaseRow() {
-	if cm.store == nil || cm.caseData.ID == "" {
+// reloadCaseRow re-reads the case so its analyst and status fields stay
+// accurate after a change, and applies the result on the UI goroutine.
+//
+// The query runs where it is called — a load goroutine — but the write does
+// not: cm.caseData is read by every render on this screen, and assigning it
+// from the loader raced the constructor, which starts this load and then reads
+// the same field to start the next one.
+func (cm *CaseManagement) reloadCaseRow(id string) {
+	if cm.store == nil || id == "" {
 		return
 	}
-	if c, err := cm.store.GetCase(cm.ctx, cm.caseData.ID); err == nil && c != nil {
-		cm.caseData = *c
+	c, err := cm.store.GetCase(cm.ctx, id)
+	if err != nil || c == nil {
+		return
 	}
+	fresh := *c
+	cm.queueUpdate(func() { cm.caseData = fresh })
 }
 
 func (cm *CaseManagement) refreshCaseData() {
@@ -1247,7 +1261,8 @@ func (cm *CaseManagement) renderBriefing() {
 	if cm.overviewView == nil {
 		return
 	}
-	d := briefingData{Case: cm.caseData, Events: cm.events, Pinned: cm.pinnedEvents}
+	d := briefingData{Case: cm.caseData, Findings: cm.caseFindings,
+		Events: cm.events, Pinned: cm.pinnedEvents}
 	if d.Pinned == nil {
 		d.Pinned = map[string]bool{}
 	}
@@ -1675,7 +1690,9 @@ func (cm *CaseManagement) caseTabCount(idx int) int {
 	case tabIOCs:
 		return len(cm.caseIndicators)
 	case tabNotes:
-		return len(cm.notes)
+		// What the tab shows, not what the case holds: the briefing and the
+		// hand-added indicators are notes too, and they belong to their tabs.
+		return len(caseLogNotes(cm.notes))
 	case tabActivity:
 		return len(cm.auditLog)
 	}

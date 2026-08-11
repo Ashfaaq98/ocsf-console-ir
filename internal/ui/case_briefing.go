@@ -35,10 +35,15 @@ const briefingTwoColumnWidth = 104
 
 // briefingData is everything the briefing draws from.
 type briefingData struct {
-	Case   store.Case
-	Brief  store.Briefing
-	Events []store.Event
-	Pinned map[string]bool
+	Case  store.Case
+	Brief store.Briefing
+	// Findings and Events are the case's members as they are now. The counts
+	// line used to read Case.FindingCount — the denormalised column — while
+	// every other count on the screen came from the loaded records, so the two
+	// could disagree a row apart.
+	Findings []store.Finding
+	Events   []store.Event
+	Pinned   map[string]bool
 }
 
 // loadBriefing gathers a case's briefing. Errors are returned rather than
@@ -54,6 +59,9 @@ func (ui *UI) loadBriefing(c store.Case) (briefingData, error) {
 
 	if events, err := ui.store.GetCaseEventMembers(ui.ctx, c.ID); err == nil {
 		d.Events = events
+	}
+	if findings, err := ui.store.GetCaseFindings(ui.ctx, c.ID); err == nil {
+		d.Findings = findings
 	}
 	if pinned, err := ui.store.GetPinnedMemberIDs(ui.ctx, c.ID, store.MemberTypeEvent); err == nil {
 		d.Pinned = pinned
@@ -164,7 +172,7 @@ func scopeLines(d briefingData, t Theme) []string {
 		row("users", entities(users, entityUser)),
 		row("window", plain(windowLabel(first, last))),
 		row("counts", plain(fmt.Sprintf("%d findings · %d evidence",
-			d.Case.FindingCount, len(d.Events)))),
+			len(d.Findings), len(d.Events)))),
 	}
 }
 
