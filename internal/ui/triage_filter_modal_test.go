@@ -16,6 +16,10 @@ func openFilterPanel(t *testing.T, ui *UI) *triageFilterModal {
 	awaitIdle(t, ui)
 	renderPrimitive(t, ui.eventList, 150, 20)
 	ui.updateFindingsList(len(ui.findings))
+	// Selecting a row schedules an inspector repaint on its own goroutine; in
+	// a test that repaint runs inline there and can land in the middle of the
+	// render below, which production would have serialised.
+	settleInspector(ui)
 
 	ui.showTriageFilter()
 	if ui.filterModal == nil {

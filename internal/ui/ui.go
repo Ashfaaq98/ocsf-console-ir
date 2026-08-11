@@ -633,9 +633,12 @@ type UI struct {
 	// running is set for as long as app.Run() is in its event loop. Atomic
 	// because background loaders read it from their own goroutines to decide
 	// whether queueUpdate can be used. See queueUpdate.
-	running    atomic.Bool
-	helpActive bool
-	lastFocus  tview.Primitive
+	running atomic.Bool
+	// inlineUpdate serialises queueUpdate's no-loop fallback, standing in for
+	// the ordering the event loop gives once it is running.
+	inlineUpdate sync.Mutex
+	helpActive   bool
+	lastFocus    tview.Primitive
 
 	// Active Case Management screen (for live theme propagation)
 	activeCM *CaseManagement
@@ -2573,6 +2576,7 @@ func (ui *UI) buildHelpCard(close func()) (tview.Primitive, tview.Primitive) {
 		addKey("Tab / Shift+Tab", "Next and previous tab")
 		addKey("[, ]", "Close and open the copilot")
 		addKey("Space", "Pin the event under the cursor as evidence")
+		addKey("h / l", "Move left to the tab, right to the copilot")
 		addKey("E", "Write the case up as a report")
 		addKey("J", "Export the whole case as JSON")
 		addKey("e", "Export the pinned evidence as JSON")
@@ -5046,6 +5050,17 @@ func (ui *UI) waitForLoads() {
 
 func (ui *UI) queueUpdate(fn func()) {
 	if !ui.running.Load() {
+		// Serialised, because that is the property being stood in for. The
+		// event loop runs one update at a time; running fn straight on the
+		// caller's goroutine let two loads that finished together paint the
+		// same widgets at once — a race that exists only without a loop, but a
+		// real one, and -race cannot tell the two situations apart.
+		//
+		// Nesting a queueUpdate inside a queued fn would deadlock here. It
+		// deadlocks under a running loop too, for the same reason, so this
+		// makes an existing rule visible rather than adding one.
+		ui.inlineUpdate.Lock()
+		defer ui.inlineUpdate.Unlock()
 		fn()
 		return
 	}

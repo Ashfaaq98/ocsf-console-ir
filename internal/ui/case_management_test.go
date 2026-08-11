@@ -42,6 +42,9 @@ func TestExtractIOCsAggregates(t *testing.T) {
 	ui := NewUI(ctx, st, &mockLLM{}, logger, "test")
 	c := store.Case{ID: "case-2", Title: "IOC Case", Severity: "medium", Status: "open"}
 	cm := NewCaseManagement(ui, c)
+	// The constructor starts the case's reads; they paint the same widgets this
+	// test is about to write to.
+	awaitIdle(t, ui)
 
 	// Two events referencing the same IP and various domains/URLs/hashes
 	hashMD5 := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -147,6 +150,9 @@ func TestBuildCaseSummaryPromptBasic(t *testing.T) {
 
 	c := store.Case{ID: "case-3", Title: "Prompt Case", Severity: "high", Status: "open", AssignedTo: "analyst"}
 	cm := NewCaseManagement(ui, c)
+	// The constructor starts the case's reads; they paint the same widgets this
+	// test is about to write to.
+	awaitIdle(t, ui)
 
 	ev := store.Event{
 		ID:        "p1",
@@ -187,6 +193,9 @@ func TestFormatActionDescriptionCaseSummary(t *testing.T) {
 	ui := NewUI(ctx, st, &mockLLMChat{}, logger, "test")
 	c := store.Case{ID: "case-4", Title: "Fmt Case", Severity: "low", Status: "open"}
 	cm := NewCaseManagement(ui, c)
+	// The constructor starts the case's reads; they paint the same widgets this
+	// test is about to write to.
+	awaitIdle(t, ui)
 
 	got := cm.formatActionDescription("case_summary", nil)
 	if !strings.Contains(got, "Case summary") {

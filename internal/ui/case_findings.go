@@ -48,16 +48,27 @@ func (cm *CaseManagement) loadCaseFindings() {
 	if cm.store == nil || cm.caseData.ID == "" {
 		return
 	}
-	go func() {
+	work := func() {
 		findings, err := cm.store.GetCaseFindings(cm.ctx, cm.caseData.ID)
 		if err != nil {
 			cm.logger.Error("failed to load findings for case %s: %v", cm.caseData.ID, err)
 		}
-		cm.app.QueueUpdateDraw(func() {
+		cm.queueUpdate(func() {
 			cm.caseFindings = findings
 			cm.renderCaseFindings()
+			// The tab strip counts them.
+			cm.renderTabBar()
 		})
-	}()
+	}
+
+	// Through spawnLoad so the load is tracked: a bare goroutine cannot be
+	// waited on, and "the query has not started" is indistinguishable from
+	// "the query has finished" from outside.
+	if cm.parentUI != nil {
+		cm.parentUI.spawnLoad(work)
+		return
+	}
+	go work()
 }
 
 // renderCaseFindings paints cm.caseFindings into the table.

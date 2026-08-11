@@ -90,8 +90,10 @@ func TestTheCaseScreenPaintsTheTheme(t *testing.T) {
 		stray := map[string]int{}
 		for j := 0; j < w*h; j++ {
 			_, bg, _ := cells[j].Style.Decompose()
+			// Accent is a background too: the active tab chip is filled with it.
 			if bg != ui.theme.Bg && bg != ui.theme.Surface && bg != ui.theme.SurfaceRaised &&
-				bg != ui.theme.SelectionBg && bg != ui.theme.TableHeaderBg {
+				bg != ui.theme.SelectionBg && bg != ui.theme.TableHeaderBg &&
+				bg != ui.theme.Accent {
 				stray[fmt.Sprint(bg)]++
 			}
 		}
@@ -505,5 +507,43 @@ func TestTheEventsStatusLineSaysSpacePins(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(got), "space pin") {
 		t.Errorf("the status line does not say Space pins: %s", got)
+	}
+}
+
+// h moves left and l moves right, rather than both toggling.
+//
+// Both keys called one toggle, so h — which means "left" to anyone who has used
+// vi — jumped right into the copilot and reported "Focus: Copilot". And with the
+// copilot closed there is nothing to the right at all, so l focused a widget
+// that was not on screen.
+func TestHMovesLeftAndLMovesRight(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+	cm.switchTab(tabEvents)
+
+	// The copilot is a drawer and starts closed.
+	cm.focusCopilot()
+	if cm.focusedPane == FocusCopilot {
+		t.Error("l focused the copilot while it was closed")
+	}
+	if got := stripTags(cm.statusBar.GetText(true)); !strings.Contains(got, "closed") {
+		t.Errorf("l did not say the copilot is closed: %s", got)
+	}
+
+	cm.toggleCaseCopilot()
+	cm.focusCopilot()
+	if cm.focusedPane != FocusCopilot {
+		t.Errorf("l did not reach the open copilot: pane %d", cm.focusedPane)
+	}
+
+	cm.focusTabContent()
+	if cm.focusedPane != FocusEvents {
+		t.Errorf("h did not come back to the Events tab: pane %d", cm.focusedPane)
+	}
+
+	// And h from the tab content stays put rather than jumping right.
+	cm.focusTabContent()
+	if cm.focusedPane != FocusEvents {
+		t.Errorf("h moved right: pane %d", cm.focusedPane)
 	}
 }

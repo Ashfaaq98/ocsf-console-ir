@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -410,11 +411,12 @@ func TestTimelineFoldsRepetitiveAudit(t *testing.T) {
 }
 
 // The tab strip must degrade rather than truncate: at 80 columns the full
-// framed form drops the last tabs off the end, so the analyst cannot see that
+// form drops the last tabs off the end, so the analyst cannot see that
 // Activity exists at all.
 func TestTabStripKnowsWhenItDoesNotFit(t *testing.T) {
-	names := []string{"Briefing", "Findings", "Events", "Timeline", "Indicators", "Notes", "Activity"}
-	full := caseTabStripWidth(names, 0)
+	names := []string{"Briefing", "Findings 3", "Events 128", "Timeline 40",
+		"Indicators 12", "Notes 2", "Activity 9"}
+	full := caseTabStripWidth(names)
 	if full <= 80 {
 		t.Fatalf("the full strip measures %d columns; the narrow form would never engage", full)
 	}
@@ -530,5 +532,73 @@ func TestANoteLooksLikeANote(t *testing.T) {
 		if g, _ := timelineMark(other, themeDark()); g == glyph {
 			t.Errorf("a note is drawn the same as kind %v", other)
 		}
+	}
+}
+
+// The tab strip carries each tab's count.
+//
+// The strip named seven tabs and said nothing about any of them, so the only
+// way to learn a case had no notes was to press Tab until you reached them.
+func TestTheTabStripCountsWhatEachTabHolds(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	cm.caseFindings = []store.Finding{{ID: "f1"}, {ID: "f2"}, {ID: "f3"}}
+	cm.events = make([]store.Event, 128)
+	cm.notes = []store.Note{{}, {}}
+	cm.renderTabBar()
+
+	got := cm.tabBar.GetText(true)
+	for _, want := range []string{"Findings 3", "Events 128", "Notes 2"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the strip does not carry %q:\n%s", want, got)
+		}
+	}
+	// Briefing is one document; a number beside it would say nothing.
+	if strings.Contains(got, "Briefing 0") {
+		t.Errorf("Briefing was given a count:\n%s", got)
+	}
+}
+
+// The accent bar sits under the active chip, not under whatever happens to be
+// first — it is the only thing on the strip that says where you are.
+func TestTheAccentBarSitsUnderTheActiveTab(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+	cm.activeTab = tabTimeline
+	cm.renderTabBar()
+
+	lines := strings.Split(cm.tabBar.GetText(true), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("the strip is not two rows: %q", lines)
+	}
+	bar := lines[1]
+	start := strings.IndexRune(bar, '━')
+	if start < 0 {
+		t.Fatalf("no accent bar was drawn: %q", bar)
+	}
+	width := len([]rune(strings.TrimRight(bar[start:], " ")))
+
+	label := cm.caseTabLabel(tabTimeline)
+	if want := len([]rune(label)) + 2; width != want {
+		t.Errorf("the bar is %d columns wide, the chip is %d", width, want)
+	}
+	if got := strings.Index(lines[0], label); got != start+1 {
+		t.Errorf("the bar starts at column %d, the label at %d", start, got)
+	}
+}
+
+// The active chip is filled, so it reads at a glance rather than after a scan.
+func TestTheActiveTabIsFilled(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+	cm.activeTab = tabEvents
+	cm.renderTabBar()
+
+	raw := cm.tabBar.GetText(false)
+	want := fmt.Sprintf("[%s:%s:b] %s [-:-:-]",
+		tagColor(cm.theme.Surface), tagColor(cm.theme.Accent), cm.caseTabLabel(tabEvents))
+	if !strings.Contains(raw, want) {
+		t.Errorf("the active chip is not filled with the accent:\nwant %q\nin   %q", want, raw)
 	}
 }

@@ -264,6 +264,7 @@ func NewCaseManagement(parentUI *UI, caseData store.Case) *CaseManagement {
 	cm.setupLayout()
 	cm.setupKeybindings()
 	cm.loadCaseData()
+	cm.loadCaseFindings()
 
 	return cm
 }
@@ -643,8 +644,11 @@ func (cm *CaseManagement) setupKeybindings() {
 				// Global hotkey: Shift+L opens LLM Settings anywhere in Case Management
 				cm.showLLMSettingsModal()
 				return nil
-			case 'h', 'l':
-				cm.toggleLeftRightFocus()
+			case 'h':
+				cm.focusTabContent()
+				return nil
+			case 'l':
+				cm.focusCopilot()
 				return nil
 			case ']':
 				if !cm.copilotOpen {
@@ -883,8 +887,9 @@ func (cm *CaseManagement) loadCaseData() {
 			// arrived; without this it reports "no note yet" on a case with
 			// notes.
 			cm.updateMetadataBar()
-			// IOCs render will be computed lazily/placeholder
-			cm.renderIOCs()
+			// The strip carries each tab's count, so it is stale until the
+			// data it counts has landed.
+			cm.renderTabBar()
 
 			// What was read, not one of the six things. This line was written
 			// from the events tab's point of view and printed on every tab, so
@@ -1623,26 +1628,33 @@ func (cm *CaseManagement) buildTabs() {
 	}
 	cm.tabsPages.SwitchToPage(caseTabPages[cm.activeTab].page)
 
-	// Initial renders
+	// Initial renders. The findings query is started by the constructor, once
+	// the layout exists — reading into widgets that are still being built is
+	// safe only by accident.
 	cm.renderBriefing()
 	cm.renderCaseFindings()
-	cm.loadCaseFindings()
 	cm.renderIOCs()
 	cm.renderActivityLog()
 
 	cm.renderTabBar()
 }
 
-// caseTabStripWidth is the columns the full framed strip needs.
-func caseTabStripWidth(names []string, active int) int {
-	w := 0
-	for i, name := range names {
-		// " ╭─ name ─╮ " and " ┌ name ┐ " are 9 and 7 columns of frame.
-		if i == active {
-			w += len([]rune(name)) + 9
-		} else {
-			w += len([]rune(name)) + 7
+// Spacing around the tabs. The gutter is what separates one chip from the next
+// — two columns, enough that the labels read as distinct without the frames the
+// strip used to draw around each one.
+const (
+	caseTabIndent = 2
+	caseTabGutter = 2
+)
+
+// caseTabStripWidth is the columns the full strip needs for these labels.
+func caseTabStripWidth(labels []string) int {
+	w := caseTabIndent
+	for i, label := range labels {
+		if i > 0 {
+			w += caseTabGutter
 		}
+		w += len([]rune(label)) + 2 // a column of padding either side
 	}
 	return w
 }
@@ -1676,70 +1688,122 @@ func (cm *CaseManagement) barWidth() int {
 // narrow, and an undrawn TextView reports 15.
 const caseTabBarMinRect = 20
 
+// caseTabCount is how many records a tab holds, or -1 where a count says
+// nothing.
+//
+// Briefing is one document, so a number beside it would be noise. The rest are
+// lists, and how full they are is exactly what an analyst wants to know before
+// deciding where to look — "Findings 3 · Events 128 · Notes 0" is a shape of the
+// case, readable without pressing Tab seven times.
+func (cm *CaseManagement) caseTabCount(idx int) int {
+	switch idx {
+	case tabFindings:
+		return len(cm.caseFindings)
+	case tabEvents:
+		return len(cm.events)
+	case tabTimeline:
+		return len(cm.timelineEntries)
+	case tabIOCs:
+		return len(cm.caseIndicators)
+	case tabNotes:
+		return len(cm.notes)
+	case tabActivity:
+		return len(cm.auditLog)
+	}
+	return -1
+}
+
+// caseTabLabel is a tab's text: its name, and its count where it has one.
+func (cm *CaseManagement) caseTabLabel(idx int) string {
+	if n := cm.caseTabCount(idx); n >= 0 {
+		return fmt.Sprintf("%s %d", caseTabNames[idx], n)
+	}
+	return caseTabNames[idx]
+}
+
+// renderTabBar draws the tab strip.
+//
+// A filled chip for the tab you are on, plain muted text for the rest, and an
+// accent bar directly beneath the chip — the same two signals a browser or an
+// editor gives, which is what makes the strip readable at a glance rather than
+// after a scan. The bar spans only the active chip: a full-width rule would sit
+// one row above the panel's own top border and read as a double line.
+//
+// The previous strip drew each tab as a little box: " ┌ Events ┐ ". Seven boxes
+// in a row read as seven separate widgets rather than one control, the corner
+// glyphs cost four columns per tab and carried no information, and the active
+// tab was distinguished only by the shape of its corners — a difference nobody
+// notices at a glance. Colour and fill do that work in one look, and the columns
+// the frames used up now carry the counts.
 func (cm *CaseManagement) renderTabBar() {
-	// Browser-style framed tabs using Unicode line characters.
-	// Active tab appears "brought forward" by leaving an underline gap beneath it.
 	names := caseTabNames
 	active := cm.activeTab
 	if active < 0 || active >= len(names) {
 		active = 0
 	}
 
-	// The full strip needs about 100 columns. Below that it would truncate
-	// mid-word and drop the last tabs off the end entirely — a bar that hides
-	// where you can go is worse than one that admits it does not fit. So the
-	// narrow form states position and how to move instead.
-	//
+	labels := make([]string, len(names))
+	for i := range names {
+		labels[i] = cm.caseTabLabel(i)
+	}
+
 	// The width comes from the terminal, not from the widget. tview reports a
 	// primitive's rect a frame late, and an undrawn TextView answers 15 — so
 	// every case opened on the compact form, on a screen with room for the
 	// whole strip, and only corrected itself once something re-rendered the
 	// bar. Which is why the tabs appeared the first time you pressed Tab.
-	if barWidth := cm.barWidth(); barWidth > 0 && barWidth < caseTabStripWidth(names, active) {
+	barWidth := cm.barWidth()
+
+	// Below the width the strip needs it would truncate mid-word and drop the
+	// last tabs off the end entirely — a bar that hides where you can go is
+	// worse than one that admits it does not fit. The narrow form states
+	// position and how to move instead.
+	if barWidth > 0 && barWidth < caseTabStripWidth(labels) {
 		cm.tabBar.SetText(fmt.Sprintf(
 			" [::b]%s[-]  [%s]%d/%d · Tab next · Shift+Tab back[-]",
-			names[active], cm.theme.TagMuted, active+1, len(names)))
+			labels[active], cm.theme.TagMuted, active+1, len(names)))
 		return
 	}
 
-	// Build raw top pieces (no color tags) to compute visible widths.
-	topRaw := make([]string, len(names))
-	widths := make([]int, len(names))
-	for i, name := range names {
-		if i == active {
-			topRaw[i] = fmt.Sprintf(" ╭─ %s ─╮ ", name) // active: rounded corners and spacing
-		} else {
-			topRaw[i] = fmt.Sprintf(" ┌ %s ┐ ", name) // inactive: squared/flat look
+	var strip strings.Builder
+	activeStart, activeWidth := 0, 0
+
+	col := caseTabIndent
+	strip.WriteString(strings.Repeat(" ", caseTabIndent))
+
+	for i, label := range labels {
+		if i > 0 {
+			strip.WriteString(strings.Repeat(" ", caseTabGutter))
+			col += caseTabGutter
 		}
-		widths[i] = len([]rune(topRaw[i]))
+		w := len([]rune(label)) + 2 // one column of padding either side
+
+		if i == active {
+			activeStart, activeWidth = col, w
+			// Foreground taken from the surface behind the strip, so the label
+			// sits *in* the accent rather than on top of it.
+			strip.WriteString(fmt.Sprintf("[%s:%s:b] %s [-:-:-]",
+				tagColor(cm.theme.Surface), tagColor(cm.theme.Accent), label))
+		} else {
+			strip.WriteString(fmt.Sprintf("[%s] %s [-]", cm.theme.TagMuted, label))
+		}
+		col += w
 	}
 
-	// Compose colored top line.
-	var topLine strings.Builder
-	for i, piece := range topRaw {
-		if i == active {
-			topLine.WriteString("[::b]") // bold active
-			topLine.WriteString(piece)
-			topLine.WriteString("[-]")
-		} else {
-			topLine.WriteString(fmt.Sprintf("[%s]", cm.theme.TagMuted)) // dim inactive
-			topLine.WriteString(piece)
-			topLine.WriteString("[-]")
-		}
-	}
+	cm.tabBar.SetText(strip.String() + "\n" + cm.caseTabUnderline(activeStart, activeWidth))
+}
 
-	// Compose underline line: continuous for inactive tabs, gap under active tab.
-	var underline strings.Builder
-	for i := range names {
-		w := widths[i]
-		if i == active {
-			underline.WriteString(strings.Repeat(" ", w))
-		} else {
-			underline.WriteString(strings.Repeat("─", w))
-		}
+// caseTabUnderline is the accent bar under the active chip.
+func (cm *CaseManagement) caseTabUnderline(start, width int) string {
+	if width <= 0 {
+		return ""
 	}
-
-	cm.tabBar.SetText(topLine.String() + "\n" + underline.String())
+	bar := "━"
+	if !supportsUnicode() {
+		bar = "="
+	}
+	return strings.Repeat(" ", start) +
+		fmt.Sprintf("[%s]%s[-]", cm.theme.TagAccent, strings.Repeat(bar, width))
 }
 
 // wrapTab keeps a tab index inside the tab list, wrapping at both ends.
@@ -1764,6 +1828,32 @@ func (cm *CaseManagement) switchTab(idx int) {
 		cm.loadCaseFindings()
 	}
 	cm.renderTabBar()
+}
+
+// focusTabContent is `h`: move left, to the tab you are on.
+//
+// h and l both toggled, so h — which means "left" to everyone who has used vi —
+// jumped right into the copilot, and pressing it again to undo that only worked
+// because the toggle happened to be symmetric. They are directions now.
+func (cm *CaseManagement) focusTabContent() {
+	if cm.activeTab >= 0 && cm.activeTab < len(caseTabPages) {
+		cm.setFocusPane(caseTabPages[cm.activeTab].focus)
+		return
+	}
+	cm.setFocusPane(FocusEvents)
+}
+
+// focusCopilot is `l`: move right, to the copilot — if it is open.
+//
+// With the panel closed there is nothing to the right, so the key says so
+// rather than focusing a hidden widget and reporting "Focus: Copilot" over a
+// pane that is not on screen.
+func (cm *CaseManagement) focusCopilot() {
+	if !cm.copilotOpen {
+		cm.updateStatus("The copilot is closed — ] opens it")
+		return
+	}
+	cm.setFocusPane(FocusCopilot)
 }
 
 func (cm *CaseManagement) toggleLeftRightFocus() {

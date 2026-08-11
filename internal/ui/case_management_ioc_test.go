@@ -44,6 +44,9 @@ func TestIOCTabSelectionToggle_Space(t *testing.T) {
 
 	c := store.Case{ID: "case-ioc", Title: "IOC Manual", Severity: "low", Status: "open"}
 	cm := NewCaseManagement(ui, c)
+	// The constructor starts the case's reads; they paint the same widgets this
+	// test is about to write to.
+	awaitIdle(t, ui)
 
 	// Add a manual IOC represented as a Note with LinkedType="ioc"
 	note := store.Note{
@@ -115,6 +118,9 @@ func TestIOCTabAddModalPlusKey_OpensModal(t *testing.T) {
 
 	c := store.Case{ID: "case-ioc-plus", Title: "IOC Plus", Severity: "low", Status: "open"}
 	cm := NewCaseManagement(ui, c)
+	// The constructor starts the case's reads; they paint the same widgets this
+	// test is about to write to.
+	awaitIdle(t, ui)
 
 	// Render IOC tab so input capture is attached
 	cm.renderIOCs()
@@ -154,6 +160,9 @@ func TestGetCurrentAnalystPriority(t *testing.T) {
 	// 1) Case owner takes precedence
 	c := store.Case{ID: "case-analyst", Title: "Owner First", Severity: "low", Status: "open", AssignedTo: "owner.user"}
 	cm := NewCaseManagement(ui, c)
+	// The constructor starts the case's reads; they paint the same widgets this
+	// test is about to write to.
+	awaitIdle(t, ui)
 	if got := cm.getCurrentAnalyst(); got != "owner.user" {
 		t.Fatalf("expected owner.user, got %s", got)
 	}
@@ -161,6 +170,9 @@ func TestGetCurrentAnalystPriority(t *testing.T) {
 	// 2) Env var when no AssignedTo
 	c.AssignedTo = ""
 	cm2 := NewCaseManagement(ui, c)
+	// The constructor starts the case's reads; they paint the same widgets this
+	// test is about to write to.
+	awaitIdle(t, ui)
 
 	old := os.Getenv("CONSOLE_IR_ANALYST")
 	_ = os.Setenv("CONSOLE_IR_ANALYST", "env.user")
@@ -175,6 +187,9 @@ func TestGetCurrentAnalystPriority(t *testing.T) {
 	// 3) Default fallback
 	_ = os.Unsetenv("CONSOLE_IR_ANALYST")
 	cm3 := NewCaseManagement(ui, c)
+	// The constructor starts the case's reads; they paint the same widgets this
+	// test is about to write to.
+	awaitIdle(t, ui)
 	if got := cm3.getCurrentAnalyst(); got != "analyst" {
 		t.Fatalf("expected analyst fallback, got %s", got)
 	}
@@ -193,6 +208,9 @@ func TestTimelineRender_NoFreeze(t *testing.T) {
 	ui := NewUI(ctx, st, &mockLLMIOC{}, logger, "test")
 	c := store.Case{ID: "case-timeline", Title: "Timeline", Severity: "low", Status: "open"}
 	cm := NewCaseManagement(ui, c)
+	// The constructor starts the case's reads; they paint the same widgets this
+	// test is about to write to.
+	awaitIdle(t, ui)
 
 	ev1 := store.Event{ID: "t1", Timestamp: time.Now().Add(-2 * time.Minute), EventType: "auth", Severity: "low", Message: "old", Host: "h1"}
 	ev2 := store.Event{ID: "t2", Timestamp: time.Now().Add(-1 * time.Minute), EventType: "net", Severity: "high", Message: "new", Host: "h2"}

@@ -182,6 +182,8 @@ func (cm *CaseManagement) renderIOCs() {
 	}
 
 	cm.caseIndicators = indicators
+	// The tab strip counts them.
+	cm.renderTabBar()
 	renderCaseIndicators(cm.iocsTable, indicators, cm.theme, []string{
 		"No indicators extracted.",
 		"",
