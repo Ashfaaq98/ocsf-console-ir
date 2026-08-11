@@ -959,20 +959,29 @@ func (cm *CaseManagement) updateEventsTable() {
 		}
 
 		// Row cells
+		// The host is a host wherever it appears, and the message carries the
+		// addresses and filenames it mentions. The host column used to be the
+		// success green, which said "this is fine" about a row of evidence.
 		cells := []struct {
 			text  string
 			color tcell.Color
 		}{
 			{indicator, cm.theme.Accent},
-			{event.Timestamp.Format("15:04:05"), cm.theme.TextPrimary},
+			{event.Timestamp.Format("15:04:05"), cm.theme.TextMuted},
 			{event.EventType, cm.theme.Accent},
 			{strings.ToUpper(event.Severity), cm.getSeverityTcell(event.Severity)},
-			{event.Host, cm.theme.Success},
+			{event.Host, entityColour(entityHost, cm.theme)},
 			{truncate(event.Message, 80), cm.theme.TextPrimary},
 		}
 
 		for col, cell := range cells {
-			tableCell := tview.NewTableCell(cell.text).
+			text := cell.text
+			if col == 5 {
+				// The message column is prose; the entities inside it are
+				// coloured where they can be recognised from their shape.
+				text = paintTextOn(cell.text, tagColor(cm.theme.TextPrimary), cm.theme)
+			}
+			tableCell := tview.NewTableCell(text).
 				SetTextColor(cell.color)
 
 			// Highlight selected rows

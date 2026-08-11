@@ -122,8 +122,16 @@ func renderCaseIndicators(table *tview.Table, indicators []store.CaseIndicator, 
 		// characters, the cut was at 44, and the space it would have used sat
 		// empty between this column and the next. tview clips what genuinely
 		// does not fit.
-		table.SetCell(row, 1, tview.NewTableCell(tview.Escape(ind.Value)).
-			SetTextColor(t.TextPrimary).SetExpansion(1))
+		// The value is coloured by what it is: an address, a host, a user, a
+		// file. The type is right there in the column beside it, so this costs
+		// no guesswork — the indicator carries its OCSF type_id.
+		value := tview.Escape(ind.Value)
+		valueColour := t.TextPrimary
+		if class, ok := entityClassOf(ind.TypeID); ok {
+			valueColour = entityColour(class, t)
+		}
+		table.SetCell(row, 1, tview.NewTableCell(value).
+			SetTextColor(valueColour).SetExpansion(1))
 
 		table.SetCell(row, 2, tview.NewTableCell(fmt.Sprintf("[%s]%s %s[-]", colour, glyph, label)))
 		table.SetCell(row, 3, tview.NewTableCell(fmt.Sprintf("%d ", ind.Sightings)).
