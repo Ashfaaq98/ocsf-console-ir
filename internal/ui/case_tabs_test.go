@@ -599,23 +599,3 @@ func TestTheTabsAreSeparated(t *testing.T) {
 		t.Errorf("the strip has %d separators, want 5:\n%s", n, cm.tabBar.GetText(true))
 	}
 }
-
-// The right of the bar names the copilot, which is a drawer that starts closed
-// — on the screen as shipped there was no sign the panel existed at all.
-func TestTheBarNamesTheCopilot(t *testing.T) {
-	ui, _ := newTestUI(t)
-	cm := openCase(t, ui)
-	cm.lastWidth = 190
-	cm.renderTabBar()
-
-	if got := cm.tabBar.GetText(true); !strings.Contains(got, "]  copilot") {
-		t.Errorf("the bar does not offer the copilot:\n%s", got)
-	}
-
-	cm.toggleCaseCopilot()
-	cm.lastWidth = 190
-	cm.renderTabBar()
-	if got := cm.tabBar.GetText(true); !strings.Contains(got, "close copilot") {
-		t.Errorf("with the copilot open the bar does not offer to close it:\n%s", got)
-	}
-}

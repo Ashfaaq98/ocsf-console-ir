@@ -1772,20 +1772,6 @@ func (cm *CaseManagement) renderTabBar() {
 		strip.WriteString(caseTabSegment(cm.theme.TagMuted, raised, "", "d", name, count))
 	}
 
-	// The right of the bar carries the copilot, because nothing else does.
-	// It is a drawer and it starts closed, so on the screen as shipped there
-	// is no sign the panel exists at all — the key was in the help and nowhere
-	// an analyst would look. A bar with an empty right half is the place for
-	// it.
-	hint := "]  copilot"
-	if cm.copilotOpen {
-		hint = "[  close copilot"
-	}
-	if gap := barWidth - caseTabStripWidth(labels) - len([]rune(hint)) - 1; gap >= 4 {
-		strip.WriteString(fmt.Sprintf("[:%s]%s[%s:%s:d]%s ",
-			raised, strings.Repeat(" ", gap), cm.theme.TagMuted, raised, hint))
-	}
-
 	// The rest of the row is bar, not background: the strip ends where the
 	// terminal does.
 	strip.WriteString(fmt.Sprintf("[:%s]", raised))
