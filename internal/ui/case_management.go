@@ -108,7 +108,10 @@ type CaseManagement struct {
 	activityLog       *tview.TextView
 	statusBar         *tview.TextView
 	// Tabs (left column)
-	tabBar    *tview.TextView
+	tabBar *tview.TextView
+	// lastWidth is the width the layout was last drawn at, so the tab strip is
+	// re-rendered when it changes and not on every frame.
+	lastWidth int
 	tabsPages *tview.Pages
 	// Additional tab views
 	overviewView *tview.TextView
@@ -342,6 +345,23 @@ func (cm *CaseManagement) setupLayout() {
 		AddItem(cm.metadataBar, caseHeaderRows, 0, false).
 		AddItem(main, 0, 1, true).
 		AddItem(cm.statusBar, 1, 0, false)
+
+	// Redraw the tab strip whenever the width changes.
+	//
+	// It picks between the full strip and a compact form by width, and it was
+	// rendered once at construction — before anything had been drawn, so it
+	// asked an undrawn widget how wide it was and got a default. A resize had
+	// the same effect in reverse. This is the only place that knows the answer
+	// at the moment it is true.
+	cm.layout.SetDrawFunc(func(screen tcell.Screen, x, y, width, height int) (int, int, int, int) {
+		if width != cm.lastWidth {
+			cm.lastWidth = width
+			cm.renderTabBar()
+		}
+		// The layout has no border, so its inner rect is its rect. Shrinking it
+		// here would inset the whole case screen by a column.
+		return x, y, width, height
+	})
 
 	// Again, now that the layout exists: the header sizes itself, and the first
 	// call ran before there was anything to resize.
@@ -588,6 +608,17 @@ func (cm *CaseManagement) setupKeybindings() {
 					cm.popModalRoot()
 					return nil
 				}
+			case 't':
+				// The theme, as everywhere else.
+				//
+				// Show installs this handler as the application-wide capture,
+				// so the parent's global keys are not reachable while a case is
+				// open — t did nothing here, and the case screen was the one
+				// place the theme could not be changed.
+				if cm.parentUI != nil {
+					cm.parentUI.cycleTheme()
+				}
+				return nil
 			case 'E':
 				// The report, not the bundle. An analyst pressing export at the
 				// end of a case wants something they can send; the JSON is for
@@ -1611,6 +1642,35 @@ func caseTabStripWidth(names []string, active int) int {
 	return w
 }
 
+// barWidth is how wide the tab bar may draw.
+//
+// From the terminal the application already measured every frame, falling back
+// to the widget's own rect only once it has been drawn at least once — an
+// undrawn one answers with a default that has nothing to do with this screen.
+func (cm *CaseManagement) barWidth() int {
+	// What the layout was last drawn at, recorded by its draw function, which
+	// is handed the true width every frame.
+	if cm.lastWidth > 0 {
+		return cm.lastWidth
+	}
+	// Before the first draw: what the application measured for the terminal.
+	if cm.parentUI != nil && cm.parentUI.termWidth > 0 {
+		return cm.parentUI.termWidth
+	}
+	// Last resort, and only once the widget has been drawn at least once: an
+	// undrawn TextView answers with a default that has nothing to do with this
+	// screen.
+	if _, _, w, _ := cm.tabBar.GetInnerRect(); w > caseTabBarMinRect {
+		return w
+	}
+	return 0
+}
+
+// caseTabBarMinRect is the width below which a tab bar's reported rect is
+// tview's default rather than a measurement. A real terminal is never this
+// narrow, and an undrawn TextView reports 15.
+const caseTabBarMinRect = 20
+
 func (cm *CaseManagement) renderTabBar() {
 	// Browser-style framed tabs using Unicode line characters.
 	// Active tab appears "brought forward" by leaving an underline gap beneath it.
@@ -1624,7 +1684,13 @@ func (cm *CaseManagement) renderTabBar() {
 	// mid-word and drop the last tabs off the end entirely — a bar that hides
 	// where you can go is worse than one that admits it does not fit. So the
 	// narrow form states position and how to move instead.
-	if _, _, barWidth, _ := cm.tabBar.GetInnerRect(); barWidth > 0 && barWidth < caseTabStripWidth(names, active) {
+	//
+	// The width comes from the terminal, not from the widget. tview reports a
+	// primitive's rect a frame late, and an undrawn TextView answers 15 — so
+	// every case opened on the compact form, on a screen with room for the
+	// whole strip, and only corrected itself once something re-rendered the
+	// bar. Which is why the tabs appeared the first time you pressed Tab.
+	if barWidth := cm.barWidth(); barWidth > 0 && barWidth < caseTabStripWidth(names, active) {
 		cm.tabBar.SetText(fmt.Sprintf(
 			" [::b]%s[-]  [%s]%d/%d · Tab next · Shift+Tab back[-]",
 			names[active], cm.theme.TagMuted, active+1, len(names)))
@@ -1745,7 +1811,10 @@ func (cm *CaseManagement) updateStatus(message string) {
 	}
 
 	// Standard navigation hints
-	statusText = fmt.Sprintf("%s%s[%s]Tab[-]-left/right [%s]Esc[-]-close", statusText, sep, acc, acc)
+	// The same words the tab strip uses. Two names for one key — "Tab next" on
+	// the strip and "Tab-left/right" here — reads as two different keys.
+	statusText = fmt.Sprintf("%s%s[%s]Tab[-] next · [%s]Shift+Tab[-] back · [%s]Esc[-] leaves · [%s]?[-] help",
+		statusText, sep, acc, acc, acc, acc)
 
 	cm.statusBar.SetText(statusText)
 }
@@ -2617,6 +2686,40 @@ func (cm *CaseManagement) applyTheme() {
 		cm.tabBar.SetTextColor(cm.theme.TextPrimary)
 	}
 
+	// The containers, and the four widgets nothing ever coloured.
+	//
+	// A widget with no background falls back to tview's global default, which
+	// is black — so three quarters of this screen painted black while every
+	// other screen painted the theme's own background. On gruvbox that is
+	// #282828 against #000000: the case screen read as a slightly different,
+	// darker application.
+	for _, box := range []*tview.Box{
+		boxOf(cm.layout), boxOf(cm.caseBody), boxOf(cm.tabsPages),
+		boxOf(cm.overviewView), boxOf(cm.activityTable),
+		boxOf(cm.notesViewer), boxOf(cm.copilotInput),
+	} {
+		if box != nil {
+			box.SetBackgroundColor(cm.theme.Bg)
+		}
+	}
+	// The panes themselves sit on the raised surface, as they do elsewhere.
+	if cm.overviewView != nil {
+		cm.overviewView.SetBackgroundColor(cm.theme.Surface)
+		cm.overviewView.SetTextColor(cm.theme.TextPrimary)
+	}
+	if cm.activityTable != nil {
+		cm.activityTable.SetBackgroundColor(cm.theme.Surface)
+	}
+	if cm.notesViewer != nil {
+		cm.notesViewer.SetBackgroundColor(cm.theme.Surface)
+	}
+	if cm.copilotInput != nil {
+		cm.copilotInput.SetFieldBackgroundColor(cm.theme.Surface)
+		cm.copilotInput.SetFieldTextColor(cm.theme.TextPrimary)
+		cm.copilotInput.SetLabelColor(cm.theme.TextMuted)
+		cm.copilotInput.SetBackgroundColor(cm.theme.Bg)
+	}
+
 	cm.statusBar.SetBackgroundColor(cm.theme.Surface)
 	cm.statusBar.SetTextColor(cm.theme.TextPrimary)
 
@@ -3109,6 +3212,9 @@ func (cm *CaseManagement) quickCycleStatus() {
 // Show mounts the Case Management screen as the current root and focuses the Events pane.
 func (cm *CaseManagement) Show() {
 	cm.app.SetRoot(cm.layout, true)
+	// The strip is drawn for the width the screen actually has, which is not
+	// known until something has been drawn in it.
+	cm.renderTabBar()
 	// Ensure our input capture is active (parent UI capture may still be installed)
 	if cm.globalInputCapture != nil {
 		cm.app.SetInputCapture(cm.globalInputCapture)
@@ -4197,4 +4303,42 @@ func (cm *CaseManagement) togglePinnedEvent() {
 	} else {
 		cm.updateStatus(fmt.Sprintf("Unpinned · %s pinned", plural(n, "event")))
 	}
+}
+
+// boxOf reaches the Box inside a primitive, so a list of widgets of different
+// types can be given a background in one pass. A nil primitive yields nil.
+func boxOf(p tview.Primitive) *tview.Box {
+	switch v := p.(type) {
+	case *tview.Flex:
+		if v == nil {
+			return nil
+		}
+		return v.Box
+	case *tview.Pages:
+		if v == nil {
+			return nil
+		}
+		return v.Box
+	case *tview.TextView:
+		if v == nil {
+			return nil
+		}
+		return v.Box
+	case *tview.Table:
+		if v == nil {
+			return nil
+		}
+		return v.Box
+	case *tview.TextArea:
+		if v == nil {
+			return nil
+		}
+		return v.Box
+	case *tview.InputField:
+		if v == nil {
+			return nil
+		}
+		return v.Box
+	}
+	return nil
 }
