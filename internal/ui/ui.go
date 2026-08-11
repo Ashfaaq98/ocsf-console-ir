@@ -1480,19 +1480,6 @@ func (ui *UI) setupKeybindings() {
 		// destinations, and then to brackets, which it routes to the copilot
 		// drawer. Global navigation still applies inside a case; only the two
 		// keys the case owns are passed through.
-		if ui.activeCM != nil {
-			switch event.Key() {
-			case tcell.KeyTab, tcell.KeyBacktab:
-				return event
-			case tcell.KeyRune:
-				// The case has its own copilot — a transcript with an input,
-				// not the read-only drawer this handler would open.
-				if r := event.Rune(); r == '[' || r == ']' {
-					return event
-				}
-			}
-		}
-
 		// Log key events to help diagnose input handling
 		if ui.logger != nil {
 			ui.logger.Debug("input: key=%v rune=%q mod=%v", event.Key(), event.Rune(), event.Modifiers())
@@ -2567,9 +2554,16 @@ func (ui *UI) showHelp() {
 		addKey("Enter", "View event details")
 	} else if ui.activeCM != nil && ui.selectedCaseID != "" {
 		addSection("CONTEXT: CASE MANAGEMENT")
-		addKey("Tab", "Cycle through tabs (Briefing, Findings, Timeline...)")
-		addKey("[, ]", "Toggle Copilot drawer")
-		addKey("e", "Escalate to external system")
+		// What the case screen's own handler does, since it owns every key
+		// while it is open. `e` used to be listed as "escalate to an external
+		// system", which does not exist — it exports the selected events.
+		addKey("Tab / Shift+Tab", "Next and previous tab")
+		addKey("[, ]", "Close and open the copilot")
+		addKey("E", "Write the case up as a report")
+		addKey("J", "Export the case as JSON")
+		addKey("e", "Export the selected events")
+		addKey("t", "Change the theme")
+		addKey("Esc", "Leave the case")
 	}
 
 	addKV := func(k, v string) {
