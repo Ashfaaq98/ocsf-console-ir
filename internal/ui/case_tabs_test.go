@@ -344,7 +344,7 @@ func TestTimelineEscapesEventText(t *testing.T) {
 	events, findings, audit := timelineFixture()
 	entries, _ := buildTimeline(events, findings, nil, audit, map[string]bool{"a": true}, groupByHost)
 	table := tview.NewTable()
-	rows := renderTimeline(table, entries, entries[0].Label, themeDark(), 0)
+	rows, _ := renderTimeline(table, entries, entries[0].Label, themeDark(), 0)
 
 	got := tableCells(table)
 	if !strings.Contains(got, "[redacted") {

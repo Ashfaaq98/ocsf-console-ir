@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 	"github.com/gdamore/tcell/v2"
@@ -339,5 +340,94 @@ func TestPivotingFromACaseAsksFirst(t *testing.T) {
 	}
 	if ui.pivot != nil {
 		t.Error("the pivot happened before it was confirmed")
+	}
+}
+
+// p pins what the timeline cursor is on.
+//
+// It read selectedEventIndex — the events table's cursor, which starts at the
+// top — so pressing p anywhere on the timeline pinned the case's first event
+// and left the row the analyst was on untouched.
+func TestPinningFollowsTheTimelineCursor(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	base := time.Date(2026, 8, 8, 3, 0, 0, 0, time.UTC)
+	cm.events = []store.Event{
+		{ID: "first", Message: "the first event", Host: "ws-a", Timestamp: base},
+		{ID: "second", Message: "a later event", Host: "ws-b", Timestamp: base.Add(time.Hour)},
+	}
+	cm.pinnedEvents = map[string]bool{}
+	cm.updateTimelineView()
+
+	// The second row, not the first.
+	row := -1
+	for r, idx := range cm.timelineRowEntry {
+		if idx == 1 {
+			row = r
+		}
+	}
+	if row < 0 {
+		t.Fatalf("the timeline has no second entry: %v", cm.timelineRowEntry)
+	}
+	cm.timelineView.Select(row, 0)
+
+	cm.pinTimelineEntry()
+
+	if cm.pinnedEvents["first"] {
+		t.Error("pinning starred the first event while the cursor was on the second")
+	}
+	if !cm.pinnedEvents["second"] {
+		t.Errorf("the event under the cursor was not pinned: %v", cm.pinnedEvents)
+	}
+
+	cm.pinTimelineEntry()
+	if cm.pinnedEvents["second"] {
+		t.Error("p did not unpin")
+	}
+}
+
+// A row that is not evidence says so rather than doing nothing.
+func TestPinningANoteSaysItCannotBePinned(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	base := time.Date(2026, 8, 8, 3, 0, 0, 0, time.UTC)
+	cm.events = nil
+	cm.notes = []store.Note{{Content: "Blocked the address", Author: "analyst", CreatedAt: base}}
+	cm.pinnedEvents = map[string]bool{}
+
+	entries, _ := buildTimeline(nil, nil, cm.notes, nil, cm.pinnedEvents, groupByHost)
+	cm.timelineEntries = entries
+	cm.timelineRows, cm.timelineRowEntry = renderTimeline(
+		cm.timelineView, entries, "", cm.theme, 0)
+	cm.timelineView.Select(0, 0)
+
+	cm.pinTimelineEntry()
+
+	if got := stripTags(cm.statusBar.GetText(true)); !strings.Contains(got, "note") {
+		t.Errorf("pinning a note said: %s", got)
+	}
+	if len(cm.pinnedEvents) != 0 {
+		t.Error("a note was pinned as evidence")
+	}
+}
+
+// Timeline labels take the width the pane has, rather than stopping at a
+// constant while the column expands around them.
+func TestTimelineLabelsAreNotCutShort(t *testing.T) {
+	long := "Outbound session to 45.147.230.11 carrying a base64 payload that keeps going well past seventy characters"
+
+	events := []store.Event{{ID: "e1", Message: long, Host: "ws-a",
+		Timestamp: time.Date(2026, 8, 8, 3, 0, 0, 0, time.UTC)}}
+	entries, _ := buildTimeline(events, nil, nil, nil, map[string]bool{}, groupByHost)
+
+	for _, e := range entries {
+		if strings.Contains(e.Label, "...") {
+			t.Errorf("the label was cut before the layout saw it: %q", e.Label)
+		}
+	}
+	if len(entries) == 0 || !strings.Contains(entries[0].Label, "seventy characters") {
+		t.Errorf("the label lost its tail: %+v", entries)
 	}
 }

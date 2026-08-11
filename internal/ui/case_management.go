@@ -67,6 +67,10 @@ type CaseManagement struct {
 	// back to the cluster whose header sits on it.
 	expandedTimeline string
 	timelineRows     map[int]string
+	// timelineEntries and timelineRowEntry let a key act on what the timeline
+	// cursor is on, rather than on the events table's selection.
+	timelineEntries  []timelineEntry
+	timelineRowEntry map[int]int
 	copilotPanel     *tview.Flex
 	// caseBody holds the tabs and, when open, the copilot drawer beside them.
 	caseBody          *tview.Flex
@@ -306,7 +310,7 @@ func (cm *CaseManagement) setupLayout() {
 		case tcell.KeyRune:
 			switch event.Rune() {
 			case 'p', 'P':
-				cm.pinCurrentEvent()
+				cm.pinTimelineEntry()
 				return nil
 			}
 		}
