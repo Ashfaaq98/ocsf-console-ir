@@ -16,6 +16,10 @@ func openCase(t *testing.T, ui *UI) *CaseManagement {
 	cm := NewCaseManagement(ui, c)
 	ui.activeCM = cm
 	t.Cleanup(func() { ui.activeCM = nil })
+	// The case reads itself on construction, and that read paints the header
+	// and every tab. Rendering before it lands is two goroutines on the same
+	// widgets — serialised by the event loop in a real session, not here.
+	awaitIdle(t, ui)
 	return cm
 }
 
@@ -139,5 +143,98 @@ func TestTheCaseHelpNamesRealKeys(t *testing.T) {
 		if !strings.Contains(frame, want) {
 			t.Errorf("the case help does not mention %q", want)
 		}
+	}
+}
+
+// ? opens the key reference from inside a case.
+//
+// The case screen installs its own application-wide capture, so the parent's ?
+// never ran here — help was unreachable from the one screen whose keys it
+// documents. And the parent's help closes by restoring the main layout, which
+// would have ejected the analyst from the case they were reading about.
+func TestHelpOpensInsideACase(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	if cm.globalInputCapture(tcell.NewEventKey(tcell.KeyRune, '?', tcell.ModNone)) != nil {
+		t.Fatal("? was not claimed inside a case")
+	}
+	if !cm.modalActive {
+		t.Fatal("? opened nothing")
+	}
+	if len(cm.modalStack) != 1 {
+		t.Errorf("the help was not put on the case's own modal stack: %d entries", len(cm.modalStack))
+	}
+}
+
+// Closing it returns to the case, not to the main layout.
+func TestClosingTheCaseHelpReturnsToTheCase(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	cm.showCaseHelp()
+	if len(cm.modalStack) != 1 {
+		t.Fatalf("the help is not on the stack: %d", len(cm.modalStack))
+	}
+
+	cm.popModalRoot()
+
+	if len(cm.modalStack) != 0 {
+		t.Errorf("closing the help left %d entries on the stack", len(cm.modalStack))
+	}
+	if cm.modalActive {
+		t.Error("the case still reports a modal after the help closed")
+	}
+}
+
+// Refreshing says what it refreshed.
+//
+// The line was written from the events tab's point of view and printed on every
+// tab, so pressing r on Activity reported a number of events.
+func TestRefreshingACaseSaysWhatItRead(t *testing.T) {
+	ui, st := newTestUI(t)
+	seedCases(t, ui, st, 1)
+	cm := NewCaseManagement(ui, ui.cases[0])
+	ui.activeCM = cm
+	t.Cleanup(func() { ui.activeCM = nil })
+	awaitIdle(t, ui)
+
+	cm.refreshCaseData()
+	awaitIdle(t, ui)
+
+	got := stripTags(cm.statusBar.GetText(true))
+	if !strings.Contains(got, "Case refreshed") {
+		t.Errorf("a refresh does not say the case was refreshed: %s", got)
+	}
+	if strings.Contains(got, "Loaded") && strings.Contains(got, "events for case") {
+		t.Errorf("a refresh still reports only the events: %s", got)
+	}
+	for _, want := range []string{"event", "note", "activity"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the refresh does not account for %ss: %s", want, got)
+		}
+	}
+}
+
+// One spelling of the save key, and the view mode does not offer to save
+// something that is not being edited.
+func TestTheNotesKeysAreDescribedConsistently(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	view := stripTags(cm.notesViewStatusText())
+	edit := stripTags(cm.notesEditStatusText())
+
+	if strings.Contains(view, "Ctrl") {
+		t.Errorf("the notes list offers a save with nothing being edited: %s", view)
+	}
+	if strings.Contains(view, "Tab=Copilot") || strings.Contains(view, "Tab opens the copilot") {
+		t.Errorf("the notes list says Tab opens the copilot; it moves to the next tab: %s", view)
+	}
+	if !strings.Contains(edit, "Ctrl+S") {
+		t.Errorf("the editor does not name the save key as Ctrl+S: %s", edit)
+	}
+	if strings.Contains(edit, "Ctrl+s") {
+		t.Errorf("the editor spells the save key differently from the panel title: %s", edit)
 	}
 }

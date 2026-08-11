@@ -543,7 +543,10 @@ func (cm *CaseManagement) setupNotesPanel() {
 				// Start a new note (switch to editor)
 				cm.switchToNotesEdit()
 				return nil
-			case 't', 'T':
+			case 'T':
+				// Shift, because lowercase t is the theme key and the screen's
+				// own capture claims it before any widget sees it — the
+				// lowercase branch here could never fire.
 				cm.showNoteTemplates()
 				return nil
 			}
@@ -553,9 +556,9 @@ func (cm *CaseManagement) setupNotesPanel() {
 
 	// Editor (TextArea)
 	cm.notesEditor = tview.NewTextArea().
-		SetPlaceholder("Add case notes here... (Ctrl+S to save)")
+		SetPlaceholder("What you did, and why. Ctrl+S saves.")
 	// Minimal hint in title while editing
-	cm.notesEditor.SetBorder(true).SetTitle(" Notes (Esc cancel, Ctrl+S save) ").SetTitleAlign(tview.AlignLeft)
+	cm.notesEditor.SetBorder(true).SetTitle(" NOTE  ·  Ctrl+S saves  ·  Esc cancels ").SetTitleAlign(tview.AlignLeft)
 	cm.notesEditor.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		return cm.handleNotesInput(event)
 	})
@@ -672,8 +675,10 @@ func (cm *CaseManagement) setupKeybindings() {
 					cm.addNewNote()
 					return nil
 				}
+			case '?':
+				cm.showCaseHelp()
+				return nil
 			case 'r', 'R':
-				// Global refresh
 				cm.refreshCaseData()
 				return nil
 			}
@@ -803,7 +808,10 @@ func (cm *CaseManagement) discardNoteDraft() {
 // Data loading and management
 
 func (cm *CaseManagement) loadCaseData() {
-	go func() {
+	// Through the parent's tracked spawn where there is one, so a caller that
+	// is about to close the database — which in practice means a test — can
+	// wait for the read to finish. A bare goroutine is unobservable.
+	work := func() {
 		if cm.ctx.Err() != nil {
 			return
 		}
@@ -855,7 +863,7 @@ func (cm *CaseManagement) loadCaseData() {
 		}
 
 		// Update UI on main thread
-		cm.app.QueueUpdateDraw(func() {
+		cm.queueUpdate(func() {
 			cm.baseEvents = events
 			cm.events = events
 			cm.pinnedEvents = pinned
@@ -876,9 +884,20 @@ func (cm *CaseManagement) loadCaseData() {
 			// IOCs render will be computed lazily/placeholder
 			cm.renderIOCs()
 
-			cm.updateStatus(fmt.Sprintf("Loaded %d events for case %s", len(events), cm.caseData.Title))
+			// What was read, not one of the six things. This line was written
+			// from the events tab's point of view and printed on every tab, so
+			// pressing r on Activity reported a number of events.
+			cm.updateStatus(fmt.Sprintf("Case refreshed · %s · %s · %s",
+				plural(len(events), "event"), plural(len(notes), "note"),
+				plural(len(audits), "activity entry")))
 		})
-	}()
+	}
+
+	if cm.parentUI != nil {
+		cm.parentUI.spawnLoad(work)
+		return
+	}
+	go work()
 }
 
 // reloadCaseRow re-reads the case so denormalized counts and analyst fields
@@ -1834,7 +1853,7 @@ func (cm *CaseManagement) notesViewStatusText() string {
 	sep := fmt.Sprintf(" [%s]|[-] ", mut)
 	analyst := cm.getCurrentAnalyst()
 	return fmt.Sprintf(
-		"[%s]%s[-]%s[%s]Analyst[-]: %s%s[%s]Focus[-]: Notes%s n=new note • Ctrl+s=save • Tab=Copilot%s[%s]Esc[-]=Exit Case",
+		"[%s]%s[-]%s[%s]Analyst[-]: %s%s[%s]Focus[-]: Notes%s n new · T template · Tab next tab%s[%s]Esc[-] leaves",
 		mut, ts,
 		sep, acc, analyst,
 		sep, acc,
@@ -1850,7 +1869,7 @@ func (cm *CaseManagement) notesEditStatusText() string {
 	sep := fmt.Sprintf(" [%s]|[-] ", mut)
 	analyst := cm.getCurrentAnalyst()
 	return fmt.Sprintf(
-		"[%s]%s[-]%s[%s]Analyst[-]: %s%s[%s]Focus[-]: Notes (editing)%s Ctrl+s=save • Esc=cancel • Tab=Copilot",
+		"[%s]%s[-]%s[%s]Analyst[-]: %s%s[%s]Focus[-]: Notes (editing)%s Ctrl+S saves · Esc cancels · Tab opens the copilot",
 		mut, ts,
 		sep, acc, analyst,
 		sep, acc,
@@ -4341,4 +4360,41 @@ func boxOf(p tview.Primitive) *tview.Box {
 		return v.Box
 	}
 	return nil
+}
+
+// showCaseHelp opens the key reference over the case.
+//
+// On the case's own modal stack rather than the parent's: the case screen
+// installs its own application-wide input capture, so the parent's ? never runs
+// here — help was unreachable from the one screen whose keys it documents — and
+// closing the parent's help returns to the main layout, which would eject the
+// analyst from the case they were reading about.
+func (cm *CaseManagement) showCaseHelp() {
+	if cm.parentUI == nil {
+		return
+	}
+	ui := cm.parentUI
+	ui.helpActive = true
+
+	card, focus := ui.buildHelpCard(func() {
+		ui.helpActive = false
+		cm.popModalRoot()
+	})
+	cm.pushModalRoot(card)
+	cm.app.SetFocus(focus)
+}
+
+// queueUpdate runs fn on the UI goroutine.
+//
+// Through the parent's guarded helper, which runs fn inline when there is no
+// event loop to post to. QueueUpdateDraw blocks until the loop drains it, so
+// the raw call deadlocks anything running before the application starts — and
+// makes this load unobservable from a test. There are thirty-odd raw calls left
+// in this file; converting them is the sweep the roadmap already carries.
+func (cm *CaseManagement) queueUpdate(fn func()) {
+	if cm.parentUI != nil {
+		cm.parentUI.queueUpdate(fn)
+		return
+	}
+	cm.app.QueueUpdateDraw(fn)
 }

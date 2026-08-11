@@ -2473,6 +2473,19 @@ func (ui *UI) showCaseSummary() {
 // showHelp displays a professionally formatted Help using a table layout
 func (ui *UI) showHelp() {
 	ui.helpActive = true
+	card, table := ui.buildHelpCard(ui.restoreMainLayout)
+	ui.rootModal(card)
+	ui.app.SetFocus(table)
+}
+
+// buildHelpCard assembles the key reference and returns it with the widget that
+// should hold focus.
+//
+// close is what dismisses it, because who is showing the help decides where
+// closing it returns to. The case screen roots its own modals on its own stack;
+// sending it back through restoreMainLayout would drop the analyst out of the
+// case they were reading about.
+func (ui *UI) buildHelpCard(close func()) (tview.Primitive, tview.Primitive) {
 
 	// Header
 	header := tview.NewTextView().
@@ -2685,20 +2698,19 @@ func (ui *UI) showHelp() {
 	centered.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
 		switch ev.Key() {
 		case tcell.KeyEsc, tcell.KeyEnter:
-			ui.restoreMainLayout()
+			close()
 			return nil
 		case tcell.KeyRune:
 			switch ev.Rune() {
 			case 'q', 'Q', ' ':
-				ui.restoreMainLayout()
+				close()
 				return nil
 			}
 		}
 		return ev
 	})
 
-	ui.rootModal(centered)
-	ui.app.SetFocus(table)
+	return centered, table
 }
 
 // showModal displays a modal dialog

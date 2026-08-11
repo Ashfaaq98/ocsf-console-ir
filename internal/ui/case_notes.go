@@ -52,7 +52,7 @@ func renderNotes(table *tview.Table, notes []store.Note, t Theme) {
 			SetTextColor(t.TextPrimary).SetSelectable(false).SetExpansion(1))
 		table.SetCell(1, 0, tview.NewTableCell("").SetSelectable(false))
 		table.SetCell(2, 0, tview.NewTableCell(
-			"Press n to record a decision, or t to start from a template.").
+			"Press n to record a decision, or T to start from a template.").
 			SetTextColor(t.TextMuted).SetSelectable(false).SetExpansion(1))
 		return
 	}

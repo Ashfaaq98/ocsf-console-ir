@@ -253,7 +253,9 @@ func TestEmptyNotesNameTheNextAction(t *testing.T) {
 	table := tview.NewTable()
 	renderNotes(table, nil, themeDark())
 	got := tableCells(table)
-	for _, want := range []string{"No notes yet", "n to record", "t to start from a template"} {
+	// T, with the shift: lowercase t is the theme key, claimed by the case
+	// screen's own capture before any widget sees it.
+	for _, want := range []string{"No notes yet", "n to record", "T to start from a template"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the empty log is missing %q\n%s", want, got)
 		}
