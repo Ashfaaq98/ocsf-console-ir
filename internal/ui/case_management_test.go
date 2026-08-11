@@ -26,87 +26,6 @@ func (m *mockLLM) GenerateRecommendations(ctx context.Context, case_ store.Case,
 	return []string{"rec"}, nil
 }
 
-// TestToggleEventSelectionUsesCurrentTableSelection verifies that toggleEventSelection()
-// acts on the currently highlighted row in the table (via GetSelection), independent
-// of any cached index, and supports multi-select across rows reliably.
-func TestToggleEventSelectionUsesCurrentTableSelection(t *testing.T) {
-	tmp := "./test_cm_toggle.db"
-	_ = os.Remove(tmp)
-	defer os.Remove(tmp)
-
-	st, err := store.NewStore(tmp)
-	if err != nil {
-		t.Fatalf("store.NewStore: %v", err)
-	}
-	defer st.Close()
-
-	ctx := context.Background()
-	logger := logging.New(os.Stdout, logging.LevelDebug, "test")
-	ui := NewUI(ctx, st, &mockLLM{}, logger, "test")
-
-	c := store.Case{ID: "case-1", Title: "Test Case", Severity: "low", Status: "open"}
-	cm := NewCaseManagement(ui, c)
-
-	// Provide two events (ensure timestamps sort into a deterministic order: newest first)
-	e1 := store.Event{
-		ID:        "e1",
-		Timestamp: time.Now().Add(-1 * time.Minute),
-		EventType: "proc",
-		Severity:  "low",
-		Message:   "first event",
-		Host:      "host1",
-	}
-	e2 := store.Event{
-		ID:        "e2",
-		Timestamp: time.Now(),
-		EventType: "net",
-		Severity:  "high",
-		Message:   "second event",
-		Host:      "host2",
-	}
-
-	cm.events = []store.Event{e1, e2}
-	cm.selectedEventIDs = make(map[string]bool)
-	cm.updateEventsTable() // renders rows and applies sort (newest first)
-
-	// After sorting, cm.events[0] should be e2 (newest), cm.events[1] should be e1 (older).
-	if len(cm.events) != 2 {
-		t.Fatalf("expected 2 events in cm.events, got %d", len(cm.events))
-	}
-
-	// Select row 1 (first data row) and toggle selection.
-	// Header is row 0; data starts at 1.
-	cm.eventsTable.Select(1, 0)
-	cm.toggleEventSelection()
-	if len(cm.selectedEventIDs) != 1 {
-		t.Fatalf("expected 1 selected event after first toggle, got %d", len(cm.selectedEventIDs))
-	}
-	if !cm.selectedEventIDs[cm.events[0].ID] {
-		t.Fatalf("expected selected event to be %s", cm.events[0].ID)
-	}
-
-	// Move to row 2 (second data row) and toggle selection.
-	cm.eventsTable.Select(2, 0)
-	cm.toggleEventSelection()
-	if len(cm.selectedEventIDs) != 2 {
-		t.Fatalf("expected 2 selected events after second toggle, got %d", len(cm.selectedEventIDs))
-	}
-	if !cm.selectedEventIDs[cm.events[1].ID] {
-		t.Fatalf("expected selected event to include %s", cm.events[1].ID)
-	}
-
-	// Deselect the first row again to ensure idempotent toggle behavior.
-	cm.eventsTable.Select(1, 0)
-	cm.toggleEventSelection()
-	if len(cm.selectedEventIDs) != 1 {
-		t.Fatalf("expected 1 selected event after deselect, got %d", len(cm.selectedEventIDs))
-	}
-	if cm.selectedEventIDs[cm.events[0].ID] {
-		t.Fatalf("did not expect %s to remain selected", cm.events[0].ID)
-	}
-}
-
-// TestExtractIOCsAggregates ensures basic aggregation across IPs/domains/URLs/hashes.
 func TestExtractIOCsAggregates(t *testing.T) {
 	tmp := "./test_cm_iocs.db"
 	_ = os.Remove(tmp)
@@ -123,6 +42,9 @@ func TestExtractIOCsAggregates(t *testing.T) {
 	ui := NewUI(ctx, st, &mockLLM{}, logger, "test")
 	c := store.Case{ID: "case-2", Title: "IOC Case", Severity: "medium", Status: "open"}
 	cm := NewCaseManagement(ui, c)
+	// The constructor starts the case's reads; they paint the same widgets this
+	// test is about to write to.
+	awaitIdle(t, ui)
 
 	// Two events referencing the same IP and various domains/URLs/hashes
 	hashMD5 := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -228,6 +150,9 @@ func TestBuildCaseSummaryPromptBasic(t *testing.T) {
 
 	c := store.Case{ID: "case-3", Title: "Prompt Case", Severity: "high", Status: "open", AssignedTo: "analyst"}
 	cm := NewCaseManagement(ui, c)
+	// The constructor starts the case's reads; they paint the same widgets this
+	// test is about to write to.
+	awaitIdle(t, ui)
 
 	ev := store.Event{
 		ID:        "p1",
@@ -268,6 +193,9 @@ func TestFormatActionDescriptionCaseSummary(t *testing.T) {
 	ui := NewUI(ctx, st, &mockLLMChat{}, logger, "test")
 	c := store.Case{ID: "case-4", Title: "Fmt Case", Severity: "low", Status: "open"}
 	cm := NewCaseManagement(ui, c)
+	// The constructor starts the case's reads; they paint the same widgets this
+	// test is about to write to.
+	awaitIdle(t, ui)
 
 	got := cm.formatActionDescription("case_summary", nil)
 	if !strings.Contains(got, "Case summary") {

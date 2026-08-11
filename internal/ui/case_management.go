@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -67,6 +68,10 @@ type CaseManagement struct {
 	// back to the cluster whose header sits on it.
 	expandedTimeline string
 	timelineRows     map[int]string
+	// timelineEntries and timelineRowEntry let a key act on what the timeline
+	// cursor is on, rather than on the events table's selection.
+	timelineEntries  []timelineEntry
+	timelineRowEntry map[int]int
 	copilotPanel     *tview.Flex
 	// caseBody holds the tabs and, when open, the copilot drawer beside them.
 	caseBody          *tview.Flex
@@ -127,7 +132,6 @@ type CaseManagement struct {
 	caseFindings  []store.Finding
 
 	// State management
-	selectedEventIDs   map[string]bool
 	selectedEventIndex int
 	pinnedEvents       map[string]bool
 	chatHistory        []llm.ChatMessage
@@ -249,7 +253,6 @@ func NewCaseManagement(parentUI *UI, caseData store.Case) *CaseManagement {
 		theme:              parentUI.theme,
 		ctx:                parentUI.ctx,
 		caseData:           caseData,
-		selectedEventIDs:   make(map[string]bool),
 		selectedEventIndex: -1,
 		pinnedEvents:       make(map[string]bool),
 		chatHistory:        []llm.ChatMessage{},
@@ -262,6 +265,7 @@ func NewCaseManagement(parentUI *UI, caseData store.Case) *CaseManagement {
 	cm.setupLayout()
 	cm.setupKeybindings()
 	cm.loadCaseData()
+	cm.loadCaseFindings()
 
 	return cm
 }
@@ -272,7 +276,7 @@ func (cm *CaseManagement) setupLayout() {
 	cm.metadataBar = tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignLeft)
-	cm.metadataBar.SetBorder(true).SetTitle(" Case Details ").SetTitleAlign(tview.AlignLeft)
+	heavyBorder(cm.metadataBar.Box, "CASE", cm.theme)
 	cm.updateMetadataBar()
 
 	// Events table (left)
@@ -280,7 +284,7 @@ func (cm *CaseManagement) setupLayout() {
 		SetBorders(false).
 		SetSelectable(true, false).
 		SetFixed(1, 0) // Fixed header row
-	cm.eventsTable.SetBorder(true).SetTitle(" Events ").SetTitleAlign(tview.AlignLeft)
+	cm.eventsTable.SetBorder(true).SetTitle(" EVENTS ").SetTitleAlign(tview.AlignLeft)
 	cm.setupEventsTable()
 
 	// Findings the case is about
@@ -306,7 +310,7 @@ func (cm *CaseManagement) setupLayout() {
 		case tcell.KeyRune:
 			switch event.Rune() {
 			case 'p', 'P':
-				cm.pinCurrentEvent()
+				cm.pinTimelineEntry()
 				return nil
 			}
 		}
@@ -327,7 +331,7 @@ func (cm *CaseManagement) setupLayout() {
 	// Left side: Tabbed area (Overview, Events, Timeline, Artifacts/IOCs, Notes, Activity Log)
 	cm.buildTabs()
 	leftTabs := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(cm.tabBar, 2, 0, true).
+		AddItem(cm.tabBar, 1, 0, true).
 		AddItem(cm.tabsPages, 0, 1, false)
 
 	// Copilot is a drawer, not a column.
@@ -342,7 +346,7 @@ func (cm *CaseManagement) setupLayout() {
 
 	// Two-row metadata (increase height), then main content, then status bar
 	cm.layout = tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(cm.metadataBar, caseHeaderRows, 0, false).
+		AddItem(cm.metadataBar, caseHeaderHeight, 0, false).
 		AddItem(main, 0, 1, true).
 		AddItem(cm.statusBar, 1, 0, false)
 
@@ -357,6 +361,8 @@ func (cm *CaseManagement) setupLayout() {
 		if width != cm.lastWidth {
 			cm.lastWidth = width
 			cm.renderTabBar()
+			// The header lays its two halves against the same width.
+			cm.updateMetadataBar()
 		}
 		// The layout has no border, so its inner rect is its rect. Shrinking it
 		// here would inset the whole case screen by a column.
@@ -491,7 +497,7 @@ func (cm *CaseManagement) setupCopilotPanel() {
 	// Inline token estimate (one-line)
 	cm.copilotEstimate = tview.NewTextView().
 		SetDynamicColors(true)
-	cm.copilotEstimate.SetText("[gray]Est:[-] 0 tok  ~$0.0000")
+	cm.copilotEstimate.SetText(fmt.Sprintf("[%s]Est:[-] 0 tok  ~$0.0000", cm.theme.TagMuted))
 
 	// Input field
 	cm.copilotInput = tview.NewInputField().
@@ -518,7 +524,7 @@ func (cm *CaseManagement) setupCopilotPanel() {
 		AddItem(cm.copilotEstimate, 1, 0, false).
 		AddItem(cm.copilotInput, 1, 0, false)
 
-	cm.copilotPanel.SetBorder(true).SetTitle(" Copilot ").SetTitleAlign(tview.AlignLeft)
+	cm.copilotPanel.SetBorder(true).SetTitle(" COPILOT ").SetTitleAlign(tview.AlignLeft)
 }
 
 // setupNotesPanel creates a two-mode Notes panel (View/TextView vs Edit/TextArea) within a Pages container.
@@ -543,7 +549,10 @@ func (cm *CaseManagement) setupNotesPanel() {
 				// Start a new note (switch to editor)
 				cm.switchToNotesEdit()
 				return nil
-			case 't', 'T':
+			case 'T':
+				// Shift, because lowercase t is the theme key and the screen's
+				// own capture claims it before any widget sees it — the
+				// lowercase branch here could never fire.
 				cm.showNoteTemplates()
 				return nil
 			}
@@ -553,9 +562,9 @@ func (cm *CaseManagement) setupNotesPanel() {
 
 	// Editor (TextArea)
 	cm.notesEditor = tview.NewTextArea().
-		SetPlaceholder("Add case notes here... (Ctrl+S to save)")
+		SetPlaceholder("What you did, and why. Ctrl+S saves.")
 	// Minimal hint in title while editing
-	cm.notesEditor.SetBorder(true).SetTitle(" Notes (Esc cancel, Ctrl+S save) ").SetTitleAlign(tview.AlignLeft)
+	cm.notesEditor.SetBorder(true).SetTitle(" NOTE  ·  Ctrl+S saves  ·  Esc cancels ").SetTitleAlign(tview.AlignLeft)
 	cm.notesEditor.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		return cm.handleNotesInput(event)
 	})
@@ -634,12 +643,20 @@ func (cm *CaseManagement) setupKeybindings() {
 			case 'S':
 				cm.quickCycleStatus()
 				return nil
+			case 'o':
+				// The header's next-action prompt has named this key since it
+				// was written, and nothing handled it.
+				cm.takeOwnership()
+				return nil
 			case 'L':
 				// Global hotkey: Shift+L opens LLM Settings anywhere in Case Management
 				cm.showLLMSettingsModal()
 				return nil
-			case 'h', 'l':
-				cm.toggleLeftRightFocus()
+			case 'h':
+				cm.focusTabContent()
+				return nil
+			case 'l':
+				cm.focusCopilot()
 				return nil
 			case ']':
 				if !cm.copilotOpen {
@@ -672,8 +689,10 @@ func (cm *CaseManagement) setupKeybindings() {
 					cm.addNewNote()
 					return nil
 				}
+			case '?':
+				cm.showCaseHelp()
+				return nil
 			case 'r', 'R':
-				// Global refresh
 				cm.refreshCaseData()
 				return nil
 			}
@@ -803,7 +822,10 @@ func (cm *CaseManagement) discardNoteDraft() {
 // Data loading and management
 
 func (cm *CaseManagement) loadCaseData() {
-	go func() {
+	// Through the parent's tracked spawn where there is one, so a caller that
+	// is about to close the database — which in practice means a test — can
+	// wait for the read to finish. A bare goroutine is unobservable.
+	work := func() {
 		if cm.ctx.Err() != nil {
 			return
 		}
@@ -855,7 +877,7 @@ func (cm *CaseManagement) loadCaseData() {
 		}
 
 		// Update UI on main thread
-		cm.app.QueueUpdateDraw(func() {
+		cm.queueUpdate(func() {
 			cm.baseEvents = events
 			cm.events = events
 			cm.pinnedEvents = pinned
@@ -873,12 +895,24 @@ func (cm *CaseManagement) loadCaseData() {
 			// arrived; without this it reports "no note yet" on a case with
 			// notes.
 			cm.updateMetadataBar()
-			// IOCs render will be computed lazily/placeholder
-			cm.renderIOCs()
+			// The strip carries each tab's count, so it is stale until the
+			// data it counts has landed.
+			cm.renderTabBar()
 
-			cm.updateStatus(fmt.Sprintf("Loaded %d events for case %s", len(events), cm.caseData.Title))
+			// What was read, not one of the six things. This line was written
+			// from the events tab's point of view and printed on every tab, so
+			// pressing r on Activity reported a number of events.
+			cm.updateStatus(fmt.Sprintf("Case refreshed · %s · %s · %s",
+				plural(len(events), "event"), plural(len(notes), "note"),
+				plural(len(audits), "activity entry")))
 		})
-	}()
+	}
+
+	if cm.parentUI != nil {
+		cm.parentUI.spawnLoad(work)
+		return
+	}
+	go work()
 }
 
 // reloadCaseRow re-reads the case so denormalized counts and analyst fields
@@ -898,59 +932,6 @@ func (cm *CaseManagement) refreshCaseData() {
 }
 
 // UI update methods
-
-func (cm *CaseManagement) updateMetadataBar() {
-	lbl := cm.theme.TagWarning
-	val := cm.theme.TagTextPrimary
-	acc := cm.theme.TagAccent
-
-	// Shorten case ID (first 6 chars) and owner fallback
-	shortID := cm.caseData.ID
-	if len(shortID) > 10 {
-		shortID = shortID[:10]
-	}
-	owner := strings.TrimSpace(cm.caseData.AssignedTo)
-	if owner == "" {
-		owner = "Unassigned"
-	}
-
-	verdict := cm.caseData.VerdictName()
-	if verdict == "" {
-		verdict = "—"
-	}
-
-	// Two rows of fact, and a third only when there is something to do about
-	// it. The third row used to be a list of hotkeys, two of which named keys
-	// that never worked — digits are globally reserved and never reach a case.
-	line1 := fmt.Sprintf(" [%s]CASE[-]  ·  [%s:-:b]%s[-:-:-]        %s  %s",
-		lbl, acc, tview.Escape(cm.caseData.Title),
-		formatSeverityBadge(cm.caseData.Severity, cm.theme),
-		formatCaseStatus(cm.caseData.Status, cm.theme))
-
-	line2 := fmt.Sprintf(" [%s]owner[-] [%s]%s[-] · [%s]%s old[-] · [%s]%d findings[-] · [%s]%d evidence[-] · [%s]verdict %s[-]",
-		lbl, val, tview.Escape(owner),
-		val, renderRelativeTime(cm.caseData.CreatedAt),
-		val, cm.caseData.FindingCount,
-		val, cm.caseData.EventCount,
-		val, tview.Escape(verdict))
-
-	line3 := cm.nextActionPrompt()
-
-	text := line1 + "\n" + line2
-	rows := caseHeaderRows
-	if line3 != "" {
-		text += "\n" + line3
-		rows++
-	}
-	cm.metadataBar.SetText(text)
-
-	// The header grows by a row when the prompt is present. Fixed at four, the
-	// prompt was written and then clipped by the border — present in the widget
-	// and invisible on screen.
-	if cm.layout != nil {
-		cm.layout.ResizeItem(cm.metadataBar, rows, 0)
-	}
-}
 
 func (cm *CaseManagement) updateEventsTable() {
 	// Clear existing rows (keep header)
@@ -1574,24 +1555,8 @@ func (cm *CaseManagement) buildTabs() {
 				cm.deleteSelectedManualIOCs()
 				return nil
 			case ' ':
-				// toggle selection for manual IOC rows
-				row, _ := cm.iocsTable.GetSelection()
-				if row > 0 && cm.iocRowToManualID != nil {
-					if id, ok := cm.iocRowToManualID[row]; ok && id != "" {
-						if cm.selectedManualIOCIDs == nil {
-							cm.selectedManualIOCIDs = map[string]bool{}
-						}
-						if cm.selectedManualIOCIDs[id] {
-							delete(cm.selectedManualIOCIDs, id)
-							cm.updateStatus("IOC deselected")
-						} else {
-							cm.selectedManualIOCIDs[id] = true
-							cm.updateStatus("IOC selected")
-						}
-						cm.renderIOCs()
-						return nil
-					}
-				}
+				cm.toggleManualIOC()
+				return nil
 			}
 		}
 		return event
@@ -1618,26 +1583,33 @@ func (cm *CaseManagement) buildTabs() {
 	}
 	cm.tabsPages.SwitchToPage(caseTabPages[cm.activeTab].page)
 
-	// Initial renders
+	// Initial renders. The findings query is started by the constructor, once
+	// the layout exists — reading into widgets that are still being built is
+	// safe only by accident.
 	cm.renderBriefing()
 	cm.renderCaseFindings()
-	cm.loadCaseFindings()
 	cm.renderIOCs()
 	cm.renderActivityLog()
 
 	cm.renderTabBar()
 }
 
-// caseTabStripWidth is the columns the full framed strip needs.
-func caseTabStripWidth(names []string, active int) int {
-	w := 0
-	for i, name := range names {
-		// " ╭─ name ─╮ " and " ┌ name ┐ " are 9 and 7 columns of frame.
-		if i == active {
-			w += len([]rune(name)) + 9
-		} else {
-			w += len([]rune(name)) + 7
+// Spacing inside the bar. Two columns either side of a label give each segment
+// room to be its own thing; the separator between them takes one more.
+const (
+	caseTabIndent = 1
+	caseTabPad    = 2
+	caseTabRuleW  = 1
+)
+
+// caseTabStripWidth is the columns the full strip needs for these labels.
+func caseTabStripWidth(labels []string) int {
+	w := caseTabIndent
+	for i, label := range labels {
+		if i > 0 {
+			w += caseTabRuleW
 		}
+		w += len([]rune(label)) + 2*caseTabPad
 	}
 	return w
 }
@@ -1660,6 +1632,11 @@ func (cm *CaseManagement) barWidth() int {
 	// Last resort, and only once the widget has been drawn at least once: an
 	// undrawn TextView answers with a default that has nothing to do with this
 	// screen.
+	// The header measures itself against this too, and it is painted while the
+	// layout is still being built — before the tab bar exists.
+	if cm.tabBar == nil {
+		return 0
+	}
 	if _, _, w, _ := cm.tabBar.GetInnerRect(); w > caseTabBarMinRect {
 		return w
 	}
@@ -1671,70 +1648,145 @@ func (cm *CaseManagement) barWidth() int {
 // narrow, and an undrawn TextView reports 15.
 const caseTabBarMinRect = 20
 
+// caseTabCount is how many records a tab holds, or -1 where a count says
+// nothing.
+//
+// Briefing is one document, so a number beside it would be noise. The rest are
+// lists, and how full they are is exactly what an analyst wants to know before
+// deciding where to look — "Findings 3 · Events 128 · Notes 0" is a shape of the
+// case, readable without pressing Tab seven times.
+func (cm *CaseManagement) caseTabCount(idx int) int {
+	switch idx {
+	case tabFindings:
+		return len(cm.caseFindings)
+	case tabEvents:
+		return len(cm.events)
+	case tabTimeline:
+		return len(cm.timelineEntries)
+	case tabIOCs:
+		return len(cm.caseIndicators)
+	case tabNotes:
+		return len(cm.notes)
+	case tabActivity:
+		return len(cm.auditLog)
+	}
+	return -1
+}
+
+// caseTabParts is a tab's name and its count, kept apart so each can be drawn
+// in its own weight — "Findings 3" in one colour reads as a two-word name.
+func (cm *CaseManagement) caseTabParts(idx int) (name, count string) {
+	name = caseTabNames[idx]
+	if n := cm.caseTabCount(idx); n >= 0 {
+		count = strconv.Itoa(n)
+	}
+	return name, count
+}
+
+// caseTabLabel is a tab's text, for measuring the strip against the terminal.
+func (cm *CaseManagement) caseTabLabel(idx int) string {
+	name, count := cm.caseTabParts(idx)
+	if count == "" {
+		return name
+	}
+	return name + " " + count
+}
+
+// renderTabBar draws the tab strip.
+//
+// A bar, not a line of words. The strip is one row of raised surface running
+// the full width, each tab a segment on it, separated by a hairline, with the
+// tab you are on filled in the accent. The bar is the element; the tabs are
+// parts of it — which is what makes six inactive tabs read as six things you
+// can go to rather than as a sentence.
+//
+// It has been through two worse forms. The first drew a little box around each
+// tab, " ┌ Events ┐ ": seven boxes read as seven separate widgets, the corner
+// glyphs cost four columns each and carried nothing, and the active tab was
+// marked only by the shape of its corners. The second dropped the boxes for
+// plain text and an accent rule on a second row — but text floating on the app
+// background has no edges, so the tabs ran together, and the rule row was a
+// dozen columns of ink and a hundred and eighty of nothing. This form spends
+// one row instead of two and gives every tab an edge.
 func (cm *CaseManagement) renderTabBar() {
-	// Browser-style framed tabs using Unicode line characters.
-	// Active tab appears "brought forward" by leaving an underline gap beneath it.
 	names := caseTabNames
 	active := cm.activeTab
 	if active < 0 || active >= len(names) {
 		active = 0
 	}
 
-	// The full strip needs about 100 columns. Below that it would truncate
-	// mid-word and drop the last tabs off the end entirely — a bar that hides
-	// where you can go is worse than one that admits it does not fit. So the
-	// narrow form states position and how to move instead.
-	//
+	labels := make([]string, len(names))
+	for i := range names {
+		labels[i] = cm.caseTabLabel(i)
+	}
+
 	// The width comes from the terminal, not from the widget. tview reports a
 	// primitive's rect a frame late, and an undrawn TextView answers 15 — so
 	// every case opened on the compact form, on a screen with room for the
 	// whole strip, and only corrected itself once something re-rendered the
 	// bar. Which is why the tabs appeared the first time you pressed Tab.
-	if barWidth := cm.barWidth(); barWidth > 0 && barWidth < caseTabStripWidth(names, active) {
+	barWidth := cm.barWidth()
+
+	// Below the width the strip needs it would truncate mid-word and drop the
+	// last tabs off the end entirely — a bar that hides where you can go is
+	// worse than one that admits it does not fit. The narrow form states
+	// position and how to move instead.
+	if barWidth > 0 && barWidth < caseTabStripWidth(labels) {
 		cm.tabBar.SetText(fmt.Sprintf(
 			" [::b]%s[-]  [%s]%d/%d · Tab next · Shift+Tab back[-]",
-			names[active], cm.theme.TagMuted, active+1, len(names)))
+			labels[active], cm.theme.TagMuted, active+1, len(names)))
 		return
 	}
 
-	// Build raw top pieces (no color tags) to compute visible widths.
-	topRaw := make([]string, len(names))
-	widths := make([]int, len(names))
-	for i, name := range names {
-		if i == active {
-			topRaw[i] = fmt.Sprintf(" ╭─ %s ─╮ ", name) // active: rounded corners and spacing
-		} else {
-			topRaw[i] = fmt.Sprintf(" ┌ %s ┐ ", name) // inactive: squared/flat look
-		}
-		widths[i] = len([]rune(topRaw[i]))
+	raised := tagColor(cm.theme.SurfaceRaised)
+	rule := "│"
+	if !supportsUnicode() {
+		rule = "|"
 	}
 
-	// Compose colored top line.
-	var topLine strings.Builder
-	for i, piece := range topRaw {
-		if i == active {
-			topLine.WriteString("[::b]") // bold active
-			topLine.WriteString(piece)
-			topLine.WriteString("[-]")
-		} else {
-			topLine.WriteString(fmt.Sprintf("[%s]", cm.theme.TagMuted)) // dim inactive
-			topLine.WriteString(piece)
-			topLine.WriteString("[-]")
+	var strip strings.Builder
+	strip.WriteString(fmt.Sprintf("[:%s]%s", raised, strings.Repeat(" ", caseTabIndent)))
+
+	for i := range labels {
+		if i > 0 {
+			// No hairline against the filled segment: the fill is already an
+			// edge, and a rule beside it reads as a seam.
+			if i == active || i-1 == active {
+				strip.WriteString(fmt.Sprintf("[:%s] ", raised))
+			} else {
+				strip.WriteString(fmt.Sprintf("[%s:%s]%s",
+					tagColor(cm.theme.Border), raised, rule))
+			}
 		}
+
+		name, count := cm.caseTabParts(i)
+		if i == active {
+			// Foreground taken from the surface behind the strip, so the label
+			// sits *in* the accent rather than on top of it. The count drops
+			// the bold rather than the colour: on a filled segment anything
+			// quieter than the label stops being legible.
+			strip.WriteString(caseTabSegment(
+				tagColor(cm.theme.Surface), tagColor(cm.theme.Accent), "b", "", name, count))
+			continue
+		}
+		strip.WriteString(caseTabSegment(cm.theme.TagMuted, raised, "", "d", name, count))
 	}
 
-	// Compose underline line: continuous for inactive tabs, gap under active tab.
-	var underline strings.Builder
-	for i := range names {
-		w := widths[i]
-		if i == active {
-			underline.WriteString(strings.Repeat(" ", w))
-		} else {
-			underline.WriteString(strings.Repeat("─", w))
-		}
-	}
+	// The rest of the row is bar, not background: the strip ends where the
+	// terminal does.
+	strip.WriteString(fmt.Sprintf("[:%s]", raised))
+	cm.tabBar.SetText(strip.String())
+}
 
-	cm.tabBar.SetText(topLine.String() + "\n" + underline.String())
+// caseTabSegment draws one segment of the bar: padding, the tab's name, and its
+// count in a quieter weight.
+func caseTabSegment(fg, bg, attrs, countAttrs, name, count string) string {
+	pad := strings.Repeat(" ", caseTabPad)
+	label := fmt.Sprintf("[%s:%s:%s]%s%s", fg, bg, attrs, pad, name)
+	if count != "" {
+		label += fmt.Sprintf(" [%s:%s:%s]%s", fg, bg, countAttrs, count)
+	}
+	return label + fmt.Sprintf("[%s:%s:%s]%s[-:-:-]", fg, bg, attrs, pad)
 }
 
 // wrapTab keeps a tab index inside the tab list, wrapping at both ends.
@@ -1759,6 +1811,32 @@ func (cm *CaseManagement) switchTab(idx int) {
 		cm.loadCaseFindings()
 	}
 	cm.renderTabBar()
+}
+
+// focusTabContent is `h`: move left, to the tab you are on.
+//
+// h and l both toggled, so h — which means "left" to everyone who has used vi —
+// jumped right into the copilot, and pressing it again to undo that only worked
+// because the toggle happened to be symmetric. They are directions now.
+func (cm *CaseManagement) focusTabContent() {
+	if cm.activeTab >= 0 && cm.activeTab < len(caseTabPages) {
+		cm.setFocusPane(caseTabPages[cm.activeTab].focus)
+		return
+	}
+	cm.setFocusPane(FocusEvents)
+}
+
+// focusCopilot is `l`: move right, to the copilot — if it is open.
+//
+// With the panel closed there is nothing to the right, so the key says so
+// rather than focusing a hidden widget and reporting "Focus: Copilot" over a
+// pane that is not on screen.
+func (cm *CaseManagement) focusCopilot() {
+	if !cm.copilotOpen {
+		cm.updateStatus("The copilot is closed — ] opens it")
+		return
+	}
+	cm.setFocusPane(FocusCopilot)
 }
 
 func (cm *CaseManagement) toggleLeftRightFocus() {
@@ -1805,9 +1883,11 @@ func (cm *CaseManagement) updateStatus(message string) {
 		sep, message,
 	)
 
-	// Only show selection info when there is at least one selection
-	if len(cm.selectedEventIDs) > 0 {
-		statusText = fmt.Sprintf("%s%s[%s]%d[-] selected", statusText, sep, acc, len(cm.selectedEventIDs))
+	// The pinned count, which is this screen's selection: it is what the
+	// briefing lists, what the report quotes and what `e` exports. The badge
+	// used to count a selection map nothing wrote, so it never appeared.
+	if n := len(cm.pinnedEvents); n > 0 {
+		statusText = fmt.Sprintf("%s%s[%s]%d[-] pinned", statusText, sep, acc, n)
 	}
 
 	// Standard navigation hints
@@ -1834,7 +1914,7 @@ func (cm *CaseManagement) notesViewStatusText() string {
 	sep := fmt.Sprintf(" [%s]|[-] ", mut)
 	analyst := cm.getCurrentAnalyst()
 	return fmt.Sprintf(
-		"[%s]%s[-]%s[%s]Analyst[-]: %s%s[%s]Focus[-]: Notes%s n=new note • Ctrl+s=save • Tab=Copilot%s[%s]Esc[-]=Exit Case",
+		"[%s]%s[-]%s[%s]Analyst[-]: %s%s[%s]Focus[-]: Notes%s n new · T template · Tab next tab%s[%s]Esc[-] leaves",
 		mut, ts,
 		sep, acc, analyst,
 		sep, acc,
@@ -1850,7 +1930,7 @@ func (cm *CaseManagement) notesEditStatusText() string {
 	sep := fmt.Sprintf(" [%s]|[-] ", mut)
 	analyst := cm.getCurrentAnalyst()
 	return fmt.Sprintf(
-		"[%s]%s[-]%s[%s]Analyst[-]: %s%s[%s]Focus[-]: Notes (editing)%s Ctrl+s=save • Esc=cancel • Tab=Copilot",
+		"[%s]%s[-]%s[%s]Analyst[-]: %s%s[%s]Focus[-]: Notes (editing)%s Ctrl+S saves · Esc cancels · Tab opens the copilot",
 		mut, ts,
 		sep, acc, analyst,
 		sep, acc,
@@ -1904,24 +1984,6 @@ func (cm *CaseManagement) onEventSelected(row int) {
 	_ = event
 	cm.updateTimelineView()
 	cm.updateStatus(fmt.Sprintf("Selected event: %s", truncate(event.Message, 80)))
-}
-
-func (cm *CaseManagement) toggleEventSelection() {
-	// Use the table's authoritative current selection so Space toggles the highlighted row.
-	row, _ := cm.eventsTable.GetSelection()
-	if row <= 0 || row-1 >= len(cm.events) {
-		return
-	}
-	idx := row - 1
-	event := cm.events[idx]
-	if cm.selectedEventIDs[event.ID] {
-		delete(cm.selectedEventIDs, event.ID)
-		cm.updateStatus("Event deselected")
-	} else {
-		cm.selectedEventIDs[event.ID] = true
-		cm.updateStatus("Event selected")
-	}
-	cm.updateEventsTable()
 }
 
 func (cm *CaseManagement) pinCurrentEvent() {
@@ -2087,7 +2149,8 @@ func (cm *CaseManagement) updateTokenEstimate(text string) {
 	}
 	tokens := cm.llm.EstimateTokens(text)
 	cost := float64(tokens) * 0.002 / 1000.0
-	cm.copilotEstimate.SetText(fmt.Sprintf("[gray]Est:[-] %d tok  ~$%.4f", tokens, cost))
+	cm.copilotEstimate.SetText(fmt.Sprintf("[%s]Est:[-] %d tok  ~$%.4f",
+		cm.theme.TagMuted, tokens, cost))
 }
 
 // runCaseSummary assembles a prompt from case metadata, events, and enrichments,
@@ -2553,51 +2616,102 @@ func (cm *CaseManagement) cycleFocus() {
 	cm.toggleLeftRightFocus()
 }
 
-func (cm *CaseManagement) setFocusPane(pane int) {
-	cm.focusedPane = pane
+// paneWidget is the widget that owns the keyboard for a pane.
+//
+// One table, because the answer was written out twice: setFocusPane knew about
+// the Findings tab and popModalRoot's copy did not, so closing a finding left
+// the focus on a primitive that was no longer in the tree and the arrow keys
+// stopped working until you changed tabs. A pane added later cannot go missing
+// from one of two lists any more.
+func (cm *CaseManagement) paneWidget(pane int) tview.Primitive {
+	if w := cm.paneWidgetStrict(pane); w != nil {
+		return w
+	}
+	// The events table is always built, so the keyboard always lands somewhere.
+	if cm.eventsTable != nil {
+		return cm.eventsTable
+	}
+	return nil
+}
+
+// paneWidgetStrict is the same answer without the fallback: nil means this pane
+// has no widget, which a styling pass needs to know and a focus move does not.
+func (cm *CaseManagement) paneWidgetStrict(pane int) tview.Primitive {
 	switch pane {
+	case FocusEvents:
+		if cm.eventsTable != nil {
+			return cm.eventsTable
+		}
 	case FocusOverview:
 		if cm.overviewView != nil {
-			cm.app.SetFocus(cm.overviewView)
+			return cm.overviewView
 		}
-		cm.updateStatus("Focus: Overview")
 	case FocusFindings:
 		if cm.findingsTable != nil {
-			cm.app.SetFocus(cm.findingsTable)
+			return cm.findingsTable
 		}
-		cm.updateStatus("Focus: Findings - Enter=open, the findings this case is about")
-	case FocusEvents:
-		cm.app.SetFocus(cm.eventsTable)
-		cm.updateStatus("Focus: Events - Space=select, e=export, f/F=filter/clear")
 	case FocusTimeline:
-		cm.app.SetFocus(cm.timelineView)
-		cm.updateStatus("Focus: Timeline - p=pin")
+		if cm.timelineView != nil {
+			return cm.timelineView
+		}
 	case FocusIOCs:
 		if cm.iocsTable != nil {
-			cm.app.SetFocus(cm.iocsTable)
+			return cm.iocsTable
 		}
-		cm.updateStatus("Focus: IOCs - +add d=delete Space=select Up/Down=browse")
 	case FocusNotes:
-		if cm.isEditingNotes {
-			if cm.notesEditor != nil {
-				cm.app.SetFocus(cm.notesEditor)
-			}
-			// Edit mode status (themed)
-			cm.setStatusDirect(cm.notesEditStatusText())
-		} else {
-			if cm.notesTable != nil {
-				cm.app.SetFocus(cm.notesTable)
-			}
-			// View mode status (themed)
-			cm.setStatusDirect(cm.notesViewStatusText())
+		if cm.isEditingNotes && cm.notesEditor != nil {
+			return cm.notesEditor
+		}
+		if cm.notesTable != nil {
+			return cm.notesTable
 		}
 	case FocusActivity:
 		if cm.activityTable != nil {
-			cm.app.SetFocus(cm.activityTable)
+			return cm.activityTable
 		}
+	case FocusCopilot:
+		if cm.copilotInput != nil {
+			return cm.copilotInput
+		}
+	}
+	return nil
+}
+
+// focusCurrentPane puts the keyboard back where it was, without touching the
+// status line — used when returning from a modal, which should not narrate.
+func (cm *CaseManagement) focusCurrentPane() {
+	if w := cm.paneWidget(cm.focusedPane); w != nil {
+		cm.app.SetFocus(w)
+	}
+}
+
+func (cm *CaseManagement) setFocusPane(pane int) {
+	cm.focusedPane = pane
+	if w := cm.paneWidget(pane); w != nil {
+		cm.app.SetFocus(w)
+	}
+	switch pane {
+	case FocusOverview:
+		cm.updateStatus("Focus: Overview")
+	case FocusFindings:
+		cm.updateStatus("Focus: Findings - Enter=open, the findings this case is about")
+	case FocusEvents:
+		cm.updateStatus("Focus: Events · Space pin as evidence · e export · f/F filter/clear")
+	case FocusTimeline:
+		cm.updateStatus("Focus: Timeline - p=pin")
+	case FocusIOCs:
+		// Arrow keys move in every table; saying so spends the line that should
+		// name the keys nobody could guess. And d only removes what you added.
+		cm.updateStatus("Focus: Indicators · + add · Space select your own · d delete selected · p pivot (leaves the case)")
+	case FocusNotes:
+		if cm.isEditingNotes {
+			cm.setStatusDirect(cm.notesEditStatusText())
+		} else {
+			cm.setStatusDirect(cm.notesViewStatusText())
+		}
+	case FocusActivity:
 		cm.updateStatus("Focus: Activity - r=refresh")
 	case FocusCopilot:
-		cm.app.SetFocus(cm.copilotInput)
 		cm.updateStatus("Focus: Copilot - Type message, Enter=send, [ / ] persona")
 	}
 	cm.updateFocusStyles()
@@ -2638,6 +2752,8 @@ func (cm *CaseManagement) severityTag(severity string) string {
 func (cm *CaseManagement) applyTheme() {
 	// Apply theme colors to all components
 	cm.metadataBar.SetBackgroundColor(cm.theme.Surface)
+	// The border draws itself, so it holds the theme it was installed with.
+	heavyBorder(cm.metadataBar.Box, "CASE", cm.theme)
 	cm.metadataBar.SetTextColor(cm.theme.TextPrimary)
 
 	cm.eventsTable.SetBackgroundColor(cm.theme.Surface)
@@ -2654,21 +2770,53 @@ func (cm *CaseManagement) applyTheme() {
 
 	cm.copilotPanel.SetBackgroundColor(cm.theme.Surface)
 
-	// Copilot sub-controls
+	// The copilot's own widgets, all of them.
+	//
+	// The drawer is built once and coloured from this one pass, and three of
+	// its parts were never in it: the provider line, the page container that
+	// holds the suggestions and the transcript, and the dropdown's own box. A
+	// widget with no background falls back to tview's global default, which is
+	// black — which is why the panel had dark bands across it on every palette
+	// whose surface is not black.
 	if cm.copilotDropdown != nil {
+		cm.copilotDropdown.SetBackgroundColor(cm.theme.Surface)
 		cm.copilotDropdown.SetFieldBackgroundColor(cm.theme.Surface)
 		cm.copilotDropdown.SetFieldTextColor(cm.theme.TextPrimary)
-		cm.copilotDropdown.SetLabelColor(cm.theme.TextPrimary)
+		cm.copilotDropdown.SetLabelColor(cm.theme.TextMuted)
+		// The list that drops down is a widget of its own, and tview styles it
+		// its own blue unless told otherwise.
+		cm.copilotDropdown.SetListStyles(
+			tcell.StyleDefault.Background(cm.theme.SurfaceRaised).Foreground(cm.theme.TextPrimary),
+			tcell.StyleDefault.Background(cm.theme.SelectionBg).Foreground(cm.theme.SelectionFg))
+	}
+	if cm.copilotProvider != nil {
+		cm.copilotProvider.SetBackgroundColor(cm.theme.Surface)
+		cm.copilotProvider.SetTextColor(cm.theme.TextMuted)
+		// The text carries its own colour tag, written when the panel was
+		// built under whichever theme was then in force.
+		cm.copilotProvider.SetText(fmt.Sprintf("[%s]%s[-]",
+			cm.theme.TagMuted, copilotProviderLine(activeLLMProvider(), true)))
+	}
+	if cm.copilotPages != nil {
+		cm.copilotPages.SetBackgroundColor(cm.theme.Surface)
 	}
 
 	cm.copilotTranscript.SetBackgroundColor(cm.theme.Surface)
+	cm.copilotTranscript.SetSelectedStyle(tcell.StyleDefault.
+		Background(cm.theme.SelectionBg).Foreground(cm.theme.SelectionFg))
 	if cm.copilotSuggestions != nil {
 		cm.copilotSuggestions.SetBackgroundColor(cm.theme.Surface)
+		cm.copilotSuggestions.SetSelectedStyle(tcell.StyleDefault.
+			Background(cm.theme.SelectionBg).Foreground(cm.theme.SelectionFg))
 	}
 
 	if cm.copilotEstimate != nil {
 		cm.copilotEstimate.SetBackgroundColor(cm.theme.Surface)
 		cm.copilotEstimate.SetTextColor(cm.theme.TextPrimary)
+		if cm.copilotInput != nil {
+			// Repaint the line so its tag picks up the new palette.
+			cm.updateTokenEstimate(cm.copilotInput.GetText())
+		}
 	}
 
 	if cm.notesTable != nil {
@@ -2682,7 +2830,9 @@ func (cm *CaseManagement) applyTheme() {
 
 	// Tab bar styling
 	if cm.tabBar != nil {
-		cm.tabBar.SetBackgroundColor(cm.theme.Surface)
+		// Raised, so the strip reads as a bar across the screen rather than as
+		// text floating on the same ground as everything else.
+		cm.tabBar.SetBackgroundColor(cm.theme.SurfaceRaised)
 		cm.tabBar.SetTextColor(cm.theme.TextPrimary)
 	}
 
@@ -2696,7 +2846,7 @@ func (cm *CaseManagement) applyTheme() {
 	for _, box := range []*tview.Box{
 		boxOf(cm.layout), boxOf(cm.caseBody), boxOf(cm.tabsPages),
 		boxOf(cm.overviewView), boxOf(cm.activityTable),
-		boxOf(cm.notesViewer), boxOf(cm.copilotInput),
+		boxOf(cm.notesViewer),
 	} {
 		if box != nil {
 			box.SetBackgroundColor(cm.theme.Bg)
@@ -2714,39 +2864,23 @@ func (cm *CaseManagement) applyTheme() {
 		cm.notesViewer.SetBackgroundColor(cm.theme.Surface)
 	}
 	if cm.copilotInput != nil {
+		// On the panel's own surface. It was set to Bg inside a Surface drawer,
+		// so the ask line drew as a darker band across the bottom of the panel.
 		cm.copilotInput.SetFieldBackgroundColor(cm.theme.Surface)
 		cm.copilotInput.SetFieldTextColor(cm.theme.TextPrimary)
 		cm.copilotInput.SetLabelColor(cm.theme.TextMuted)
-		cm.copilotInput.SetBackgroundColor(cm.theme.Bg)
+		cm.copilotInput.SetBackgroundColor(cm.theme.Surface)
 	}
 
 	cm.statusBar.SetBackgroundColor(cm.theme.Surface)
 	cm.statusBar.SetTextColor(cm.theme.TextPrimary)
 
-	// Apply borders
-	cm.eventsTable.SetBorderColor(cm.theme.Border)
-	if cm.findingsTable != nil {
-		cm.findingsTable.SetBorderColor(cm.theme.Border)
-	}
-	cm.timelineView.SetBorderColor(cm.theme.Border)
-	cm.copilotPanel.SetBorderColor(cm.theme.Border)
-	if cm.notesTable != nil {
-		cm.notesTable.SetBorderColor(cm.theme.Border)
-	}
-	if cm.notesEditor != nil {
-		cm.notesEditor.SetBorderColor(cm.theme.Border)
-	}
-	if cm.overviewView != nil {
-		cm.overviewView.SetBorderColor(cm.theme.Border)
-	}
-	if cm.iocsTable != nil {
-		cm.iocsTable.SetBorderColor(cm.theme.Border)
-	}
 	if cm.activityTable != nil {
-		cm.activityTable.SetBorderColor(cm.theme.Border)
 		cm.activityTable.SetSelectedStyle(tcell.StyleDefault.
 			Background(cm.theme.SelectionBg).Foreground(cm.theme.SelectionFg))
 	}
+	// Borders and titles are updateFocusStyles', below: one pass over the panes
+	// rather than a second list here that has to be kept in step with it.
 
 	// Re-render the findings table so its cell colours follow the theme; the
 	// widget-level calls above only restyle the frame.
@@ -2763,181 +2897,13 @@ func (cm *CaseManagement) applyTheme() {
 
 // Modal and action handlers
 
-func (cm *CaseManagement) addEventsToCase() {
-	if len(cm.selectedEventIDs) == 0 {
-		cm.updateStatus("No events selected to add to case")
-		return
-	}
-
-	cm.showAddToCaseModal()
-}
-
-func (cm *CaseManagement) showCreateCaseModal() {
-	form := tview.NewForm()
-	form.SetTitle(" Create New Case ")
-	form.SetBorder(true)
-	cm.applyModalTheme(form)
-
-	var title, description, assignedTo string
-	severity := "medium"
-
-	form.AddInputField("Title", "", 50, nil, func(text string) {
-		title = text
-	})
-	form.AddTextArea("Description", "", 50, 3, 0, func(text string) {
-		description = text
-	})
-	form.AddDropDown("Severity", []string{"low", "medium", "high", "critical"}, 1, func(option string, optionIndex int) {
-		severity = option
-	})
-	form.AddInputField("Assigned To", "", 30, nil, func(text string) {
-		assignedTo = text
-	})
-
-	form.AddButton("Create", func() {
-		if title == "" {
-			cm.updateStatus("Title is required")
-			return
-		}
-		cm.executeCreateCase(title, description, severity, assignedTo)
-		cm.popModalRoot()
-	})
-	form.AddButton("Cancel", func() {
-		cm.popModalRoot()
-	})
-
-	cm.pushModalRoot(form)
-}
-
-func (cm *CaseManagement) showAddToCaseModal() {
-	// Get list of cases for selection
-	go func() {
-		cases, err := cm.store.ListCases(cm.ctx)
-		if err != nil {
-			cm.app.QueueUpdate(func() {
-				cm.updateStatus(fmt.Sprintf("Error loading cases: %v", err))
-			})
-			return
-		}
-
-		cm.app.QueueUpdate(func() {
-			cm.displayAddToCaseModal(cases)
-		})
-	}()
-}
-
-func (cm *CaseManagement) displayAddToCaseModal(cases []store.Case) {
-	if len(cases) == 0 {
-		cm.updateStatus("No other cases available")
-		return
-	}
-
-	form := tview.NewForm()
-	form.SetTitle(" Add Events to Case ")
-	form.SetBorder(true)
-	cm.applyModalTheme(form)
-
-	caseOptions := make([]string, len(cases))
-	for i, c := range cases {
-		caseOptions[i] = fmt.Sprintf("%s (ID: %s)", c.Title, c.ID)
-	}
-
-	selectedCaseIndex := 0
-	form.AddDropDown("Target Case", caseOptions, 0, func(option string, optionIndex int) {
-		selectedCaseIndex = optionIndex
-	})
-
-	form.AddButton("Add Events", func() {
-		if selectedCaseIndex >= len(cases) {
-			return
-		}
-		targetCase := cases[selectedCaseIndex]
-		cm.executeAddToCase(targetCase.ID)
-		cm.popModalRoot()
-	})
-	form.AddButton("Cancel", func() {
-		cm.popModalRoot()
-	})
-
-	cm.pushModalRoot(form)
-}
-
-func (cm *CaseManagement) executeCreateCase(title, description, severity, assignedTo string) {
-	cm.updateStatus("Creating case...")
-
-	go func() {
-		// Create the case
-		newCase := store.Case{
-			Title:       title,
-			Description: description,
-			Severity:    severity,
-			Status:      "open",
-			AssignedTo:  assignedTo,
-		}
-
-		caseID, err := cm.store.CreateOrUpdateCase(cm.ctx, newCase)
-		if err != nil {
-			cm.app.QueueUpdate(func() {
-				cm.updateStatus(fmt.Sprintf("Error creating case: %v", err))
-			})
-			return
-		}
-
-		// Assign selected events to the new case
-		successCount := 0
-		for eventID := range cm.selectedEventIDs {
-			if err := cm.store.AssignEventToCase(cm.ctx, eventID, caseID); err == nil {
-				successCount++
-			}
-		}
-
-		// Update case event count
-		_ = cm.store.UpdateCaseEventCount(cm.ctx, caseID)
-
-		// Log the action
-		_ = cm.store.LogCaseAction(cm.ctx, caseID, "case_created_from_events", cm.getCurrentAnalyst(),
-			map[string]interface{}{
-				"source_case_id": cm.caseData.ID,
-				"events_moved":   successCount,
-			})
-
-		cm.app.QueueUpdate(func() {
-			cm.selectedEventIDs = make(map[string]bool) // Clear selection
-			cm.refreshCaseData()                        // Reload current case data
-			cm.updateStatus(fmt.Sprintf("Created case with %d events", successCount))
-		})
-	}()
-}
-
-func (cm *CaseManagement) executeAddToCase(targetCaseID string) {
-	cm.updateStatus("Adding events to case...")
-
-	go func() {
-		successCount := 0
-		for eventID := range cm.selectedEventIDs {
-			if err := cm.store.AssignEventToCase(cm.ctx, eventID, targetCaseID); err == nil {
-				successCount++
-			}
-		}
-
-		// Update case event counts
-		_ = cm.store.UpdateCaseEventCount(cm.ctx, targetCaseID)
-		_ = cm.store.UpdateCaseEventCount(cm.ctx, cm.caseData.ID)
-
-		// Log the action
-		_ = cm.store.LogEventAction(cm.ctx, targetCaseID, "", "events_added", cm.getCurrentAnalyst(),
-			map[string]interface{}{
-				"source_case_id": cm.caseData.ID,
-				"events_moved":   successCount,
-			})
-
-		cm.app.QueueUpdate(func() {
-			cm.selectedEventIDs = make(map[string]bool) // Clear selection
-			cm.refreshCaseData()                        // Reload current case data
-			cm.updateStatus(fmt.Sprintf("Added %d events to case", successCount))
-		})
-	}()
-}
+// The events tab once had a second selection model — a selectedEventIDs map fed
+// by Space, with "add these to another case", "create a case from these" and an
+// export hanging off it. Space became pin, nothing wrote the map again, and
+// every one of those actions could only report "No events selected". They are
+// gone rather than rewired: a case screen is for working one case, moving events
+// between cases belongs on the Events screen, and pinning is the selection that
+// the briefing, the timeline and the report already read.
 
 func (cm *CaseManagement) exportCase() {
 	cm.updateStatus("Exporting case...")
@@ -2988,130 +2954,127 @@ func (cm *CaseManagement) exportCase() {
 	}()
 }
 
+// exportSelectedEvents is `e` on the Events tab: the pinned evidence as JSON.
+//
+// Three exports, three audiences. `E` writes the report — the narrative a human
+// reads. `J` writes the whole case — every event it holds, for an archive or a
+// handover. `e` writes only what is pinned: the handful of events that prove the
+// case, for a ticket, a script or a colleague who does not run Console-IR.
+//
+// It read selectedEventIDs, a second selection map that nothing on this screen
+// has written since Space became pin, so it could only ever answer "No events
+// selected for export". Pinned evidence is the subset an analyst has actually
+// marked, and it is the one the briefing, the timeline and the report already
+// use.
 func (cm *CaseManagement) exportSelectedEvents() {
-	if len(cm.selectedEventIDs) == 0 {
-		cm.updateStatus("No events selected for export")
+	pinned := make([]store.Event, 0, len(cm.pinnedEvents))
+	for _, ev := range cm.events {
+		if cm.pinnedEvents[ev.ID] {
+			pinned = append(pinned, ev)
+		}
+	}
+	if len(pinned) == 0 {
+		cm.updateStatus("Nothing pinned — Space pins the evidence to export, or J exports the whole case")
 		return
 	}
-	cm.updateStatus("Exporting selected events...")
-	go func() {
-		// Gather selected events in the current view order
-		selected := make([]store.Event, 0, len(cm.selectedEventIDs))
-		for _, ev := range cm.events {
-			if cm.selectedEventIDs[ev.ID] {
-				selected = append(selected, ev)
-			}
-		}
 
+	caseID, title := cm.caseData.ID, cm.caseData.Title
+	cm.updateStatus(fmt.Sprintf("Exporting %s…", plural(len(pinned), "pinned event")))
+
+	go func() {
 		payload := struct {
 			CaseID      string        `json:"case_id"`
+			CaseTitle   string        `json:"case_title"`
 			Events      []store.Event `json:"events"`
 			GeneratedAt time.Time     `json:"generated_at"`
 			Count       int           `json:"count"`
 		}{
-			CaseID:      cm.caseData.ID,
-			Events:      selected,
+			CaseID:      caseID,
+			CaseTitle:   title,
+			Events:      pinned,
 			GeneratedAt: time.Now(),
-			Count:       len(selected),
+			Count:       len(pinned),
 		}
 
 		data, err := json.MarshalIndent(payload, "", "  ")
 		if err != nil {
-			cm.app.QueueUpdate(func() {
-				cm.updateStatus(fmt.Sprintf("Export error: %v", err))
-			})
+			cm.queueUpdate(func() { cm.updateStatus(fmt.Sprintf("Export error: %v", err)) })
 			return
 		}
 
-		dir := "exports"
-		_ = os.MkdirAll(dir, 0o755)
-		filename := fmt.Sprintf("case_%s_events_%s.json", cm.caseData.ID, time.Now().Format("20060102_150405"))
-		path := filepath.Join(dir, filename)
+		// Beside the report and the case bundle: the directory the analyst
+		// launched from. "exports/" was resolved against the working directory,
+		// so nobody could predict where the file went.
+		dir, err := os.Getwd()
+		if err != nil {
+			dir = paths.Current().Data
+		}
+		path := filepath.Join(dir, fmt.Sprintf("console-ir-%s-evidence-%s.json",
+			slugify(title), time.Now().Format("2006-01-02-1504")))
 
 		if err := os.WriteFile(path, data, 0o644); err != nil {
-			cm.app.QueueUpdate(func() {
-				cm.updateStatus(fmt.Sprintf("Export error: %v", err))
-			})
+			cm.queueUpdate(func() { cm.updateStatus(fmt.Sprintf("Export error: %v", err)) })
 			return
 		}
 
-		// Log audit entry (non-blocking)
-		go cm.store.LogCaseAction(cm.ctx, cm.caseData.ID, "events_export", cm.getCurrentAnalyst(),
-			map[string]interface{}{"file": path, "events": len(selected)})
+		go cm.store.LogCaseAction(cm.ctx, caseID, "events_export", cm.getCurrentAnalyst(),
+			map[string]interface{}{"file": path, "events": len(pinned)})
 
-		cm.app.QueueUpdate(func() {
-			cm.updateStatus(fmt.Sprintf("Exported %d events to %s", len(selected), path))
+		cm.queueUpdate(func() {
+			cm.updateStatus(fmt.Sprintf("%s exported to %s", plural(len(pinned), "pinned event"), path))
 		})
 	}()
 }
 
-func (cm *CaseManagement) updateFocusStyles() {
-	// Reset titles and borders
-	cm.eventsTable.SetBorderColor(cm.theme.Border)
-	cm.eventsTable.SetTitleColor(cm.theme.TextPrimary)
-	cm.timelineView.SetBorderColor(cm.theme.Border)
-	cm.timelineView.SetTitleColor(cm.theme.TextPrimary)
-	cm.copilotPanel.SetBorderColor(cm.theme.Border)
-	cm.copilotPanel.SetTitleColor(cm.theme.TextPrimary)
-	if cm.notesTable != nil {
-		cm.notesTable.SetBorderColor(cm.theme.Border)
-		cm.notesTable.SetTitleColor(cm.theme.TextPrimary)
+// paneFrame is the box that carries a pane's border and title.
+//
+// Usually the widget itself, but the copilot's keyboard lives in its input
+// field while its frame belongs to the drawer around it — so styling the widget
+// would set a border on something that has none and leave the panel grey while
+// focused.
+func (cm *CaseManagement) paneFrame(pane int) *tview.Box {
+	if pane == FocusCopilot {
+		return boxOf(cm.copilotPanel)
 	}
-	if cm.notesEditor != nil {
-		cm.notesEditor.SetBorderColor(cm.theme.Border)
-	}
-	// Additional tab views
-	if cm.overviewView != nil {
-		cm.overviewView.SetBorderColor(cm.theme.Border)
-		cm.overviewView.SetTitleColor(cm.theme.TextPrimary)
-	}
-	if cm.iocsTable != nil {
-		cm.iocsTable.SetBorderColor(cm.theme.Border)
-		cm.iocsTable.SetTitleColor(cm.theme.TextPrimary)
-	}
-	if cm.activityTable != nil {
-		cm.activityTable.SetBorderColor(cm.theme.Border)
-		cm.activityTable.SetTitleColor(cm.theme.TextPrimary)
-	}
-	// TextArea does not support SetTitleColor; leave title color implicit via border focus.
+	return boxOf(cm.paneWidgetStrict(pane))
+}
 
-	// Apply focus highlight
-	switch cm.focusedPane {
-	case FocusEvents:
-		cm.eventsTable.SetBorderColor(cm.theme.FocusBorder)
-		cm.eventsTable.SetTitleColor(cm.theme.FocusBorder)
-	case FocusTimeline:
-		cm.timelineView.SetBorderColor(cm.theme.FocusBorder)
-		cm.timelineView.SetTitleColor(cm.theme.FocusBorder)
-	case FocusCopilot:
-		cm.copilotPanel.SetBorderColor(cm.theme.FocusBorder)
-		cm.copilotPanel.SetTitleColor(cm.theme.FocusBorder)
-	case FocusNotes:
-		if cm.isEditingNotes {
-			if cm.notesEditor != nil {
-				cm.notesEditor.SetBorderColor(cm.theme.FocusBorder)
-			}
-		} else {
-			if cm.notesTable != nil {
-				cm.notesTable.SetBorderColor(cm.theme.FocusBorder)
-				cm.notesTable.SetTitleColor(cm.theme.FocusBorder)
-			}
+// casePanes is every pane the tab strip can reach, in tab order.
+var casePanes = []int{
+	FocusOverview, FocusFindings, FocusEvents, FocusTimeline,
+	FocusIOCs, FocusNotes, FocusActivity, FocusCopilot,
+}
+
+// updateFocusStyles marks which pane has the keyboard.
+//
+// Over the panes, not through a list of them. This was a reset written out pane
+// by pane and then a switch that repeated the same list — and the Findings tab
+// was in neither, so its frame stayed the resting grey while every other pane
+// went blue on focus, and its title never took a theme colour at all. That is
+// the third list of panes in this file to have gone out of step with the tabs;
+// paneWidget is the only one now.
+func (cm *CaseManagement) updateFocusStyles() {
+	for _, pane := range casePanes {
+		box := cm.paneFrame(pane)
+		if box == nil {
+			continue
 		}
-	case FocusOverview:
-		if cm.overviewView != nil {
-			cm.overviewView.SetBorderColor(cm.theme.FocusBorder)
-			cm.overviewView.SetTitleColor(cm.theme.FocusBorder)
+		border, title := cm.theme.Border, cm.theme.TextPrimary
+		if pane == cm.focusedPane {
+			border, title = cm.theme.FocusBorder, cm.theme.FocusBorder
 		}
-	case FocusIOCs:
-		if cm.iocsTable != nil {
-			cm.iocsTable.SetBorderColor(cm.theme.FocusBorder)
-			cm.iocsTable.SetTitleColor(cm.theme.FocusBorder)
+		box.SetBorderColor(border)
+		box.SetTitleColor(title)
+	}
+
+	// The notes editor replaces the notes table in place and carries no title;
+	// tview's TextArea has no SetTitleColor.
+	if cm.notesEditor != nil {
+		border := cm.theme.Border
+		if cm.focusedPane == FocusNotes && cm.isEditingNotes {
+			border = cm.theme.FocusBorder
 		}
-	case FocusActivity:
-		if cm.activityTable != nil {
-			cm.activityTable.SetBorderColor(cm.theme.FocusBorder)
-			cm.activityTable.SetTitleColor(cm.theme.FocusBorder)
-		}
+		cm.notesEditor.SetBorderColor(border)
 	}
 }
 
@@ -3220,7 +3183,7 @@ func (cm *CaseManagement) Show() {
 		cm.app.SetInputCapture(cm.globalInputCapture)
 	}
 	cm.app.SetFocus(cm.eventsTable)
-	cm.updateStatus("Focus: Events - Space=select, e=export, f/F=filter/clear")
+	cm.updateStatus("Focus: Events · Space pin as evidence · e export · f/F filter/clear")
 }
 
 // close returns back to the parent UI main layout.
@@ -3783,7 +3746,9 @@ func (cm *CaseManagement) showAddIOCModal() {
 // deleteSelectedManualIOCs removes selected manual IOCs (linked notes with LinkedType=ioc).
 func (cm *CaseManagement) deleteSelectedManualIOCs() {
 	if len(cm.selectedManualIOCIDs) == 0 {
-		cm.updateStatus("No manual IOCs selected")
+		// Naming the key, because the reason nothing is selected is usually
+		// that Space was pressed on a row it does not apply to.
+		cm.updateStatus("Nothing selected — Space marks an indicator you added")
 		return
 	}
 	ids := make([]string, 0, len(cm.selectedManualIOCIDs))
@@ -3792,7 +3757,7 @@ func (cm *CaseManagement) deleteSelectedManualIOCs() {
 	}
 	// Confirm deletion
 	modal := tview.NewModal().
-		SetText(fmt.Sprintf("Delete %d manual IOC(s)?", len(ids))).
+		SetText(fmt.Sprintf("Delete %s you added?\n\nIndicators extracted from the evidence are not affected.", plural(len(ids), "indicator"))).
 		AddButtons([]string{"Delete", "Cancel"}).
 		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
 			if buttonLabel != "Delete" {
@@ -3892,33 +3857,8 @@ func (cm *CaseManagement) popModalRoot() {
 			// Re-render header and focus visuals
 			cm.renderTabBar()
 			cm.updateFocusStyles()
-			// Restore focus to the last focused pane
-			switch cm.focusedPane {
-			case FocusEvents:
-				cm.app.SetFocus(cm.eventsTable)
-			case FocusTimeline:
-				cm.app.SetFocus(cm.timelineView)
-			case FocusIOCs:
-				if cm.iocsTable != nil {
-					cm.app.SetFocus(cm.iocsTable)
-				}
-			case FocusNotes:
-				if cm.isEditingNotes && cm.notesEditor != nil {
-					cm.app.SetFocus(cm.notesEditor)
-				} else if cm.notesTable != nil {
-					cm.app.SetFocus(cm.notesTable)
-				}
-			case FocusCopilot:
-				cm.app.SetFocus(cm.copilotInput)
-			case FocusOverview:
-				if cm.overviewView != nil {
-					cm.app.SetFocus(cm.overviewView)
-				}
-			case FocusActivity:
-				if cm.activityTable != nil {
-					cm.app.SetFocus(cm.activityTable)
-				}
-			}
+			// Restore focus to the last focused pane.
+			cm.focusCurrentPane()
 		} else {
 			// Still inside nested modal stack (e.g., back to LLM Settings form)
 			cm.modalActive = true
@@ -4229,44 +4169,6 @@ func (cm *CaseManagement) toggleCaseCopilot() {
 	cm.updateStatus("Copilot open — [ closes it")
 }
 
-// caseHeaderRows is the header's height with its border and two rows of fact.
-// It grows by one when the next-action prompt has something to say.
-const caseHeaderRows = 4
-
-// staleCaseAfter is how long a case may go without activity before the header
-// says so.
-const staleCaseAfter = 24 * time.Hour
-
-// nextActionPrompt returns the one thing to do about a case that is drifting,
-// or empty when there is nothing to say.
-//
-// One prompt, not a list: a header that always carries advice is a header
-// nobody reads. It appears when a case has no owner, no note, or has gone
-// quiet — the three states in which a case is quietly rotting rather than
-// being worked.
-func (cm *CaseManagement) nextActionPrompt() string {
-	acc, muted := cm.theme.TagAccent, cm.theme.TagMuted
-
-	if strings.TrimSpace(cm.caseData.AssignedTo) == "" {
-		return fmt.Sprintf(" [%s]▸ NEXT:[-] [%s]no owner — press o to take it[-]", acc, muted)
-	}
-
-	var lastNote time.Time
-	for _, n := range cm.notes {
-		if n.CreatedAt.After(lastNote) {
-			lastNote = n.CreatedAt
-		}
-	}
-	if lastNote.IsZero() {
-		return fmt.Sprintf(" [%s]▸ NEXT:[-] [%s]no note yet — press n to record where this stands[-]", acc, muted)
-	}
-	if time.Since(lastNote) > staleCaseAfter {
-		return fmt.Sprintf(" [%s]▸ NEXT:[-] [%s]nothing recorded in %s — press n to say where this stands[-]",
-			acc, muted, renderRelativeTime(lastNote))
-	}
-	return ""
-}
-
 // togglePinnedEvent stars or unstars the evidence under the cursor.
 //
 // Persisted immediately rather than on some later save: a star is a judgement,
@@ -4341,4 +4243,77 @@ func boxOf(p tview.Primitive) *tview.Box {
 		return v.Box
 	}
 	return nil
+}
+
+// showCaseHelp opens the key reference over the case.
+//
+// On the case's own modal stack rather than the parent's: the case screen
+// installs its own application-wide input capture, so the parent's ? never runs
+// here — help was unreachable from the one screen whose keys it documents — and
+// closing the parent's help returns to the main layout, which would eject the
+// analyst from the case they were reading about.
+func (cm *CaseManagement) showCaseHelp() {
+	if cm.parentUI == nil {
+		return
+	}
+	ui := cm.parentUI
+	ui.helpActive = true
+
+	card, focus := ui.buildHelpCard(func() {
+		ui.helpActive = false
+		cm.popModalRoot()
+	})
+	cm.pushModalRoot(card)
+	cm.app.SetFocus(focus)
+}
+
+// queueUpdate runs fn on the UI goroutine.
+//
+// Through the parent's guarded helper, which runs fn inline when there is no
+// event loop to post to. QueueUpdateDraw blocks until the loop drains it, so
+// the raw call deadlocks anything running before the application starts — and
+// makes this load unobservable from a test. There are thirty-odd raw calls left
+// in this file; converting them is the sweep the roadmap already carries.
+func (cm *CaseManagement) queueUpdate(fn func()) {
+	if cm.parentUI != nil {
+		cm.parentUI.queueUpdate(fn)
+		return
+	}
+	cm.app.QueueUpdateDraw(fn)
+}
+
+// toggleManualIOC marks one of the analyst's own entries for deletion.
+//
+// Only their own. The rest of this list is observables pulled out of the case's
+// evidence — deleting one would mean deleting a fact the data carries, which is
+// not something a case screen should offer. Space did nothing at all on those
+// rows while the status line advertised it for every row, so the key read as
+// broken rather than as inapplicable.
+func (cm *CaseManagement) toggleManualIOC() {
+	row, _ := cm.iocsTable.GetSelection()
+	if row <= 0 {
+		return
+	}
+
+	id := ""
+	if cm.iocRowToManualID != nil {
+		id = cm.iocRowToManualID[row]
+	}
+	if id == "" {
+		cm.updateStatus("Only indicators you added can be selected — this one came from the evidence")
+		return
+	}
+
+	if cm.selectedManualIOCIDs == nil {
+		cm.selectedManualIOCIDs = map[string]bool{}
+	}
+	if cm.selectedManualIOCIDs[id] {
+		delete(cm.selectedManualIOCIDs, id)
+	} else {
+		cm.selectedManualIOCIDs[id] = true
+	}
+
+	cm.renderIOCs()
+	cm.updateStatus(fmt.Sprintf("%s selected for deletion",
+		plural(len(cm.selectedManualIOCIDs), "indicator")))
 }

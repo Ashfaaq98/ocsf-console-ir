@@ -29,7 +29,7 @@ func (cm *CaseManagement) setupCaseFindingsTable() {
 		SetSelectable(true, false).
 		SetFixed(1, 0)
 	cm.findingsTable.SetBorder(true).
-		SetTitle(" Findings ").
+		SetTitle(" FINDINGS ").
 		SetTitleAlign(tview.AlignLeft)
 
 	// Enter opens the finding the same way the queue does.
@@ -48,16 +48,27 @@ func (cm *CaseManagement) loadCaseFindings() {
 	if cm.store == nil || cm.caseData.ID == "" {
 		return
 	}
-	go func() {
+	work := func() {
 		findings, err := cm.store.GetCaseFindings(cm.ctx, cm.caseData.ID)
 		if err != nil {
 			cm.logger.Error("failed to load findings for case %s: %v", cm.caseData.ID, err)
 		}
-		cm.app.QueueUpdateDraw(func() {
+		cm.queueUpdate(func() {
 			cm.caseFindings = findings
 			cm.renderCaseFindings()
+			// The tab strip counts them.
+			cm.renderTabBar()
 		})
-	}()
+	}
+
+	// Through spawnLoad so the load is tracked: a bare goroutine cannot be
+	// waited on, and "the query has not started" is indistinguishable from
+	// "the query has finished" from outside.
+	if cm.parentUI != nil {
+		cm.parentUI.spawnLoad(work)
+		return
+	}
+	go work()
 }
 
 // renderCaseFindings paints cm.caseFindings into the table.
@@ -68,8 +79,12 @@ func (cm *CaseManagement) renderCaseFindings() {
 	cm.findingsTable.Clear()
 	cm.findingsTable.SetSelectedStyle(tcell.StyleDefault.
 		Background(cm.theme.SelectionBg).Foreground(cm.theme.SelectionFg))
-	cm.findingsTable.SetBorderColor(cm.theme.Border)
-	cm.findingsTable.SetTitle(fmt.Sprintf(" Findings (%d) ", len(cm.caseFindings)))
+	// Named like every other pane, and without the count: the tab strip carries
+	// that, from the same slice, so a second copy could only ever disagree.
+	// The border colour is left to updateFocusStyles, which owns it — setting
+	// it here painted the resting grey back over the focus highlight on every
+	// re-render.
+	cm.findingsTable.SetTitle(" FINDINGS ")
 
 	for col, h := range caseFindingHeaders {
 		cm.findingsTable.SetCell(0, col, tview.NewTableCell(h).

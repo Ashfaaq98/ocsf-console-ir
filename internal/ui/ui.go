@@ -633,9 +633,12 @@ type UI struct {
 	// running is set for as long as app.Run() is in its event loop. Atomic
 	// because background loaders read it from their own goroutines to decide
 	// whether queueUpdate can be used. See queueUpdate.
-	running    atomic.Bool
-	helpActive bool
-	lastFocus  tview.Primitive
+	running atomic.Bool
+	// inlineUpdate serialises queueUpdate's no-loop fallback, standing in for
+	// the ordering the event loop gives once it is running.
+	inlineUpdate sync.Mutex
+	helpActive   bool
+	lastFocus    tview.Primitive
 
 	// Active Case Management screen (for live theme propagation)
 	activeCM *CaseManagement
@@ -2473,6 +2476,19 @@ func (ui *UI) showCaseSummary() {
 // showHelp displays a professionally formatted Help using a table layout
 func (ui *UI) showHelp() {
 	ui.helpActive = true
+	card, table := ui.buildHelpCard(ui.restoreMainLayout)
+	ui.rootModal(card)
+	ui.app.SetFocus(table)
+}
+
+// buildHelpCard assembles the key reference and returns it with the widget that
+// should hold focus.
+//
+// close is what dismisses it, because who is showing the help decides where
+// closing it returns to. The case screen roots its own modals on its own stack;
+// sending it back through restoreMainLayout would drop the analyst out of the
+// case they were reading about.
+func (ui *UI) buildHelpCard(close func()) (tview.Primitive, tview.Primitive) {
 
 	// Header
 	header := tview.NewTextView().
@@ -2556,12 +2572,14 @@ func (ui *UI) showHelp() {
 		addSection("CONTEXT: CASE MANAGEMENT")
 		// What the case screen's own handler does, since it owns every key
 		// while it is open. `e` used to be listed as "escalate to an external
-		// system", which does not exist — it exports the selected events.
+		// system", which does not exist.
 		addKey("Tab / Shift+Tab", "Next and previous tab")
 		addKey("[, ]", "Close and open the copilot")
+		addKey("Space", "Pin the event under the cursor as evidence")
+		addKey("h / l", "Move left to the tab, right to the copilot")
 		addKey("E", "Write the case up as a report")
-		addKey("J", "Export the case as JSON")
-		addKey("e", "Export the selected events")
+		addKey("J", "Export the whole case as JSON")
+		addKey("e", "Export the pinned evidence as JSON")
 		addKey("t", "Change the theme")
 		addKey("Esc", "Leave the case")
 	}
@@ -2685,20 +2703,19 @@ func (ui *UI) showHelp() {
 	centered.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
 		switch ev.Key() {
 		case tcell.KeyEsc, tcell.KeyEnter:
-			ui.restoreMainLayout()
+			close()
 			return nil
 		case tcell.KeyRune:
 			switch ev.Rune() {
 			case 'q', 'Q', ' ':
-				ui.restoreMainLayout()
+				close()
 				return nil
 			}
 		}
 		return ev
 	})
 
-	ui.rootModal(centered)
-	ui.app.SetFocus(table)
+	return centered, table
 }
 
 // showModal displays a modal dialog
@@ -5033,6 +5050,17 @@ func (ui *UI) waitForLoads() {
 
 func (ui *UI) queueUpdate(fn func()) {
 	if !ui.running.Load() {
+		// Serialised, because that is the property being stood in for. The
+		// event loop runs one update at a time; running fn straight on the
+		// caller's goroutine let two loads that finished together paint the
+		// same widgets at once — a race that exists only without a loop, but a
+		// real one, and -race cannot tell the two situations apart.
+		//
+		// Nesting a queueUpdate inside a queued fn would deadlock here. It
+		// deadlocks under a running loop too, for the same reason, so this
+		// makes an existing rule visible rather than adding one.
+		ui.inlineUpdate.Lock()
+		defer ui.inlineUpdate.Unlock()
 		fn()
 		return
 	}

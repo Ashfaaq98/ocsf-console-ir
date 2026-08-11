@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -253,7 +254,9 @@ func TestEmptyNotesNameTheNextAction(t *testing.T) {
 	table := tview.NewTable()
 	renderNotes(table, nil, themeDark())
 	got := tableCells(table)
-	for _, want := range []string{"No notes yet", "n to record", "t to start from a template"} {
+	// T, with the shift: lowercase t is the theme key, claimed by the case
+	// screen's own capture before any widget sees it.
+	for _, want := range []string{"No notes yet", "n to record", "T to start from a template"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the empty log is missing %q\n%s", want, got)
 		}
@@ -342,7 +345,7 @@ func TestTimelineEscapesEventText(t *testing.T) {
 	events, findings, audit := timelineFixture()
 	entries, _ := buildTimeline(events, findings, nil, audit, map[string]bool{"a": true}, groupByHost)
 	table := tview.NewTable()
-	rows := renderTimeline(table, entries, entries[0].Label, themeDark(), 0)
+	rows, _ := renderTimeline(table, entries, entries[0].Label, themeDark(), 0)
 
 	got := tableCells(table)
 	if !strings.Contains(got, "[redacted") {
@@ -408,11 +411,12 @@ func TestTimelineFoldsRepetitiveAudit(t *testing.T) {
 }
 
 // The tab strip must degrade rather than truncate: at 80 columns the full
-// framed form drops the last tabs off the end, so the analyst cannot see that
+// form drops the last tabs off the end, so the analyst cannot see that
 // Activity exists at all.
 func TestTabStripKnowsWhenItDoesNotFit(t *testing.T) {
-	names := []string{"Briefing", "Findings", "Events", "Timeline", "Indicators", "Notes", "Activity"}
-	full := caseTabStripWidth(names, 0)
+	names := []string{"Briefing", "Findings 3", "Events 128", "Timeline 40",
+		"Indicators 12", "Notes 2", "Activity 9"}
+	full := caseTabStripWidth(names)
 	if full <= 80 {
 		t.Fatalf("the full strip measures %d columns; the narrow form would never engage", full)
 	}
@@ -528,5 +532,70 @@ func TestANoteLooksLikeANote(t *testing.T) {
 		if g, _ := timelineMark(other, themeDark()); g == glyph {
 			t.Errorf("a note is drawn the same as kind %v", other)
 		}
+	}
+}
+
+// The tab strip carries each tab's count.
+//
+// The strip named seven tabs and said nothing about any of them, so the only
+// way to learn a case had no notes was to press Tab until you reached them.
+func TestTheTabStripCountsWhatEachTabHolds(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	cm.caseFindings = []store.Finding{{ID: "f1"}, {ID: "f2"}, {ID: "f3"}}
+	cm.events = make([]store.Event, 128)
+	cm.notes = []store.Note{{}, {}}
+	cm.renderTabBar()
+
+	got := cm.tabBar.GetText(true)
+	for _, want := range []string{"Findings 3", "Events 128", "Notes 2"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the strip does not carry %q:\n%s", want, got)
+		}
+	}
+	// Briefing is one document; a number beside it would say nothing.
+	if strings.Contains(got, "Briefing 0") {
+		t.Errorf("Briefing was given a count:\n%s", got)
+	}
+}
+
+// The bar is one row, and the tab you are on is the only filled segment.
+//
+// The strip spent a second row on an accent rule that was a dozen columns of
+// ink and a hundred and eighty of nothing, and the tabs themselves were plain
+// text on the app background — no edges, so six of them ran together.
+func TestTheTabBarIsOneFilledRow(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+	cm.activeTab = tabTimeline
+	cm.renderTabBar()
+
+	raw := cm.tabBar.GetText(false)
+	if strings.Contains(raw, "\n") {
+		t.Errorf("the bar is more than one row:\n%s", raw)
+	}
+
+	fill := fmt.Sprintf("[%s:%s:b]", tagColor(cm.theme.Surface), tagColor(cm.theme.Accent))
+	if n := strings.Count(raw, fill); n != 2 {
+		t.Errorf("the accent fill opens %d times, want 2 (the label and its padding): %s", n, raw)
+	}
+	if !strings.Contains(raw, fill+"  "+caseTabNames[tabTimeline]) {
+		t.Errorf("the filled segment is not the active tab:\n%s", raw)
+	}
+}
+
+// Each tab is separated from the next, so the strip reads as six places to go
+// rather than as a sentence. Except beside the filled segment, where the fill
+// is already an edge and a rule would read as a seam.
+func TestTheTabsAreSeparated(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+	cm.activeTab = tabBriefing
+	cm.renderTabBar()
+
+	// Seven tabs, six gaps, one of which is beside the active segment.
+	if n := strings.Count(cm.tabBar.GetText(true), "│"); n != 5 {
+		t.Errorf("the strip has %d separators, want 5:\n%s", n, cm.tabBar.GetText(true))
 	}
 }

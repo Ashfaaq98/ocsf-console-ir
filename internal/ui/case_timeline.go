@@ -47,6 +47,22 @@ type timelineEntry struct {
 	Events []store.Event
 }
 
+// oneLine is the first line of a record, at whatever length it is.
+//
+// Labels are not cut to a fixed width here. The label column carries
+// SetExpansion(1), so it takes whatever the pane has left — and shortening the
+// text to 70 first defeated that: every entry stopped mid-sentence on a terminal
+// with room for far more, and the space it would have used sat empty. tview
+// clips what genuinely does not fit. (firstLine caps at 96 for the Notes table,
+// which has a fixed column.)
+func oneLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i] + " …"
+	}
+	return s
+}
+
 // buildTimeline merges the three sources into one ordered narrative.
 //
 // Findings and activity are single moments; events cluster. A finding is the
@@ -70,7 +86,7 @@ func buildTimeline(events []store.Event, findings []store.Finding, notes []store
 		}
 		label := c.Label
 		if c.Count() == 1 {
-			label = truncate(c.Events[0].Message, 70)
+			label = oneLine(c.Events[0].Message)
 		}
 		entries = append(entries, timelineEntry{
 			At:     c.Start,
@@ -86,7 +102,7 @@ func buildTimeline(events []store.Event, findings []store.Finding, notes []store
 	for _, f := range findings {
 		entries = append(entries, timelineEntry{
 			At: f.FirstSeen, Kind: timelineFinding,
-			Label: truncate(f.Title, 70), Detail: "finding", Count: 1,
+			Label: f.Title, Detail: "finding", Count: 1,
 		})
 	}
 
@@ -106,7 +122,7 @@ func buildTimeline(events []store.Event, findings []store.Finding, notes []store
 		}
 		entries = append(entries, timelineEntry{
 			At: n.CreatedAt, Kind: timelineNote,
-			Label: truncate(firstLine(n.Content), 70), Detail: noteAuthor(n), Count: 1,
+			Label: oneLine(n.Content), Detail: noteAuthor(n), Count: 1,
 		})
 	}
 
@@ -159,7 +175,8 @@ func orUnknown(s string) string {
 // The rail uses terminal-native marks with an ASCII fallback, and never costs a
 // column of timestamp: a decorative graph that obscures the time is a worse
 // timeline than a list.
-func renderTimeline(table *tview.Table, entries []timelineEntry, expanded string, t Theme, dropped int) map[int]string {
+func renderTimeline(table *tview.Table, entries []timelineEntry, expanded string, t Theme,
+	dropped int) (map[int]string, map[int]int) {
 	table.Clear()
 	rowCluster := map[int]string{}
 
@@ -170,7 +187,7 @@ func renderTimeline(table *tview.Table, entries []timelineEntry, expanded string
 		table.SetCell(2, 0, tview.NewTableCell(
 			"Attach events with 'a' from the Events screen, or escalate a finding with 'e' from Triage.").
 			SetTextColor(t.TextMuted).SetSelectable(false).SetExpansion(1))
-		return rowCluster
+		return rowCluster, map[int]int{}
 	}
 
 	vert, last := "│", "└"
@@ -178,8 +195,13 @@ func renderTimeline(table *tview.Table, entries []timelineEntry, expanded string
 		vert, last = "|", "\\"
 	}
 
+	// Which entry each selectable row came from, so a key can act on the row the
+	// timeline cursor is on rather than on another tab's selection.
+	rowEntry := map[int]int{}
+
 	row := 0
 	for i, e := range entries {
+		rowEntry[row] = i
 		glyph, colour := timelineMark(e.Kind, t)
 		rail := vert
 		if i == len(entries)-1 {
@@ -212,7 +234,7 @@ func renderTimeline(table *tview.Table, entries []timelineEntry, expanded string
 				table.SetCell(row, 0, tview.NewTableCell("").SetSelectable(false))
 				table.SetCell(row, 1, tview.NewTableCell(rail).SetTextColor(t.TextMuted).SetSelectable(false))
 				table.SetCell(row, 3, tview.NewTableCell(
-					ev.Timestamp.Format("15:04:05")+"  "+tview.Escape(truncate(ev.Message, 64))).
+					ev.Timestamp.Format("15:04:05")+"  "+tview.Escape(oneLine(ev.Message))).
 					SetTextColor(t.TextMuted).SetSelectable(false).SetExpansion(1))
 				row++
 			}
@@ -224,7 +246,7 @@ func renderTimeline(table *tview.Table, entries []timelineEntry, expanded string
 			fmt.Sprintf("Capped at %d entries; %d further not shown.", timelineCap, dropped)).
 			SetTextColor(t.TextMuted).SetSelectable(false))
 	}
-	return rowCluster
+	return rowCluster, rowEntry
 }
 
 // timelineMark gives each source a distinct glyph, not only a distinct colour.
@@ -282,7 +304,9 @@ func (cm *CaseManagement) updateTimelineView() {
 	}
 
 	entries, dropped := buildTimeline(cm.events, findings, notes, cm.auditLog, cm.pinnedEvents, groupByHost)
-	cm.timelineRows = renderTimeline(cm.timelineView, entries, cm.expandedTimeline, cm.theme, dropped)
+	cm.timelineEntries = entries
+	cm.timelineRows, cm.timelineRowEntry = renderTimeline(
+		cm.timelineView, entries, cm.expandedTimeline, cm.theme, dropped)
 }
 
 // toggleTimelineCluster expands or collapses the cluster under the cursor.
@@ -309,4 +333,68 @@ func noteAuthor(n store.Note) string {
 		return "note by " + a
 	}
 	return "note"
+}
+
+// pinTimelineEntry stars the evidence under the timeline cursor.
+//
+// The timeline's own cursor, not the Events tab's. p called pinCurrentEvent,
+// which reads selectedEventIndex — the events table's cursor, which starts at
+// the top — so pressing p anywhere on the timeline pinned the case's first
+// event and left the row the analyst was actually on untouched.
+//
+// A row may be a cluster of several events, a finding, a note or an activity
+// entry. Only events can be pinned — a star marks which evidence proves the
+// case — so the rest say what they are rather than doing nothing.
+func (cm *CaseManagement) pinTimelineEntry() {
+	row, _ := cm.timelineView.GetSelection()
+	idx, ok := cm.timelineRowEntry[row]
+	if !ok || idx >= len(cm.timelineEntries) {
+		return
+	}
+	entry := cm.timelineEntries[idx]
+
+	if entry.Kind != timelineEvent || len(entry.Events) == 0 {
+		cm.updateStatus("Only evidence can be pinned — this row is a " + timelineKindName(entry.Kind))
+		return
+	}
+
+	// A cluster pins and unpins together: it is one moment in the narrative, and
+	// half a starred cluster is not a statement about anything.
+	pin := false
+	for _, e := range entry.Events {
+		if !cm.pinnedEvents[e.ID] {
+			pin = true
+			break
+		}
+	}
+	for _, e := range entry.Events {
+		if pin {
+			cm.pinnedEvents[e.ID] = true
+		} else {
+			delete(cm.pinnedEvents, e.ID)
+		}
+	}
+
+	what := plural(len(entry.Events), "event")
+	if pin {
+		cm.updateStatus(what + " pinned as evidence")
+	} else {
+		cm.updateStatus(what + " unpinned")
+	}
+	cm.updateTimelineView()
+	cm.updateEventsTable()
+}
+
+// timelineKindName names a row's source, for a message about what it is not.
+func timelineKindName(k timelineKind) string {
+	switch k {
+	case timelineFinding:
+		return "finding"
+	case timelineNote:
+		return "note"
+	case timelineActivity:
+		return "case activity entry"
+	default:
+		return "event"
+	}
 }

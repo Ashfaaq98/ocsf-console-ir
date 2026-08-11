@@ -42,6 +42,10 @@ func triageAtWidth(t *testing.T, ui *UI, width int) {
 	awaitIdle(t, ui)
 	renderPrimitive(t, ui.eventList, width, 20)
 	ui.updateFindingsList(len(ui.findings))
+	// Selecting a row schedules an inspector repaint on its own goroutine, and
+	// callers run this helper in a loop — so the repaint from one width can land
+	// in the middle of the next, which production would have serialised.
+	settleInspector(ui)
 }
 
 // A finding already escalated says which case has it.

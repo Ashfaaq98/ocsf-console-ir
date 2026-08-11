@@ -1,9 +1,11 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 	"github.com/gdamore/tcell/v2"
@@ -16,6 +18,10 @@ func openCase(t *testing.T, ui *UI) *CaseManagement {
 	cm := NewCaseManagement(ui, c)
 	ui.activeCM = cm
 	t.Cleanup(func() { ui.activeCM = nil })
+	// The case reads itself on construction, and that read paints the header
+	// and every tab. Rendering before it lands is two goroutines on the same
+	// widgets — serialised by the event loop in a real session, not here.
+	awaitIdle(t, ui)
 	return cm
 }
 
@@ -84,8 +90,13 @@ func TestTheCaseScreenPaintsTheTheme(t *testing.T) {
 		stray := map[string]int{}
 		for j := 0; j < w*h; j++ {
 			_, bg, _ := cells[j].Style.Decompose()
+			// Filled chips make backgrounds of the semantic colours: the active
+			// tab is accent, and the header's status chip is whichever of
+			// warning, success, accent or muted the status maps to.
 			if bg != ui.theme.Bg && bg != ui.theme.Surface && bg != ui.theme.SurfaceRaised &&
-				bg != ui.theme.SelectionBg && bg != ui.theme.TableHeaderBg {
+				bg != ui.theme.SelectionBg && bg != ui.theme.TableHeaderBg &&
+				bg != ui.theme.Accent && bg != ui.theme.Warning &&
+				bg != ui.theme.Success && bg != ui.theme.TextMuted {
 				stray[fmt.Sprint(bg)]++
 			}
 		}
@@ -139,5 +150,519 @@ func TestTheCaseHelpNamesRealKeys(t *testing.T) {
 		if !strings.Contains(frame, want) {
 			t.Errorf("the case help does not mention %q", want)
 		}
+	}
+}
+
+// ? opens the key reference from inside a case.
+//
+// The case screen installs its own application-wide capture, so the parent's ?
+// never ran here — help was unreachable from the one screen whose keys it
+// documents. And the parent's help closes by restoring the main layout, which
+// would have ejected the analyst from the case they were reading about.
+func TestHelpOpensInsideACase(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	if cm.globalInputCapture(tcell.NewEventKey(tcell.KeyRune, '?', tcell.ModNone)) != nil {
+		t.Fatal("? was not claimed inside a case")
+	}
+	if !cm.modalActive {
+		t.Fatal("? opened nothing")
+	}
+	if len(cm.modalStack) != 1 {
+		t.Errorf("the help was not put on the case's own modal stack: %d entries", len(cm.modalStack))
+	}
+}
+
+// Closing it returns to the case, not to the main layout.
+func TestClosingTheCaseHelpReturnsToTheCase(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	cm.showCaseHelp()
+	if len(cm.modalStack) != 1 {
+		t.Fatalf("the help is not on the stack: %d", len(cm.modalStack))
+	}
+
+	cm.popModalRoot()
+
+	if len(cm.modalStack) != 0 {
+		t.Errorf("closing the help left %d entries on the stack", len(cm.modalStack))
+	}
+	if cm.modalActive {
+		t.Error("the case still reports a modal after the help closed")
+	}
+}
+
+// Refreshing says what it refreshed.
+//
+// The line was written from the events tab's point of view and printed on every
+// tab, so pressing r on Activity reported a number of events.
+func TestRefreshingACaseSaysWhatItRead(t *testing.T) {
+	ui, st := newTestUI(t)
+	seedCases(t, ui, st, 1)
+	cm := NewCaseManagement(ui, ui.cases[0])
+	ui.activeCM = cm
+	t.Cleanup(func() { ui.activeCM = nil })
+	awaitIdle(t, ui)
+
+	cm.refreshCaseData()
+	awaitIdle(t, ui)
+
+	got := stripTags(cm.statusBar.GetText(true))
+	if !strings.Contains(got, "Case refreshed") {
+		t.Errorf("a refresh does not say the case was refreshed: %s", got)
+	}
+	if strings.Contains(got, "Loaded") && strings.Contains(got, "events for case") {
+		t.Errorf("a refresh still reports only the events: %s", got)
+	}
+	for _, want := range []string{"event", "note", "activity"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the refresh does not account for %ss: %s", want, got)
+		}
+	}
+}
+
+// One spelling of the save key, and the view mode does not offer to save
+// something that is not being edited.
+func TestTheNotesKeysAreDescribedConsistently(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	view := stripTags(cm.notesViewStatusText())
+	edit := stripTags(cm.notesEditStatusText())
+
+	if strings.Contains(view, "Ctrl") {
+		t.Errorf("the notes list offers a save with nothing being edited: %s", view)
+	}
+	if strings.Contains(view, "Tab=Copilot") || strings.Contains(view, "Tab opens the copilot") {
+		t.Errorf("the notes list says Tab opens the copilot; it moves to the next tab: %s", view)
+	}
+	if !strings.Contains(edit, "Ctrl+S") {
+		t.Errorf("the editor does not name the save key as Ctrl+S: %s", edit)
+	}
+	if strings.Contains(edit, "Ctrl+s") {
+		t.Errorf("the editor spells the save key differently from the panel title: %s", edit)
+	}
+}
+
+// Space says why it did nothing, rather than appearing broken.
+//
+// It only ever acted on the analyst's own entries — the rest of the list is
+// observables pulled out of the case's evidence — while the status line
+// advertised it for every row. On a case whose indicators all came from
+// evidence, which is most of them, the key looked dead.
+func TestSpaceOnAnExtractedIndicatorSaysWhy(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	cm.caseIndicators = []store.CaseIndicator{
+		{TypeID: 2, Type: "IP Address", Value: "45.147.230.11", Source: "asserted"},
+	}
+	cm.iocRowToManualID = map[int]string{}
+	cm.iocsTable.Select(1, 0)
+
+	cm.toggleManualIOC()
+
+	got := stripTags(cm.statusBar.GetText(true))
+	if !strings.Contains(got, "came from the evidence") {
+		t.Errorf("Space on an extracted indicator said nothing useful: %s", got)
+	}
+	if len(cm.selectedManualIOCIDs) != 0 {
+		t.Error("an extracted indicator was marked for deletion")
+	}
+}
+
+// And it works on the analyst's own — through the real path, because Space
+// re-renders the list, which rebuilds the row-to-note map from the database.
+func TestSpaceSelectsYourOwnIndicator(t *testing.T) {
+	ui, st := newTestUI(t)
+	seedCases(t, ui, st, 1)
+	c := ui.cases[0]
+
+	if _, err := st.AddNote(context.Background(), store.Note{
+		CaseID: c.ID, Content: "ioc_type:ip", Author: "analyst",
+		LinkedType: "ioc", LinkedID: "10.0.0.1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	cm := NewCaseManagement(ui, c)
+	ui.activeCM = cm
+	t.Cleanup(func() { ui.activeCM = nil })
+	awaitIdle(t, ui)
+	cm.renderIOCs()
+
+	row := 0
+	for i, ind := range cm.caseIndicators {
+		if ind.Value == "10.0.0.1" {
+			row = i + 1
+		}
+	}
+	if row == 0 {
+		t.Fatalf("the analyst's own indicator is not in the list: %+v", cm.caseIndicators)
+	}
+	cm.iocsTable.Select(row, 0)
+
+	cm.toggleManualIOC()
+	if len(cm.selectedManualIOCIDs) != 1 {
+		t.Fatalf("Space selected %d indicators, want the one the analyst added",
+			len(cm.selectedManualIOCIDs))
+	}
+	if got := stripTags(cm.statusBar.GetText(true)); !strings.Contains(got, "1 indicator selected") {
+		t.Errorf("selecting one said: %s", got)
+	}
+
+	cm.toggleManualIOC()
+	if len(cm.selectedManualIOCIDs) != 0 {
+		t.Errorf("Space did not deselect: %v", cm.selectedManualIOCIDs)
+	}
+}
+
+// A pivot asks before it leaves.
+//
+// It spans the whole database, which a case screen cannot show, so answering it
+// closes the case and opens the Events screen. Doing that silently on Enter —
+// the key least likely to be read as "leave" — threw the analyst out of the
+// investigation they were in.
+func TestPivotingFromACaseAsksFirst(t *testing.T) {
+	ui, st := newTestUI(t)
+	seedCases(t, ui, st, 1)
+	cm := NewCaseManagement(ui, ui.cases[0])
+	ui.activeCM = cm
+	t.Cleanup(func() { ui.activeCM = nil })
+	awaitIdle(t, ui)
+
+	cm.caseIndicators = []store.CaseIndicator{
+		{TypeID: 2, Type: "IP Address", Value: "45.147.230.11", Source: "asserted"},
+	}
+	cm.iocsTable.Select(1, 0)
+
+	cm.pivotSelectedIndicator()
+
+	if !cm.modalActive {
+		t.Fatal("the pivot left the case without asking")
+	}
+	if ui.pivot != nil {
+		t.Error("the pivot happened before it was confirmed")
+	}
+}
+
+// p pins what the timeline cursor is on.
+//
+// It read selectedEventIndex — the events table's cursor, which starts at the
+// top — so pressing p anywhere on the timeline pinned the case's first event
+// and left the row the analyst was on untouched.
+func TestPinningFollowsTheTimelineCursor(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	base := time.Date(2026, 8, 8, 3, 0, 0, 0, time.UTC)
+	cm.events = []store.Event{
+		{ID: "first", Message: "the first event", Host: "ws-a", Timestamp: base},
+		{ID: "second", Message: "a later event", Host: "ws-b", Timestamp: base.Add(time.Hour)},
+	}
+	cm.pinnedEvents = map[string]bool{}
+	cm.updateTimelineView()
+
+	// The second row, not the first.
+	row := -1
+	for r, idx := range cm.timelineRowEntry {
+		if idx == 1 {
+			row = r
+		}
+	}
+	if row < 0 {
+		t.Fatalf("the timeline has no second entry: %v", cm.timelineRowEntry)
+	}
+	cm.timelineView.Select(row, 0)
+
+	cm.pinTimelineEntry()
+
+	if cm.pinnedEvents["first"] {
+		t.Error("pinning starred the first event while the cursor was on the second")
+	}
+	if !cm.pinnedEvents["second"] {
+		t.Errorf("the event under the cursor was not pinned: %v", cm.pinnedEvents)
+	}
+
+	cm.pinTimelineEntry()
+	if cm.pinnedEvents["second"] {
+		t.Error("p did not unpin")
+	}
+}
+
+// A row that is not evidence says so rather than doing nothing.
+func TestPinningANoteSaysItCannotBePinned(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	base := time.Date(2026, 8, 8, 3, 0, 0, 0, time.UTC)
+	cm.events = nil
+	cm.notes = []store.Note{{Content: "Blocked the address", Author: "analyst", CreatedAt: base}}
+	cm.pinnedEvents = map[string]bool{}
+
+	entries, _ := buildTimeline(nil, nil, cm.notes, nil, cm.pinnedEvents, groupByHost)
+	cm.timelineEntries = entries
+	cm.timelineRows, cm.timelineRowEntry = renderTimeline(
+		cm.timelineView, entries, "", cm.theme, 0)
+	cm.timelineView.Select(0, 0)
+
+	cm.pinTimelineEntry()
+
+	if got := stripTags(cm.statusBar.GetText(true)); !strings.Contains(got, "note") {
+		t.Errorf("pinning a note said: %s", got)
+	}
+	if len(cm.pinnedEvents) != 0 {
+		t.Error("a note was pinned as evidence")
+	}
+}
+
+// Timeline labels take the width the pane has, rather than stopping at a
+// constant while the column expands around them.
+func TestTimelineLabelsAreNotCutShort(t *testing.T) {
+	long := "Outbound session to 45.147.230.11 carrying a base64 payload that keeps going well past seventy characters"
+
+	events := []store.Event{{ID: "e1", Message: long, Host: "ws-a",
+		Timestamp: time.Date(2026, 8, 8, 3, 0, 0, 0, time.UTC)}}
+	entries, _ := buildTimeline(events, nil, nil, nil, map[string]bool{}, groupByHost)
+
+	for _, e := range entries {
+		if strings.Contains(e.Label, "...") {
+			t.Errorf("the label was cut before the layout saw it: %q", e.Label)
+		}
+	}
+	if len(entries) == 0 || !strings.Contains(entries[0].Label, "seventy characters") {
+		t.Errorf("the label lost its tail: %+v", entries)
+	}
+}
+
+// Closing a finding leaves the keyboard on the findings table.
+//
+// popModalRoot restored focus from its own copy of the pane→widget switch, and
+// that copy had no Findings case: closing a finding left the focus on a
+// primitive no longer in the tree, so the arrow keys did nothing until you
+// changed tabs.
+func TestClosingAFindingLeavesTheKeyboardOnTheFindingsTable(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	cm.caseFindings = []store.Finding{
+		{ID: "f1", Title: "Impossible travel", Severity: "high", Status: "new"},
+	}
+	cm.renderCaseFindings()
+	cm.setFocusPane(FocusFindings)
+
+	cm.showCaseFindingModal(cm.caseFindings[0])
+	cm.popModalRoot()
+
+	if got := ui.app.GetFocus(); got != cm.findingsTable {
+		t.Errorf("after closing the finding the keyboard is on %T, not the findings table", got)
+	}
+}
+
+// Every pane the tab strip can reach has a widget to focus, so no future tab
+// can be missing from the restore path.
+func TestEveryCasePaneHasAWidget(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	for _, pane := range []int{FocusOverview, FocusFindings, FocusEvents, FocusTimeline,
+		FocusIOCs, FocusNotes, FocusActivity, FocusCopilot} {
+		if cm.paneWidget(pane) == nil {
+			t.Errorf("pane %d has no widget to focus", pane)
+		}
+	}
+}
+
+// e exports what is pinned, and says so when nothing is.
+//
+// It read a second selection map that nothing has written since Space became
+// pin, so it could only ever answer "No events selected for export".
+func TestExportSaysWhatToPinWhenNothingIs(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	cm.events = []store.Event{{ID: "e1", Message: "an event"}}
+	cm.pinnedEvents = map[string]bool{}
+
+	cm.exportSelectedEvents()
+
+	got := stripTags(cm.statusBar.GetText(true))
+	if strings.Contains(got, "selected") {
+		t.Errorf("export still talks about a selection: %s", got)
+	}
+	if !strings.Contains(got, "pin") {
+		t.Errorf("export did not say what to pin: %s", got)
+	}
+}
+
+// The Events tab's status line names the key Space actually is.
+func TestTheEventsStatusLineSaysSpacePins(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	cm.setFocusPane(FocusEvents)
+
+	got := stripTags(cm.statusBar.GetText(true))
+	if strings.Contains(got, "Space=select") || strings.Contains(got, "Space select") {
+		t.Errorf("Space is bound to pin but the status line calls it select: %s", got)
+	}
+	if !strings.Contains(strings.ToLower(got), "space pin") {
+		t.Errorf("the status line does not say Space pins: %s", got)
+	}
+}
+
+// h moves left and l moves right, rather than both toggling.
+//
+// Both keys called one toggle, so h — which means "left" to anyone who has used
+// vi — jumped right into the copilot and reported "Focus: Copilot". And with the
+// copilot closed there is nothing to the right at all, so l focused a widget
+// that was not on screen.
+func TestHMovesLeftAndLMovesRight(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+	cm.switchTab(tabEvents)
+
+	// The copilot is a drawer and starts closed.
+	cm.focusCopilot()
+	if cm.focusedPane == FocusCopilot {
+		t.Error("l focused the copilot while it was closed")
+	}
+	if got := stripTags(cm.statusBar.GetText(true)); !strings.Contains(got, "closed") {
+		t.Errorf("l did not say the copilot is closed: %s", got)
+	}
+
+	cm.toggleCaseCopilot()
+	cm.focusCopilot()
+	if cm.focusedPane != FocusCopilot {
+		t.Errorf("l did not reach the open copilot: pane %d", cm.focusedPane)
+	}
+
+	cm.focusTabContent()
+	if cm.focusedPane != FocusEvents {
+		t.Errorf("h did not come back to the Events tab: pane %d", cm.focusedPane)
+	}
+
+	// And h from the tab content stays put rather than jumping right.
+	cm.focusTabContent()
+	if cm.focusedPane != FocusEvents {
+		t.Errorf("h moved right: pane %d", cm.focusedPane)
+	}
+}
+
+// The findings pane takes the focus highlight like every other pane.
+//
+// updateFocusStyles was a reset written out pane by pane and then a switch that
+// repeated the same list, and Findings was in neither — so its frame stayed the
+// resting grey while it had the keyboard, and its title never took a theme
+// colour at all.
+func TestEveryPaneShowsWhenItHasTheKeyboard(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	for _, pane := range casePanes {
+		frame := cm.paneFrame(pane)
+		if frame == nil {
+			t.Errorf("pane %d has no frame to highlight", pane)
+			continue
+		}
+
+		cm.setFocusPane(pane)
+		if got := frame.GetBorderColor(); got != cm.theme.FocusBorder {
+			t.Errorf("pane %d keeps border %v while focused, want %v",
+				pane, got, cm.theme.FocusBorder)
+		}
+
+		// And gives it back.
+		cm.setFocusPane(FocusEvents)
+		if pane == FocusEvents {
+			continue
+		}
+		if got := frame.GetBorderColor(); got != cm.theme.Border {
+			t.Errorf("pane %d keeps the focus border after focus moved away", pane)
+		}
+	}
+}
+
+// Re-rendering a pane does not undo the focus highlight.
+//
+// renderCaseFindings stamped the resting border colour on every paint, so the
+// findings pane lost its highlight whenever its data reloaded.
+func TestRenderingAPaneKeepsItsFocusBorder(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+
+	cm.setFocusPane(FocusFindings)
+	cm.renderCaseFindings()
+
+	if got := cm.findingsTable.GetBorderColor(); got != cm.theme.FocusBorder {
+		t.Errorf("re-rendering repainted the border %v over the focus highlight %v",
+			got, cm.theme.FocusBorder)
+	}
+}
+
+// The panes are titled alike.
+func TestThePanesAreTitledAlike(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+	cm.renderCaseFindings()
+
+	for _, pane := range casePanes {
+		frame := cm.paneFrame(pane)
+		if frame == nil {
+			continue
+		}
+		title := strings.TrimSpace(frame.GetTitle())
+		if title == "" {
+			continue
+		}
+		if title != strings.ToUpper(title) {
+			t.Errorf("pane %d is titled %q while the rest are upper case", pane, title)
+		}
+		// The tab strip carries the counts, from the same slices.
+		if strings.ContainsAny(title, "0123456789") {
+			t.Errorf("pane %d repeats a count the tab strip already has: %q", pane, title)
+		}
+	}
+}
+
+// Every cell of the copilot drawer paints a theme colour.
+//
+// Three of its widgets were never in the theming pass — the provider line, the
+// page container holding the suggestions and the transcript, and the dropdown's
+// own box — and a widget with no background falls back to tview's global
+// default, which is black. So the drawer had dark bands across it on every
+// palette whose surface is not black.
+func TestTheCopilotDrawerPaintsTheTheme(t *testing.T) {
+	ui, _ := newTestUI(t)
+	ui.hasTrueColor = true
+	ui.setTheme("gruvbox")
+	cm := openCase(t, ui)
+	cm.toggleCaseCopilot()
+	awaitIdle(t, ui)
+
+	screen := tcell.NewSimulationScreen("UTF-8")
+	if err := screen.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer screen.Fini()
+	screen.SetSize(60, 24)
+	cm.copilotPanel.SetRect(0, 0, 60, 24)
+	cm.copilotPanel.Draw(screen)
+	screen.Show()
+
+	cells, w, h := screen.GetContents()
+	stray := map[string]int{}
+	for i := 0; i < w*h; i++ {
+		_, bg, _ := cells[i].Style.Decompose()
+		switch bg {
+		case ui.theme.Surface, ui.theme.SurfaceRaised, ui.theme.Bg, ui.theme.SelectionBg:
+		default:
+			stray[tagColor(bg)]++
+		}
+	}
+	if len(stray) > 0 {
+		t.Errorf("the copilot drawer paints colours from outside the theme: %v", stray)
 	}
 }
