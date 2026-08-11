@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -330,7 +331,7 @@ func (cm *CaseManagement) setupLayout() {
 	// Left side: Tabbed area (Overview, Events, Timeline, Artifacts/IOCs, Notes, Activity Log)
 	cm.buildTabs()
 	leftTabs := tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(cm.tabBar, 2, 0, true).
+		AddItem(cm.tabBar, 1, 0, true).
 		AddItem(cm.tabsPages, 0, 1, false)
 
 	// Copilot is a drawer, not a column.
@@ -1639,12 +1640,12 @@ func (cm *CaseManagement) buildTabs() {
 	cm.renderTabBar()
 }
 
-// Spacing around the tabs. The gutter is what separates one chip from the next
-// — two columns, enough that the labels read as distinct without the frames the
-// strip used to draw around each one.
+// Spacing inside the bar. Two columns either side of a label give each segment
+// room to be its own thing; the separator between them takes one more.
 const (
-	caseTabIndent = 2
-	caseTabGutter = 2
+	caseTabIndent = 1
+	caseTabPad    = 2
+	caseTabRuleW  = 1
 )
 
 // caseTabStripWidth is the columns the full strip needs for these labels.
@@ -1652,9 +1653,9 @@ func caseTabStripWidth(labels []string) int {
 	w := caseTabIndent
 	for i, label := range labels {
 		if i > 0 {
-			w += caseTabGutter
+			w += caseTabRuleW
 		}
-		w += len([]rune(label)) + 2 // a column of padding either side
+		w += len([]rune(label)) + 2*caseTabPad
 	}
 	return w
 }
@@ -1713,28 +1714,41 @@ func (cm *CaseManagement) caseTabCount(idx int) int {
 	return -1
 }
 
-// caseTabLabel is a tab's text: its name, and its count where it has one.
-func (cm *CaseManagement) caseTabLabel(idx int) string {
+// caseTabParts is a tab's name and its count, kept apart so each can be drawn
+// in its own weight — "Findings 3" in one colour reads as a two-word name.
+func (cm *CaseManagement) caseTabParts(idx int) (name, count string) {
+	name = caseTabNames[idx]
 	if n := cm.caseTabCount(idx); n >= 0 {
-		return fmt.Sprintf("%s %d", caseTabNames[idx], n)
+		count = strconv.Itoa(n)
 	}
-	return caseTabNames[idx]
+	return name, count
+}
+
+// caseTabLabel is a tab's text, for measuring the strip against the terminal.
+func (cm *CaseManagement) caseTabLabel(idx int) string {
+	name, count := cm.caseTabParts(idx)
+	if count == "" {
+		return name
+	}
+	return name + " " + count
 }
 
 // renderTabBar draws the tab strip.
 //
-// A filled chip for the tab you are on, plain muted text for the rest, and an
-// accent bar directly beneath the chip — the same two signals a browser or an
-// editor gives, which is what makes the strip readable at a glance rather than
-// after a scan. The bar spans only the active chip: a full-width rule would sit
-// one row above the panel's own top border and read as a double line.
+// A bar, not a line of words. The strip is one row of raised surface running
+// the full width, each tab a segment on it, separated by a hairline, with the
+// tab you are on filled in the accent. The bar is the element; the tabs are
+// parts of it — which is what makes six inactive tabs read as six things you
+// can go to rather than as a sentence.
 //
-// The previous strip drew each tab as a little box: " ┌ Events ┐ ". Seven boxes
-// in a row read as seven separate widgets rather than one control, the corner
-// glyphs cost four columns per tab and carried no information, and the active
-// tab was distinguished only by the shape of its corners — a difference nobody
-// notices at a glance. Colour and fill do that work in one look, and the columns
-// the frames used up now carry the counts.
+// It has been through two worse forms. The first drew a little box around each
+// tab, " ┌ Events ┐ ": seven boxes read as seven separate widgets, the corner
+// glyphs cost four columns each and carried nothing, and the active tab was
+// marked only by the shape of its corners. The second dropped the boxes for
+// plain text and an accent rule on a second row — but text floating on the app
+// background has no edges, so the tabs ran together, and the rule row was a
+// dozen columns of ink and a hundred and eighty of nothing. This form spends
+// one row instead of two and gives every tab an edge.
 func (cm *CaseManagement) renderTabBar() {
 	names := caseTabNames
 	active := cm.activeTab
@@ -1765,45 +1779,69 @@ func (cm *CaseManagement) renderTabBar() {
 		return
 	}
 
-	var strip strings.Builder
-	activeStart, activeWidth := 0, 0
-
-	col := caseTabIndent
-	strip.WriteString(strings.Repeat(" ", caseTabIndent))
-
-	for i, label := range labels {
-		if i > 0 {
-			strip.WriteString(strings.Repeat(" ", caseTabGutter))
-			col += caseTabGutter
-		}
-		w := len([]rune(label)) + 2 // one column of padding either side
-
-		if i == active {
-			activeStart, activeWidth = col, w
-			// Foreground taken from the surface behind the strip, so the label
-			// sits *in* the accent rather than on top of it.
-			strip.WriteString(fmt.Sprintf("[%s:%s:b] %s [-:-:-]",
-				tagColor(cm.theme.Surface), tagColor(cm.theme.Accent), label))
-		} else {
-			strip.WriteString(fmt.Sprintf("[%s] %s [-]", cm.theme.TagMuted, label))
-		}
-		col += w
+	raised := tagColor(cm.theme.SurfaceRaised)
+	rule := "│"
+	if !supportsUnicode() {
+		rule = "|"
 	}
 
-	cm.tabBar.SetText(strip.String() + "\n" + cm.caseTabUnderline(activeStart, activeWidth))
+	var strip strings.Builder
+	strip.WriteString(fmt.Sprintf("[:%s]%s", raised, strings.Repeat(" ", caseTabIndent)))
+
+	for i := range labels {
+		if i > 0 {
+			// No hairline against the filled segment: the fill is already an
+			// edge, and a rule beside it reads as a seam.
+			if i == active || i-1 == active {
+				strip.WriteString(fmt.Sprintf("[:%s] ", raised))
+			} else {
+				strip.WriteString(fmt.Sprintf("[%s:%s]%s",
+					tagColor(cm.theme.Border), raised, rule))
+			}
+		}
+
+		name, count := cm.caseTabParts(i)
+		if i == active {
+			// Foreground taken from the surface behind the strip, so the label
+			// sits *in* the accent rather than on top of it. The count drops
+			// the bold rather than the colour: on a filled segment anything
+			// quieter than the label stops being legible.
+			strip.WriteString(caseTabSegment(
+				tagColor(cm.theme.Surface), tagColor(cm.theme.Accent), "b", "", name, count))
+			continue
+		}
+		strip.WriteString(caseTabSegment(cm.theme.TagMuted, raised, "", "d", name, count))
+	}
+
+	// The right of the bar carries the copilot, because nothing else does.
+	// It is a drawer and it starts closed, so on the screen as shipped there
+	// is no sign the panel exists at all — the key was in the help and nowhere
+	// an analyst would look. A bar with an empty right half is the place for
+	// it.
+	hint := "]  copilot"
+	if cm.copilotOpen {
+		hint = "[  close copilot"
+	}
+	if gap := barWidth - caseTabStripWidth(labels) - len([]rune(hint)) - 1; gap >= 4 {
+		strip.WriteString(fmt.Sprintf("[:%s]%s[%s:%s:d]%s ",
+			raised, strings.Repeat(" ", gap), cm.theme.TagMuted, raised, hint))
+	}
+
+	// The rest of the row is bar, not background: the strip ends where the
+	// terminal does.
+	strip.WriteString(fmt.Sprintf("[:%s]", raised))
+	cm.tabBar.SetText(strip.String())
 }
 
-// caseTabUnderline is the accent bar under the active chip.
-func (cm *CaseManagement) caseTabUnderline(start, width int) string {
-	if width <= 0 {
-		return ""
+// caseTabSegment draws one segment of the bar: padding, the tab's name, and its
+// count in a quieter weight.
+func caseTabSegment(fg, bg, attrs, countAttrs, name, count string) string {
+	pad := strings.Repeat(" ", caseTabPad)
+	label := fmt.Sprintf("[%s:%s:%s]%s%s", fg, bg, attrs, pad, name)
+	if count != "" {
+		label += fmt.Sprintf(" [%s:%s:%s]%s", fg, bg, countAttrs, count)
 	}
-	bar := "━"
-	if !supportsUnicode() {
-		bar = "="
-	}
-	return strings.Repeat(" ", start) +
-		fmt.Sprintf("[%s]%s[-]", cm.theme.TagAccent, strings.Repeat(bar, width))
+	return label + fmt.Sprintf("[%s:%s:%s]%s[-:-:-]", fg, bg, attrs, pad)
 }
 
 // wrapTab keeps a tab index inside the tab list, wrapping at both ends.
@@ -2799,7 +2837,9 @@ func (cm *CaseManagement) applyTheme() {
 
 	// Tab bar styling
 	if cm.tabBar != nil {
-		cm.tabBar.SetBackgroundColor(cm.theme.Surface)
+		// Raised, so the strip reads as a bar across the screen rather than as
+		// text floating on the same ground as everything else.
+		cm.tabBar.SetBackgroundColor(cm.theme.SurfaceRaised)
 		cm.tabBar.SetTextColor(cm.theme.TextPrimary)
 	}
 

@@ -560,45 +560,62 @@ func TestTheTabStripCountsWhatEachTabHolds(t *testing.T) {
 	}
 }
 
-// The accent bar sits under the active chip, not under whatever happens to be
-// first — it is the only thing on the strip that says where you are.
-func TestTheAccentBarSitsUnderTheActiveTab(t *testing.T) {
+// The bar is one row, and the tab you are on is the only filled segment.
+//
+// The strip spent a second row on an accent rule that was a dozen columns of
+// ink and a hundred and eighty of nothing, and the tabs themselves were plain
+// text on the app background — no edges, so six of them ran together.
+func TestTheTabBarIsOneFilledRow(t *testing.T) {
 	ui, _ := newTestUI(t)
 	cm := openCase(t, ui)
 	cm.activeTab = tabTimeline
 	cm.renderTabBar()
 
-	lines := strings.Split(cm.tabBar.GetText(true), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("the strip is not two rows: %q", lines)
+	raw := cm.tabBar.GetText(false)
+	if strings.Contains(raw, "\n") {
+		t.Errorf("the bar is more than one row:\n%s", raw)
 	}
-	bar := lines[1]
-	start := strings.IndexRune(bar, '━')
-	if start < 0 {
-		t.Fatalf("no accent bar was drawn: %q", bar)
-	}
-	width := len([]rune(strings.TrimRight(bar[start:], " ")))
 
-	label := cm.caseTabLabel(tabTimeline)
-	if want := len([]rune(label)) + 2; width != want {
-		t.Errorf("the bar is %d columns wide, the chip is %d", width, want)
+	fill := fmt.Sprintf("[%s:%s:b]", tagColor(cm.theme.Surface), tagColor(cm.theme.Accent))
+	if n := strings.Count(raw, fill); n != 2 {
+		t.Errorf("the accent fill opens %d times, want 2 (the label and its padding): %s", n, raw)
 	}
-	if got := strings.Index(lines[0], label); got != start+1 {
-		t.Errorf("the bar starts at column %d, the label at %d", start, got)
+	if !strings.Contains(raw, fill+"  "+caseTabNames[tabTimeline]) {
+		t.Errorf("the filled segment is not the active tab:\n%s", raw)
 	}
 }
 
-// The active chip is filled, so it reads at a glance rather than after a scan.
-func TestTheActiveTabIsFilled(t *testing.T) {
+// Each tab is separated from the next, so the strip reads as six places to go
+// rather than as a sentence. Except beside the filled segment, where the fill
+// is already an edge and a rule would read as a seam.
+func TestTheTabsAreSeparated(t *testing.T) {
 	ui, _ := newTestUI(t)
 	cm := openCase(t, ui)
-	cm.activeTab = tabEvents
+	cm.activeTab = tabBriefing
 	cm.renderTabBar()
 
-	raw := cm.tabBar.GetText(false)
-	want := fmt.Sprintf("[%s:%s:b] %s [-:-:-]",
-		tagColor(cm.theme.Surface), tagColor(cm.theme.Accent), cm.caseTabLabel(tabEvents))
-	if !strings.Contains(raw, want) {
-		t.Errorf("the active chip is not filled with the accent:\nwant %q\nin   %q", want, raw)
+	// Seven tabs, six gaps, one of which is beside the active segment.
+	if n := strings.Count(cm.tabBar.GetText(true), "│"); n != 5 {
+		t.Errorf("the strip has %d separators, want 5:\n%s", n, cm.tabBar.GetText(true))
+	}
+}
+
+// The right of the bar names the copilot, which is a drawer that starts closed
+// — on the screen as shipped there was no sign the panel existed at all.
+func TestTheBarNamesTheCopilot(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+	cm.lastWidth = 190
+	cm.renderTabBar()
+
+	if got := cm.tabBar.GetText(true); !strings.Contains(got, "]  copilot") {
+		t.Errorf("the bar does not offer the copilot:\n%s", got)
+	}
+
+	cm.toggleCaseCopilot()
+	cm.lastWidth = 190
+	cm.renderTabBar()
+	if got := cm.tabBar.GetText(true); !strings.Contains(got, "close copilot") {
+		t.Errorf("with the copilot open the bar does not offer to close it:\n%s", got)
 	}
 }
