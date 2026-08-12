@@ -56,7 +56,42 @@ make build          # produces bin/console-ir
 ```
 
 The shipped build uses `CGO_ENABLED=0` and the pure-Go SQLite driver, so it cross-compiles without a
-C toolchain. See [build.md](build.md) for cross-compilation and platform notes.
+C toolchain — no C compiler, no headers, nothing to install first.
+
+### On Windows
+
+`make` is not required. A PowerShell script builds the same binaries:
+
+```pwsh
+.\scripts\build.ps1 windows      # this machine
+.\scripts\build.ps1 linux
+.\scripts\build.ps1 macos
+.\scripts\build.ps1 macos-arm64
+.\scripts\build.ps1 all
+```
+
+Or use `make` through WSL or Git Bash.
+
+### Cross-compiling by hand
+
+Go needs only `GOOS` and `GOARCH`; every combination we publish builds from any host.
+
+```bash
+GOOS=linux   GOARCH=amd64 go build -o bin/console-ir main.go
+GOOS=linux   GOARCH=arm64 go build -o bin/console-ir main.go
+GOOS=darwin  GOARCH=arm64 go build -o bin/console-ir main.go   # Apple Silicon
+GOOS=windows GOARCH=amd64 go build -o bin/console-ir.exe main.go
+GOOS=windows GOARCH=arm64 go build -o bin/console-ir.exe main.go
+```
+
+Release archives are built by GoReleaser rather than by hand; see
+[`.goreleaser.yaml`](../.goreleaser.yaml).
+
+### If you see `undefined: syscall.SYS_IOCTL`
+
+You are building Unix code for Windows, or the reverse. Terminal handling is split by platform —
+`cmd/terminal_unix.go` and `cmd/terminal_windows.go`, and likewise for the pseudo-terminal fallback —
+so check `GOOS` is what you meant.
 
 ## Verify
 

@@ -57,7 +57,8 @@ that mode.
 **Redis errors?** You do not need Redis unless you explicitly pass `--redis ...`. The default is
 standalone with no external services.
 
-**Build issues?** Run `go mod download` then `make build`. See [build.md](build.md).
+**Build issues?** Run `go mod download` then `make build`. See
+[installation.md](installation.md#from-source).
 
 **Where is everything?** `console-ir version` prints the resolved database, config and log paths
 along with the build and OCSF schema versions.

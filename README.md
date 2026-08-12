@@ -138,14 +138,13 @@ Full detail in [docs/architecture.md](docs/architecture.md).
 | | |
 |---|---|
 | [Getting started](docs/getting-started.md) | First run, keys, a worked investigation |
-| [Installation](docs/installation.md) | Every install method, verification, from source |
+| [Installation](docs/installation.md) | Every install method, verification, building from source |
 | [Ingestion](docs/ingestion.md) | Files, directories, stdin, watch mode, HTTP |
 | [Configuration](docs/configuration.md) | Paths, logging, LLM providers, themes, Redis |
 | [Architecture](docs/architecture.md) | How records flow, the storage model, enrichment |
 | [Migration](docs/migration.md) | Upgrading from v0.1.x |
 | [Troubleshooting](docs/troubleshooting.md) | When something does not appear |
 | [Plugins](docs/plugins.md) | Writing and enabling external plugins |
-| [Building](docs/build.md) | Cross-compilation and platform notes |
 
 ## Contributing
 

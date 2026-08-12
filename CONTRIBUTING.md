@@ -20,7 +20,7 @@ This document explains the workflow, coding standards, and how to run checks loc
 
 ## Prerequisites
 
-- Go ≥ 1.23 (see [docs/build.md](docs/build.md))
+- Go ≥ 1.23 (see [docs/installation.md](docs/installation.md) for building from source)
 - Docker (optional — only for the experimental Redis-based threat-intel plugins)
 - Make
 
@@ -165,3 +165,11 @@ it later without tracking down every contributor — and that is not a decision 
 accident in a pull request.
 
 If that position changes, this file changes with it.
+
+## Releasing
+
+Maintainers only. The step-by-step checklist — validating the pipeline before tagging, the tap and
+bucket repos, the required secrets, and the rollback plan — is in
+[.github/release-playbook.md](.github/release-playbook.md). It lives there rather than in `docs/`
+because `docs/*` ships inside every release archive, and a runbook about pushing tags is not
+documentation for someone who downloaded a binary.
