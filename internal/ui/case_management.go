@@ -952,6 +952,7 @@ func (cm *CaseManagement) updateEventsTable() {
 	for row := cm.eventsTable.GetRowCount() - 1; row > 0; row-- {
 		cm.eventsTable.RemoveRow(row)
 	}
+	setTableCursor(cm.eventsTable, len(cm.events) > 0)
 
 	// Sort events by timestamp (newest first)
 	sort.Slice(cm.events, func(i, j int) bool {

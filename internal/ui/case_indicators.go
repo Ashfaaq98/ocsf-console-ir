@@ -68,6 +68,7 @@ func manualIndicators(notes []store.Note) ([]store.CaseIndicator, map[string]str
 // renderCaseIndicators draws the aggregated indicators.
 func renderCaseIndicators(table *tview.Table, indicators []store.CaseIndicator, t Theme, emptyHint []string) {
 	table.Clear()
+	setTableCursor(table, len(indicators) > 0)
 
 	// The three numeric columns are right-aligned, headers included. A sighting
 	// time is 11 columns dated and 5 bare — "08-06 05:59" beside "09:07" — so

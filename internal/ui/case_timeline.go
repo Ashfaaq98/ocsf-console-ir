@@ -175,6 +175,7 @@ func orUnknown(s string) string {
 func renderTimeline(table *tview.Table, entries []timelineEntry, expanded string, t Theme,
 	dropped int) (map[int]string, map[int]int) {
 	table.Clear()
+	setTableCursor(table, len(entries) > 0)
 	rowCluster := map[int]string{}
 
 	if len(entries) == 0 {

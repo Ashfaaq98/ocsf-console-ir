@@ -38,6 +38,7 @@ func renderNotes(table *tview.Table, notes []store.Note, t Theme) {
 	table.Clear()
 
 	log := caseLogNotes(notes)
+	setTableCursor(table, len(log) > 0)
 
 	if len(log) == 0 {
 		table.SetCell(0, 0, tview.NewTableCell("No notes yet.").
@@ -213,6 +214,7 @@ func auditDetail(e store.AuditEntry, keys ...string) (string, bool) {
 // renderActivity draws the audit trail.
 func renderActivity(table *tview.Table, rows []activityRow, t Theme, total int) {
 	table.Clear()
+	setTableCursor(table, len(rows) > 0)
 
 	headers := []string{"WHEN", "WHO", "WHAT", "BEFORE → AFTER"}
 	for col, h := range headers {

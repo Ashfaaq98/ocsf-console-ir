@@ -50,3 +50,27 @@ func (cm *CaseManagement) setTextColor(p tview.Primitive, fg tcell.Color) {
 		c.SetTextColor(fg)
 	}
 }
+
+// setTableCursor turns a table's cursor on only when there is something to land
+// on.
+//
+// tview walks the table for a selectable cell when an arrow key arrives, and if
+// there is none it can search forever. A draw leaves the selected row one past
+// the last row, and the backward walk the arrow then does is told to stop when
+// it reaches that row — which it never can, because the walk wraps inside the
+// rows that exist. It spins on the UI goroutine, and the application is gone.
+//
+// Every empty state here is a table of unselectable cells inside a selectable
+// table, which is exactly that shape. Turning the cursor off while a pane has
+// nothing in it is also what the pane means: there is nothing to move between.
+func setTableCursor(table *tview.Table, hasRows bool) {
+	if table == nil {
+		return
+	}
+	table.SetSelectable(hasRows, false)
+	if !hasRows {
+		// So the cursor starts from the top when rows arrive, rather than from
+		// wherever the last set left it.
+		table.Select(0, 0)
+	}
+}

@@ -78,6 +78,7 @@ func (cm *CaseManagement) renderCaseFindings() {
 		return
 	}
 	cm.findingsTable.Clear()
+	setTableCursor(cm.findingsTable, len(cm.caseFindings) > 0)
 	cm.findingsTable.SetSelectedStyle(tcell.StyleDefault.
 		Background(cm.theme.SelectionBg).Foreground(cm.theme.SelectionFg))
 	// Named like every other pane, and without the count: the tab strip carries

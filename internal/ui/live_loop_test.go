@@ -169,3 +169,88 @@ func settle(ui *UI, within time.Duration) {
 	case <-time.After(within):
 	}
 }
+
+// Arrowing an empty pane must not freeze the application.
+//
+// Every tab's empty state is a table of unselectable cells sitting in a
+// selectable table, which is a shape tview can walk forever looking for
+// something to land on.
+func TestArrowingAnEmptyPaneDoesNotFreeze(t *testing.T) {
+	ui, st, screen := liveUI(t)
+	seedCases(t, ui, st, 1)
+
+	// Into the first case.
+	screen.InjectKey(tcell.KeyRune, '2', tcell.ModNone)
+	if !awaitDestination(ui, destCases, 5*time.Second) {
+		t.Fatal("never reached the Cases screen")
+	}
+	// Opened through the loop rather than by injecting Enter: which key opens a
+	// case belongs to another test, and this one is about what the arrows do
+	// once inside one.
+	ui.app.QueueUpdateDraw(func() { ui.openCaseManagement(0) })
+	if err := pingLoop(ui, 5*time.Second); err != nil {
+		t.Fatal("opening the case froze the application")
+	}
+	settle(ui, 5*time.Second)
+
+	if ui.activeCM == nil {
+		t.Fatal("the case screen never opened, so this test proved nothing")
+	}
+
+	// Every tab, empty, arrowed in both directions.
+	for tab := 0; tab < len(caseTabNames); tab++ {
+		screen.InjectKey(tcell.KeyTab, 0, tcell.ModNone)
+		if err := pingLoop(ui, 5*time.Second); err != nil {
+			t.Fatalf("reaching tab %d froze the application", tab)
+		}
+		if !awaitTab(ui, wrapTab(tab+1), 5*time.Second) {
+			t.Fatalf("Tab %d left the strip on %d — the keys are not reaching the case",
+				tab, ui.activeCM.activeTab)
+		}
+
+		for _, key := range []tcell.Key{
+			tcell.KeyDown, tcell.KeyDown, tcell.KeyUp, tcell.KeyUp,
+			tcell.KeyHome, tcell.KeyEnd, tcell.KeyPgDn, tcell.KeyPgUp,
+		} {
+			screen.InjectKey(key, 0, tcell.ModNone)
+			if err := pingLoop(ui, 5*time.Second); err != nil {
+				name := "?"
+				if tab < len(caseTabNames) {
+					name = caseTabNames[tab]
+				}
+				t.Fatalf("arrowing the empty %s tab froze the application (key %v)", name, key)
+			}
+		}
+	}
+}
+
+// awaitTab waits for a Tab keypress to land on its tab.
+//
+// Waiting rather than asserting: an update queued behind a key can be serviced
+// ahead of it, so a ping proves the loop is alive and not that the keystroke has
+// been handled.
+func awaitTab(ui *UI, want int, within time.Duration) bool {
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		got := -1
+		done := make(chan struct{})
+		go func() {
+			ui.app.QueueUpdate(func() {
+				if ui.activeCM != nil {
+					got = ui.activeCM.activeTab
+				}
+				close(done)
+			})
+		}()
+		select {
+		case <-done:
+		case <-time.After(within):
+			return false
+		}
+		if got == want {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
+}
