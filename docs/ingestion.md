@@ -18,6 +18,8 @@ cat events.json | console-ir ingest - # stdin
 | `--no-enrich` | Skip GeoIP/WHOIS lookups. Use for bulk loads |
 | `--case "Title"` | Attach everything ingested to a case |
 | `--skip-invalid` | Continue past records that fail to parse or are not OCSF, and exit 0 |
+| `--pattern` | Which files to match in a directory. Default `*.jsonl,*.json` |
+| `--batch-size` | Records per batch. Default 50 |
 
 Records are enriched as they arrive. One-shot ingestion enriches **synchronously and waits**, so the
 command does not exit with lookups still in flight.
@@ -52,11 +54,17 @@ console-ir --http-ingest-enable --http-ingest-bind 127.0.0.1:8081
 | `--http-ingest-burst` | `20` | Rate limiter burst |
 | `--http-ingest-dir` | `--ingest-dir` | Where payloads are written |
 
-> **HTTP ingestion requires the TUI.** The receiver writes files into the drop folder, and the
-> folder watcher that ingests them only starts alongside the TUI. Combining
-> `--http-ingest-enable` with `--no-tui` is refused rather than accepted, because it would return
-> `202 Accepted` and never store the events. Headless HTTP ingestion is planned; until then
-> `console-ir ingest <dir> --watch` is the fully headless path.
+It works headless as well as under the TUI: the folder watcher that reads those files back in runs
+in both modes, so `--http-ingest-enable --no-tui` stores what it accepts.
+
+```bash
+console-ir --no-tui --http-ingest-enable --http-ingest-bind 0.0.0.0:8081
+```
+
+The receiver can also be switched on and off from inside the TUI, under settings (`,`), which shows
+whether it is listening, on what address, whether a token is required and how many payloads it has
+taken. The address and the token stay on the command line — those are decisions about what to expose
+and to whom, not preferences.
 
 ## What happens to a record
 

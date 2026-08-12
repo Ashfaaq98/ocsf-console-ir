@@ -44,19 +44,13 @@ Anything inferred is labelled *derived* rather than *asserted*.
 **TUI won't start?** It needs a real TTY. Use a native terminal rather than a pipe or a CI runner.
 `console-ir list` works anywhere, including over SSH with no TTY.
 
-`--no-tui` is experimental and does not ingest.
+`--no-tui` runs without a terminal. Folder ingestion, enrichment and the HTTP receiver all run in
+that mode.
 
 **Colours look wrong?** Press `t` to cycle themes. Console-IR detects true-colour support; a
 16-colour terminal falls back automatically.
 
 **Layout clipped?** The TUI targets 80×24 as a minimum. Wider terminals get more columns.
-
-## HTTP ingestion
-
-**`--http-ingest-enable` refuses to start with `--no-tui`.** That is deliberate. The receiver writes
-POSTed payloads into the drop folder, and the watcher that ingests them only runs alongside the TUI,
-so headless it would answer `202 Accepted` and never store anything. Use
-`console-ir ingest <dir> --watch`, which is fully headless.
 
 ## Other
 

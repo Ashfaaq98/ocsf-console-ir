@@ -57,6 +57,7 @@ its path.
 ### Removed in v0.2.0
 
 - **Container images.** The published image had no working purpose and declared a volume that no
-  longer matched where the database lived. Reconsidered once headless ingestion exists.
-- **The `T` and `C` theme shortcuts**, along with the high-contrast and colourblind-safe palettes.
-  Press `t` to cycle the three that ship.
+  longer matched where the database lived. Headless ingestion exists now, so an image has something
+  to do again; it is on the roadmap rather than in this release.
+- **The `T` and `C` theme shortcuts.** Press `t` to cycle. Six palettes ship, including the
+  high-contrast and colourblind-safe ones — see [configuration.md](configuration.md).

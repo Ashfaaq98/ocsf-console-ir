@@ -48,7 +48,7 @@ In-process (core) plugins — recommended
 - GeoIP and WHOIS ship this way; see `internal/enrich/geoip` and `internal/enrich/whois`.
 - To add one: implement the `CorePlugin` interface (`internal/plugins/interface.go`) —
   `Process(ctx, event) ([]store.Enrichment, error)` plus lifecycle methods — and register
-  it in `cmd/serve.go` with `pluginManager.GetRegistry().RegisterCorePlugin(...)`.
+  it in `cmd/enrich.go` with `pm.GetRegistry().RegisterCorePlugin(...)`.
 - Test with a `:memory:` store and a hermetic event; no external services required.
 
 External plugins — for distributed / threat-intel integrations

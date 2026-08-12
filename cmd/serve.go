@@ -64,8 +64,8 @@ var serveCmd = &cobra.Command{
 
 The serve command runs until interrupted (Ctrl+C).
 
-Note: headless mode (--no-tui) is experimental. Folder ingestion and
-enrichment currently run only with the TUI active.
+Headless mode (--no-tui) runs everything except the interface: folder
+ingestion, enrichment and the HTTP receiver.
 
 Examples:
   # Start with TUI (default)

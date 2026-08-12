@@ -6,36 +6,12 @@ static binary with no runtime dependencies.
 ---
 
 ## 📦 Prerequisites
-- **Go ≥ 1.23** → [Download Go](https://golang.org/dl/)
+- **Go ≥ 1.23** → [Download Go](https://golang.org/dl/). Building from source without
+  cross-compiling is covered in [installation.md](installation.md).
 - **Git**
 - **Make** (Linux/macOS, optional)  
 - **PowerShell** (Windows, recommended)
 
----
-
-
-## 🖥️ Installing Go on Windows
-
-If you don’t have Go installed:
-
-1. **Download Go**  
-   - Visit [https://golang.org/dl/](https://golang.org/dl/)  
-   - Download the Windows `.msi` installer (64-bit is typical)  
-
-2. **Install Go**  
-   - Run the installer with default settings  
-   - Go will be installed to `C:\Program Files\Go`  
-
-3. **Verify installation**  
-   ```pwsh
-   go version
-   ```
-
-4. **Fix PATH if needed**
-    ```pwsh
-    $env:PATH += ";C:\Program Files\Go\bin"
-    [Environment]::SetEnvironmentVariable("Path", $env:Path + ";C:\Program Files\Go\bin", [EnvironmentVariableTarget]::User)
-    ```
 ---
 
 
@@ -67,17 +43,7 @@ make build-plugins  # build plugins only
 
 ```
 
-### Method 3 — Using Go directly
-
-```bash
-# Build for current platform
-go build -o bin/console-ir main.go
-
-# Build an external threat-intel plugin (example: MISP)
-cd plugins/misp && go build -o ../../bin/misp .
-```
-
-### Method 4 — Manual Cross-Compilation
+### Method 3 — Manual cross-compilation
 
 ```bash
 # Linux amd64
@@ -109,53 +75,30 @@ After successful builds, executables are placed in bin/:
 
  - bin/console-ir-macos-arm64 → macOS ARM64/Apple Silicon
 
- - bin/geoip.exe → Example plugin (if built)
+ - bin/misp, bin/opencti, bin/intelowl → external threat-intel plugins (if built)
+
+GeoIP and WHOIS are **not** plugins — they run in-process inside the binary. See
+[architecture.md](architecture.md).
 
 ---
 
 ## 🛠️ Troubleshooting
 
-### 1. go: command not found / ‘go’ is not recognized
+### 1. Go toolchain problems
 
- - Go is not installed or not in your PATH.
-
- - Verify with:
-
-    ```pwsh
-    Test-Path "C:\Program Files\Go\bin\go.exe"
-    ```
-
- - Add it to PATH as shown above.
+`go: command not found`, module download failures and build permission errors belong to Go rather
+than to us. Install Go from [golang.org/dl](https://golang.org/dl/), then
+`go clean -modcache && go mod download`.
 
 ---
 
-### 2. Module download issues
+### 2. make: command not found (Windows)
 
-```bash
-go clean -modcache
-go mod download
-```
-
---- 
-
-### 3. Build permission errors
-
-```pwsh
-# Run PowerShell as Administrator
-# Or check write permissions on the bin/ directory
-```
-
---- 
-
-### 4. make: command not found (Windows)
-
- - Use PowerShell and build.ps1 instead.
-
- - Or install make via WSL / Git Bash.
+Use PowerShell and `scripts\build.ps1`, or install make via WSL or Git Bash.
 
 ---
 
-### 5. Windows-specific syscall errors
+### 3. Windows-specific syscall errors
 
 If you see errors like undefined: syscall.SYS_IOCTL:
 

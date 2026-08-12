@@ -38,11 +38,11 @@ Once a database exists it opens on **Analyst Home**, which answers "what needs m
 open findings, active cases, evidence seen today, and a priority queue of the highest-risk
 detections. Keys `1`–`5` reach the other screens from there.
 
-From the findings queue:
+From the findings queue (`1`):
 
 - **Enter** opens the finding: evidence artifacts, the events it came from, and its indicators
 - **`s`** sets status, **`v`** sets verdict, **`e`** escalates it into a case
-- **`A`** switches to ALL EVENTS. Open one to see GeoIP/WHOIS enrichment attached, grouped one card
+- **`3`** switches to Events. Open one to see GeoIP/WHOIS enrichment attached, grouped one card
   per indicator and updating in place as async lookups land
 
 ## Commands
@@ -52,6 +52,7 @@ console-ir                    open the TUI
 console-ir ingest <path|->    a file, a directory, or stdin  (--watch, --no-enrich)
 console-ir demo               sample incident in a throwaway database
 console-ir list               findings | cases | events   (works without a TTY)
+console-ir report <case>      write a case up as Markdown, to stdout by default
 console-ir reset              clear the database
 console-ir version            version, build info and resolved paths
 ```
@@ -64,18 +65,21 @@ Press **`?`** in the app for the full list. The ones that matter most:
 
 | Key | Does |
 |---|---|
-| `D` | Findings queue (detections awaiting triage) |
-| `A` | All events |
+| `1`–`5` | Triage, Cases, Events, Indicators, Reports — from anywhere |
 | `Enter` | Open the selected item |
-| `1`–`5` | Triage, Events, Cases, Indicators, Reports — from anywhere |
 | `Esc` | Back to Analyst Home |
 | `Tab` | Cycle panels |
 | `:` | Command palette |
 | `r` | Reload |
-| `f` / `F` | Filter events / clear filters |
+| `f` / `F` | Filter / clear filters |
 | `t` | Cycle theme |
+| `,` | Settings |
 | `?` (or `h`) | Help |
 | `q` | Quit |
+
+Each screen names its own keys in the bar at the bottom, and `?` lists everything that applies
+where you are standing. There are no hidden letter shortcuts that jump between screens — the digits
+are the only way, so they mean one thing everywhere.
 
 In the findings queue:
 
@@ -85,23 +89,40 @@ In the findings queue:
 | `v` | Set verdict (True/False Positive, Suspicious, Benign, …) |
 | `e` | Escalate into a new or existing case |
 | `o` | Toggle between open findings and all findings |
+| `Space` | Select findings for a bulk action |
+| `/` | Search titles |
 
 Inside a case, **`Tab`** and **`Shift+Tab`** move between the seven tabs — Briefing, Findings, Events,
 Timeline, Indicators, Notes, Activity. Digits are reserved for the destinations above and do not
 change tabs. `]` opens the copilot beside the case and `[` closes it.
+
+| Key | Does (inside a case) |
+|---|---|
+| `Space` | Pin the event under the cursor as evidence |
+| `p` | Pin from the timeline |
+| `n` | Write a note · `T` from a template |
+| `o` | Take ownership of the case |
+| `s` / `S` | Set status · cycle it |
+| `E` | Write the case up as a report |
+| `J` / `e` | Export the whole case · just the pinned evidence, as JSON |
+| `h` / `l` | Move left to the tab, right to the copilot |
+| `Esc` | Leave the case |
 
 Navigation follows vim conventions: `j`/`k` move, `h`/`l` change pane, `g`/`G` jump to top/bottom,
 `J`/`K` page.
 
 ## A first investigation
 
-1. `D` to open the findings queue. The highest-risk unresolved detection is at the top.
+1. `1` for the findings queue. The highest-risk unresolved detection is at the top.
 2. `Enter` to inspect it: what fired, which events support it, which indicators it carries.
 3. `v` to record a verdict, or `e` to escalate it into a case.
-4. `3` for Cases, `Enter` to open one. It opens on **Briefing** — the statement, scope, working
+4. `2` for Cases, `Enter` to open one. It opens on **Briefing** — the statement, scope, working
    hypotheses and next actions. `Tab` to Findings for what the case is about, again for the events
    attached as evidence.
-5. `A` to search the raw telemetry around it.
+5. `Space` on the events that prove it — pinned evidence surfaces on the briefing and in the report.
+6. `E` writes the case up. `5` keeps every report you have written.
+7. `3` for Events, or `4` for Indicators and `Enter` to pivot on one, to search the telemetry
+   around it.
 
 ## Next
 
