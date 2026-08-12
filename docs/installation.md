@@ -9,13 +9,21 @@ nothing to configure before first use.
 brew install Ashfaaq98/tap/console-ir
 ```
 
-## curl
+## Scoop (Windows)
+
+```pwsh
+scoop bucket add ashfaaq98 https://github.com/Ashfaaq98/scoop-bucket
+scoop install console-ir
+```
+
+## curl (Linux and macOS)
 
 ```bash
 curl -sSfL https://raw.githubusercontent.com/Ashfaaq98/ocsf-console-ir/main/scripts/install.sh | bash
 ```
 
-Installs to `/usr/local/bin` by default; set `INSTALL_DIR` to change it.
+Installs to `/usr/local/bin` by default; set `INSTALL_DIR` to change it. The script is deliberately
+Unix-only and refuses to run elsewhere — on Windows use Scoop or an archive.
 
 ## Manual download
 
@@ -26,7 +34,10 @@ the binary onto your `PATH`.
 |---|---|
 | Linux | `console-ir_<version>_Linux_amd64.tar.gz`, `_arm64` |
 | macOS | `console-ir_<version>_macOS_amd64.tar.gz`, `_arm64` |
-| Windows | `console-ir_<version>_windows_amd64.zip` |
+| Windows | `console-ir_<version>_windows_amd64.zip`, `_arm64` |
+
+Every platform gets both architectures: Intel/AMD and ARM, including Apple Silicon and Windows on
+ARM.
 
 Every release publishes `checksums.txt` and an SBOM per archive.
 

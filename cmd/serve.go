@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -314,16 +313,16 @@ func runServe(cmd *cobra.Command, args []string) error {
 				logger.Println("No TTY available, using script command for pseudo-TTY...")
 				return runWithPseudoTTY(cmd, args)
 			}
-			logger.Println("TUI cannot be initialized in this terminal environment")
-			logger.Println("Automatically switching to headless mode...")
+			logger.Println("The interface cannot start in this terminal.")
+			logger.Println("Continuing without it.")
 			logger.Println("")
-			logger.Println("For full TUI experience, use:")
-			logger.Println("  1. Native terminal (gnome-terminal, iTerm2, etc.)")
-			logger.Println("  2. SSH with proper TERM settings")
+			for _, line := range terminalAdvice() {
+				logger.Println("  " + line)
+			}
 			logger.Println("")
-			logger.Println("Current alternatives:")
-			logger.Println("  - CLI commands: ./bin/console-ir list cases")
-			logger.Println("  - Headless mode: ./bin/console-ir serve --no-tui")
+			logger.Println("Without a terminal:")
+			logger.Println("  console-ir list cases     read the data")
+			logger.Println("  console-ir --no-tui       ingestion and the HTTP receiver, no interface")
 			logger.Println("")
 
 			// Switch to headless mode
@@ -724,54 +723,6 @@ func (sc *ServiceCoordinator) collectMetrics() {
 // createSampleData removed to prevent automatic creation of sample cases/events.
 // Automatic sample data seeding was intentionally deleted to ensure that when
 // cases/events are removed by the user, they are not recreated on restart.
-
-// needsPseudoTTY checks if we need to use script command for pseudo-TTY
-func needsPseudoTTY() bool {
-	// Try to actually open /dev/tty (not just check if it exists)
-	if file, err := os.OpenFile("/dev/tty", os.O_RDWR, 0); err == nil {
-		file.Close()
-		return false
-	}
-	return true
-}
-
-// runWithPseudoTTY re-executes the command using script for pseudo-TTY
-func runWithPseudoTTY(cmd *cobra.Command, args []string) error {
-	// Get the current executable path
-	executable, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("failed to get executable path: %w", err)
-	}
-
-	// Build the command arguments
-	cmdArgs := []string{"serve"}
-	cmdArgs = append(cmdArgs, args...)
-
-	// Add force-tui flag if not already present
-	hasForceTUI := false
-	for _, arg := range args {
-		if arg == "--force-tui" {
-			hasForceTUI = true
-			break
-		}
-	}
-	if !hasForceTUI {
-		cmdArgs = append(cmdArgs, "--force-tui")
-	}
-
-	// VULN-4: Avoid shell command string interpolation to prevent injection via
-	// TERM env var or executable path. Use exec.Command with separate arguments
-	// and pass TERM safely through the environment.
-	innerCmd := exec.Command(executable, cmdArgs...)
-	innerCmd.Stdin = os.Stdin
-	innerCmd.Stdout = os.Stdout
-	innerCmd.Stderr = os.Stderr
-
-	// Inherit environment and ensure TERM is set
-	innerCmd.Env = os.Environ()
-
-	return innerCmd.Run()
-}
 
 // determineTUIMode determines if TUI will be used (extracted for logging setup)
 func determineTUIMode(cmd *cobra.Command, args []string) bool {

@@ -56,6 +56,42 @@ jobs:
             (cd "${plugin_dir}" && go build ./... && go test ./...)
           done < <(find plugins -mindepth 1 -maxdepth 1 -type d | sort)
 
+  # Every job above runs on Linux, and we publish macOS and Windows binaries.
+  # Until this existed, "supports three platforms" rested on cross-compilation
+  # alone — nothing had ever run there. Race detection needs cgo and a C
+  # toolchain, so these run the ordinary suite; the race pass stays on Linux.
+  cross-platform:
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test ./...
+
+      # The shipped binaries are built this way on every platform.
+      - name: Test shipped driver (CGO_ENABLED=0)
+        env:
+          CGO_ENABLED: 0
+        run: go test ./...
+
   release-config:
     name: Validate release pipeline
     runs-on: ubuntu-latest

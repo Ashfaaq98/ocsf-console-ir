@@ -55,6 +55,10 @@ GOOS=darwin GOARCH=amd64 go build -o bin/console-ir-macos main.go
 # macOS ARM64 (Apple Silicon)
 GOOS=darwin GOARCH=arm64 go build -o bin/console-ir-macos-arm64 main.go
 
+# Windows amd64 and ARM64
+GOOS=windows GOARCH=amd64 go build -o bin/console-ir.exe main.go
+GOOS=windows GOARCH=arm64 go build -o bin/console-ir-arm64.exe main.go
+
 # Reset environment (back to host OS)
 unset GOOS
 unset GOARCH

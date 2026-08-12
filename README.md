@@ -44,12 +44,16 @@ brew install Ashfaaq98/tap/console-ir
 # curl (Linux / macOS)
 curl -sSfL https://raw.githubusercontent.com/Ashfaaq98/ocsf-console-ir/main/scripts/install.sh | bash
 
+# Scoop (Windows)
+scoop bucket add ashfaaq98 https://github.com/Ashfaaq98/scoop-bucket
+scoop install console-ir
+
 # From source (Go >= 1.23)
 git clone https://github.com/Ashfaaq98/ocsf-console-ir.git
 cd ocsf-console-ir && make build
 ```
 
-Prebuilt archives for Linux, macOS and Windows are on the
+Prebuilt archives for Linux, macOS and Windows — Intel and ARM on all three — are on the
 [releases page](https://github.com/Ashfaaq98/ocsf-console-ir/releases), with checksums and an SBOM.
 More in [docs/installation.md](docs/installation.md).
 

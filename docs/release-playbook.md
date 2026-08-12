@@ -46,9 +46,9 @@ Suggested commit message:
 chore: prepare console-ir for automated releases
 ```
 
-### 2. Create the Homebrew tap repo
+### 2. Create the Homebrew tap and Scoop bucket repos
 
-Create a public repository named `Ashfaaq98/homebrew-tap`.
+Create two public repositories: `Ashfaaq98/homebrew-tap` and `Ashfaaq98/scoop-bucket`.
 
 Expected structure after the first release:
 
@@ -56,6 +56,9 @@ Expected structure after the first release:
 homebrew-tap/
   Formula/
     console-ir.rb
+
+scoop-bucket/
+  console-ir.json
 ```
 
 ### 3. Add GitHub repository secrets
@@ -64,6 +67,10 @@ Add these secrets in `Ashfaaq98/ocsf-console-ir`:
 
 - `HOMEBREW_TAP_TOKEN`
   Personal access token with permission to push to `Ashfaaq98/homebrew-tap`.
+- `SCOOP_BUCKET_TOKEN`
+  Personal access token with permission to push to `Ashfaaq98/scoop-bucket`. The bucket repo must
+  exist before the first non-prerelease tag, exactly as the Homebrew tap must — `skip_upload: auto`
+  keeps snapshots and prereleases from touching either.
 - `GPG_PRIVATE_KEY`
   Optional. Only needed if you want signing.
 - `GPG_PASSPHRASE`

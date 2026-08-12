@@ -19,9 +19,6 @@ builds:
     goarch:
       - amd64
       - arm64
-    ignore:
-      - goos: windows
-        goarch: arm64
     flags:
       - -trimpath
     mod_timestamp: "{{ .CommitTimestamp }}"
@@ -92,6 +89,26 @@ brews:
     test: |
       system "#{bin}/console-ir", "--version"
 
+# Scoop is the low-friction Windows channel: the manifest is generated from the
+# archives already built here and published to a bucket repo, so a Windows
+# analyst gets `scoop install console-ir` rather than "download a zip and put it
+# on your PATH". winget is the next one and is not here yet: it needs a manifest
+# pull request into Microsoft's repository for every release, which is a release
+# process rather than a config block.
+scoops:
+  - name: console-ir
+    repository:
+      owner: Ashfaaq98
+      name: scoop-bucket
+      branch: main
+      token: "{{ .Env.SCOOP_BUCKET_TOKEN }}"
+    # As with the Homebrew tap: auto skips snapshots and prereleases, so a
+    # snapshot build never tries to push to the bucket.
+    skip_upload: auto
+    homepage: "https://github.com/Ashfaaq98/ocsf-console-ir"
+    description: "Terminal-first OCSF-native incident response manager for security analysts"
+    license: "AGPL-3.0-only"
+
 release:
   github:
     owner: Ashfaaq98
@@ -108,10 +125,17 @@ release:
     brew install Ashfaaq98/tap/console-ir
     ```
 
-    ### curl installer
+    ### curl installer (Linux and macOS)
 
     ```bash
     curl -sSfL https://raw.githubusercontent.com/Ashfaaq98/ocsf-console-ir/main/scripts/install.sh | bash
+    ```
+
+    ### Scoop (Windows)
+
+    ```pwsh
+    scoop bucket add ashfaaq98 https://github.com/Ashfaaq98/scoop-bucket
+    scoop install console-ir
     ```
   footer: |
     **Full Changelog**: https://github.com/Ashfaaq98/ocsf-console-ir/compare/{{ .PreviousTag }}...{{ .Tag }}
