@@ -5,6 +5,76 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-08-13
+
+The case screen becomes a place to work. Every screen owns its keys, dialogs float over what they
+act on, cases can be written up and kept, and the interface runs headless. Colour now carries
+meaning: severity, status and the kind of thing a value is.
+
+### Upgrading from 0.2.x
+
+**The letter shortcuts are gone.** `A`, `C`, `I`, `D` and `R` jumped between screens without being
+documented anywhere, and two of them collided with keys the screen underneath already used. The
+digits `1`–`5` are now the only way between screens, and they mean the same thing everywhere.
+
+**Cases and Events swapped places.** `1` Triage · `2` Cases · `3` Events · `4` Indicators ·
+`5` Reports. A case is where a finding goes next, so it sits beside the queue.
+
+**Nothing to do to your database.** No schema change in this release.
+
+### Added
+
+- **Reports.** `E` inside a case writes it up as Markdown, the Reports screen keeps every report
+  written, and `console-ir report <case>` produces the same document on stdout for a pipeline. A
+  case can be resolved by id, by unique id prefix, or by title.
+- **Headless HTTP ingest.** `--http-ingest-enable` now works with `--no-tui`: the folder watcher
+  that reads posted payloads back in runs in both modes. Previously the receiver answered
+  `202 Accepted` and left the events unread on disk.
+- **A settings panel** on `,` showing the HTTP receiver's state — listening or not, on what address,
+  whether a token is required, how many payloads it has taken — with a toggle beside the theme.
+- **Semantic colour for entities.** Hosts, users, addresses and artifacts each get a colour taken
+  from their OCSF observable type, on every screen that shows one. The palettes were chosen by
+  searching each theme for the most vivid set that stays distinguishable under three kinds of colour
+  blindness, and that is enforced by test.
+- **A theme picker** on the settings panel, replacing blind cycling. Six palettes ship.
+- **Windows on ARM**, and publishing to Scoop, so Windows has an install path better than a zip.
+- **Notes on the case timeline**, so what an analyst wrote sits beside what happened.
+- **`o` takes ownership of a case.** The header had told analysts to press it since the prompt was
+  written and nothing handled it; `assigned_to` was set once at escalation and never again.
+
+### Changed
+
+- **Every screen owns its keys.** A key means one thing on the screen that advertises it, and the
+  status bar describes where you are standing rather than showing a fixed list.
+- **Dialogs float over the screen they act on.** Filters, pickers and confirmations no longer
+  replace the page, so you can see what you are narrowing while you narrow it.
+- **The case header** shows the case id — the prefix `console-ir report` accepts — the owner, when
+  it opened and when it last changed. It no longer prints a verdict field nothing can write, or
+  counts that could disagree with the tab strip beside them.
+- **The case tab strip is a bar** with a count on each tab, so how full a case is reads without
+  pressing Tab seven times.
+- **Both SQLite drivers and both other platforms are tested in CI.** macOS and Windows now build and
+  run the suite; previously "supports three platforms" rested on cross-compilation alone.
+
+### Fixed
+
+- **Arrowing an empty pane hung the application.** An empty tab draws unselectable cells in a
+  selectable table, and tview searches for somewhere to land forever. Every tab was affected.
+- **Pressing `2` at start-up deadlocked the event loop**, as did `s` on the cases screen: both
+  queued a repaint from the handler that the loop was waiting on.
+- **Three data races on the loading paths**, found once the loads became observable.
+- **Focus was lost when a modal closed** — arrow keys did nothing until you changed screens.
+- **The findings pane and the copilot ignored the theme.** Three copilot widgets had never been in
+  the theming pass at all, so the drawer had black bands on every palette.
+- Screens no longer advertise keys they do not handle, or data they cannot source.
+
+### Removed
+
+- **`docs/build.md`**, whose content duplicated `installation.md` and `CONTRIBUTING.md`. Its
+  Windows and cross-compilation notes moved into `installation.md`.
+- **The release playbook moved out of `docs/`** to `.github/`, so a maintainer runbook stops
+  shipping inside every release archive.
+
 ## [0.2.0] - 2026-08-03
 
 Findings become a first-class entity. Console-IR now opens on a dashboard of what needs attention
@@ -244,7 +314,8 @@ nothing. Back up the database first if you may roll back.
 - Headless runtime mode with `--no-tui`
 - Devcontainer and VS Code debug configuration for contributors
 
-[Unreleased]: https://github.com/Ashfaaq98/ocsf-console-ir/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/Ashfaaq98/ocsf-console-ir/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/Ashfaaq98/ocsf-console-ir/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Ashfaaq98/ocsf-console-ir/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/Ashfaaq98/ocsf-console-ir/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Ashfaaq98/ocsf-console-ir/releases/tag/v0.1.0
