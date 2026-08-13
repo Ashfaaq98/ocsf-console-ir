@@ -119,8 +119,11 @@ func (ui *UI) triageRow(f store.Finding) map[string]triageCell {
 		"Age":    {renderRelativeTime(f.LastSeen), t.TextMuted},
 		"Status": {f.StatusName(), ui.findingStatusColor(f)},
 		"Case":   ui.triageCaseCell(f),
-		"Title":  {f.Title, t.TextPrimary},
-		"Asset":  {orDash(ui.findingAsset[f.ID]), t.TextMuted},
+		// The title is prose from whatever produced the detection, and the
+		// addresses and filenames inside it are what an analyst scans for.
+		"Title": {paintTextOn(f.Title, tagColor(t.TextPrimary), t), t.TextPrimary},
+		// The asset is a host, and it is the same host on every other screen.
+		"Asset":  {orDash(ui.findingAsset[f.ID]), entityColour(entityHost, t)},
 		"Tactic": {orDash(strings.Join(f.AttackTechniques(), ", ")), t.TextMuted},
 		"Source": {orDash(f.AnalyticName), t.TextMuted},
 	}
