@@ -143,8 +143,11 @@ func TestEverySuggestionIsReachableFromItsRow(t *testing.T) {
 			t.Errorf("row %d maps to (%q, %v), but the renderer drew %q there",
 				row, got.Text, ok, want.Text)
 		}
-		// And the cell there must actually carry that question.
-		if cell := table.GetCell(row, 0); cell == nil || !strings.Contains(cell.Text, want.Text) {
+		// And the cell there must actually carry that question. Compared with
+		// the markup stripped: a question naming an address has that address
+		// coloured, so the raw cell is no longer the plain sentence.
+		cell := table.GetCell(row, 0)
+		if cell == nil || !strings.Contains(stripTags(cell.Text), want.Text) {
 			t.Errorf("row %d does not hold %q", row, want.Text)
 		}
 	}

@@ -129,7 +129,10 @@ func renderTranscript(table *tview.Table, rows []transcriptRow, t Theme) {
 		case r.Muted:
 			colour = t.TextMuted
 		}
-		table.SetCell(i, 1, tview.NewTableCell(tview.Escape(r.Text)).
+		// A model's answer names hosts, addresses and files; colouring them is
+		// also a small check on it — an address it invented reads as an
+		// address, and you can pivot on it to find there is nothing there.
+		table.SetCell(i, 1, tview.NewTableCell(paintTextOn(r.Text, tagColor(colour), t)).
 			SetTextColor(colour).SetExpansion(1))
 	}
 	table.ScrollToEnd()
@@ -153,7 +156,7 @@ func renderSuggestions(table *tview.Table, suggestions []copilotSuggestion, t Th
 	// moves between questions rather than through their reasons.
 	for i, s := range suggestions {
 		row := suggestionRow(i)
-		table.SetCell(row, 0, tview.NewTableCell(" "+tview.Escape(s.Text)).
+		table.SetCell(row, 0, tview.NewTableCell(" "+paintTextOn(s.Text, tagColor(t.TextPrimary), t)).
 			SetTextColor(t.TextPrimary).SetExpansion(1))
 		table.SetCell(row+1, 0, tview.NewTableCell("   "+tview.Escape(s.Reason)).
 			SetTextColor(t.TextMuted).SetSelectable(false).SetExpansion(1))

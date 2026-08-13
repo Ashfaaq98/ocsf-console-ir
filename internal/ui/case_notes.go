@@ -59,7 +59,10 @@ func renderNotes(table *tview.Table, notes []store.Note, t Theme) {
 			SetTextColor(t.TextMuted))
 		table.SetCell(row, 1, tview.NewTableCell(orUnknown(n.Author)).SetTextColor(t.Accent))
 		table.SetCell(row, 2, tview.NewTableCell(noteLink(n)).SetTextColor(t.TextMuted))
-		table.SetCell(row, 3, tview.NewTableCell(tview.Escape(firstLine(n.Content))).
+		// A note is what an analyst wrote, and they write host names and
+		// addresses into it — the same colours they read everywhere else.
+		table.SetCell(row, 3, tview.NewTableCell(
+			paintTextOn(firstLine(n.Content), tagColor(t.TextPrimary), t)).
 			SetTextColor(t.TextPrimary).SetExpansion(1))
 		row++
 	}

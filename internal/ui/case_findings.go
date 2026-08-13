@@ -136,7 +136,10 @@ func (cm *CaseManagement) renderCaseFindings() {
 			{dashIfEmpty(f.Status), cm.theme.TableRow},
 			{dashIfEmpty(f.Verdict), cm.theme.TableRow},
 			{riskText(f.RiskScore), cm.theme.TableRow},
-			{dashIfEmpty(f.Title), cm.theme.TextPrimary},
+			// Prose, so the entities inside it are coloured where their shape
+			// gives them away — the same as the queue this finding came from.
+			{paintTextOn(dashIfEmpty(f.Title), tagColor(cm.theme.TextPrimary), cm.theme),
+				cm.theme.TextPrimary},
 			{dashIfEmpty(f.AnalyticName), cm.theme.TableRowMuted},
 		}
 		for col, c := range cells {
@@ -175,7 +178,8 @@ func (cm *CaseManagement) showCaseFindingModal(f store.Finding) {
 
 	lbl, val := cm.theme.TagWarning, cm.theme.TagTextPrimary
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("[%s]%s[-]\n\n", cm.theme.TagAccent, dashIfEmpty(f.Title)))
+	sb.WriteString(fmt.Sprintf("[%s::b]%s[-:-:-]\n\n",
+		cm.theme.TagTextPrimary, paintText(dashIfEmpty(f.Title), cm.theme)))
 
 	for _, row := range [][2]string{
 		{"Severity", strings.ToUpper(dashIfEmpty(f.Severity))},

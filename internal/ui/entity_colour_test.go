@@ -316,3 +316,72 @@ func TestTheIndicatorsTableColoursByType(t *testing.T) {
 		}
 	}
 }
+
+// The ramp reaches every screen that shows an entity.
+//
+// Applied to half the screens it is decoration: a hostname coloured on the
+// events tab and plain on the findings tab teaches nothing. The value of the
+// scheme is that it holds everywhere — you learn one hue once.
+func TestTheEntityRampReachesEveryScreen(t *testing.T) {
+	th := themeGruvbox()
+	host := entityTag(entityHost, th)
+	network := entityTag(entityNetwork, th)
+	artifact := entityTag(entityArtifact, th)
+
+	// The triage queue: the title is prose, the asset is a host.
+	ui, st := newTestUI(t)
+	ui.hasTrueColor = true
+	ui.setTheme("gruvbox")
+	seedTriageFinding(t, st, "a", "")
+	ui.enterScreen(destTriage)
+	awaitIdle(t, ui)
+	if len(ui.findings) == 0 {
+		t.Fatal("the queue seeded no findings")
+	}
+	f := ui.findings[0]
+	f.Title = "Beaconing to cdn-metrics.example from the gateway"
+	ui.findingAsset[f.ID] = "dc-01"
+	cells := ui.triageRow(f)
+
+	if got := cells["Title"].text; !strings.Contains(got, "["+network+"]cdn-metrics.example") {
+		t.Errorf("the queue's title does not colour its domain:\n%s", got)
+	}
+	if got := cells["Asset"].color; got != entityColour(entityHost, ui.theme) {
+		t.Errorf("the queue's asset column is %v, want the host colour", got)
+	}
+
+	// The case's findings table, and the finding window it opens.
+	cm := openCase(t, ui)
+	cm.caseFindings = []store.Finding{
+		{ID: "f1", Title: "Word spawned svc_update.exe", Severity: "high", Status: "new"},
+	}
+	cm.renderCaseFindings()
+	if got := cm.findingsTable.GetCell(1, 4).Text; !strings.Contains(got, "["+artifact+"]svc_update.exe") {
+		t.Errorf("the case's findings table does not colour its artifact:\n%s", got)
+	}
+
+	// Notes, which analysts write host names into.
+	cm.notes = []store.Note{{Content: "Isolated dc-01 and blocked 45.147.230.11", Author: "p.osei"}}
+	cm.updateNotesText()
+	if got := cm.notesTable.GetCell(0, 3).Text; !strings.Contains(got, "["+network+"]45.147.230.11") {
+		t.Errorf("a note does not colour the address in it:\n%s", got)
+	}
+	_ = host
+}
+
+// The copilot's answers are coloured too — which is also a small check on the
+// model: an address it invented reads as an address, and pivoting on it finds
+// nothing.
+func TestTheCopilotAnswersAreColoured(t *testing.T) {
+	th := themeGruvbox()
+	table := tview.NewTable()
+
+	renderTranscript(table, []transcriptRow{
+		{Message: -1, Text: "The host dc-01 contacted 45.147.230.11 twice."},
+	}, th)
+
+	got := table.GetCell(0, 1).Text
+	if !strings.Contains(got, "["+entityTag(entityNetwork, th)+"]45.147.230.11") {
+		t.Errorf("the transcript does not colour the address:\n%s", got)
+	}
+}
