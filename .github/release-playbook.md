@@ -30,7 +30,7 @@ CI runs the same target on every pull request.
 
 1. Commit release-prep changes to `main`.
 2. Push a tag like `v0.1.0`.
-3. GitHub Actions runs [`.github/workflows/release.yml`](.github/workflows/release.yml).
+3. GitHub Actions runs [`.github/workflows/release.yml`](workflows/release.yml).
 4. GoReleaser builds archives, checksums, SBOMs and Homebrew metadata.
 5. GitHub publishes the release assets and release notes.
 
@@ -104,7 +104,7 @@ Check that the release contains:
 
 - Linux archives for `amd64` and `arm64`
 - macOS archives for `amd64` and `arm64`
-- Windows archive for `amd64`
+- Windows archives for `amd64` and `arm64`
 - `checksums.txt`
 - SBOM artifacts
 
@@ -147,6 +147,16 @@ brew install Ashfaaq98/tap/console-ir
 console-ir --version
 ```
 
+### Scoop
+
+Verify the manifest was created in `Ashfaaq98/scoop-bucket`, then test on Windows:
+
+```pwsh
+scoop bucket add ashfaaq98 https://github.com/Ashfaaq98/scoop-bucket
+scoop install console-ir
+console-ir --version
+```
+
 ## Rollback Plan
 
 If a tagged release is broken:
@@ -166,6 +176,8 @@ Do not reuse the same version number after a public broken release. Prefer `v0.1
 
 ## Notes
 
-- The Markdown files in `.github/` are in the right place. They are GitHub issue and PR templates, not product docs.
-- The release source of truth is [`.goreleaser.yaml`](.goreleaser.yaml).
-- The public install paths are documented in [README.md](README.md).
+- This file lives in `.github/` rather than `docs/` on purpose: `docs/*` is copied into every
+  release archive, and a runbook about pushing tags is not documentation for someone who downloaded
+  a binary.
+- The release source of truth is [`.goreleaser.yaml`](../.goreleaser.yaml).
+- The public install paths are documented in [README.md](../README.md).
