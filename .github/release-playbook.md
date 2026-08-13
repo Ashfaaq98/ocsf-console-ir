@@ -18,13 +18,34 @@ make release-check                # full snapshot, nothing published
 ```
 
 This runs `goreleaser check` and then `goreleaser release --snapshot --clean`, building every
-archive, checksum, SBOM and the Homebrew formula locally, without publishing anything.
+archive, checksum, SBOM, the Homebrew formula and the Scoop manifest locally, without publishing
+anything.
 
 It matters because the release workflow runs GoReleaser as a **single step** — one failing artifact
 takes the whole release with it. The Homebrew step nearly broke this way at v0.1.1 and was only
 caught because it had been disabled first.
 
 CI runs the same target on every pull request.
+
+## The Pre-Tag Checklist
+
+Everything below must be true before the tag is pushed. Each one has failed a release somewhere.
+
+- [ ] **`make release-check` is clean.** GoReleaser is not installed by default — see the command
+      above.
+- [ ] **`Ashfaaq98/homebrew-tap` exists**, and `HOMEBREW_TAP_TOKEN` is set.
+- [ ] **`Ashfaaq98/scoop-bucket` exists**, and `SCOOP_BUCKET_TOKEN` is set. `skip_upload: auto`
+      means a missing bucket breaks nothing until the first real tag — and then it breaks the
+      release, at the last step, after the archives are already published. This is exactly how the
+      Homebrew step nearly went at v0.1.1.
+- [ ] **`CHANGELOG.md` has an entry for the version**, with an upgrade note for anything that
+      changed under a user: keys that moved, commands that were removed, a database that migrates.
+- [ ] **The suite passes both ways.** `go test ./...` and `CGO_ENABLED=0 go test ./...` — they select
+      different SQLite drivers, and the shipped binary uses the second.
+- [ ] **`-race` is clean** over `internal/ui`, `internal/store`, `internal/report`,
+      `internal/ingest` and `cmd`.
+- [ ] **CI is green on all three platforms.** The `cross-platform` job covers macOS and Windows;
+      before it existed, three-platform support rested on cross-compilation alone.
 
 ## What Happens on a Release
 
