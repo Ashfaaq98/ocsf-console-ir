@@ -56,9 +56,14 @@ func TestSettingsShowsTheListenerState(t *testing.T) {
 	if ui.globalInputCapture(tcell.NewEventKey(tcell.KeyRune, ',', tcell.ModNone)) != nil {
 		t.Fatal("the settings key was not claimed")
 	}
+	ui.closeModal()
+
+	// The receiver lives under Ingestion; the panel opens on General.
+	ui.showSettingsAt("Ingestion")
 	got := settingsFrame(t, ui)
 
-	for _, want := range []string{"HTTP ingest", "listening on 127.0.0.1:8081", "12 payloads", "token required"} {
+	for _, want := range []string{"HTTP receiver", "listening on 127.0.0.1:8081",
+		"12 payloads accepted", "Token required"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("the panel does not say %q:\n%s", want, got)
 		}
@@ -73,9 +78,9 @@ func TestSettingsWarnsAboutAnOpenListener(t *testing.T) {
 	awaitIdle(t, ui)
 	ui.SetIngestListener(&fakeListener{listening: false, token: false})
 
-	ui.showSettings()
+	ui.showSettingsAt("Ingestion")
 	got := settingsFrame(t, ui)
-	if !strings.Contains(got, "no token") {
+	if !strings.Contains(got, "No token is set") {
 		t.Errorf("the panel does not warn that anyone could post:\n%s", got)
 	}
 	ui.closeModal()
@@ -135,7 +140,7 @@ func TestSettingsWithoutAListener(t *testing.T) {
 	ui.enterScreen(destTriage)
 	awaitIdle(t, ui)
 
-	ui.showSettings()
+	ui.showSettingsAt("Ingestion")
 	got := settingsFrame(t, ui)
 	if !strings.Contains(got, "unavailable") {
 		t.Errorf("a build with no receiver does not say so:\n%s", got)

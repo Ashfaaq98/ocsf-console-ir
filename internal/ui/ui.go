@@ -592,6 +592,14 @@ type UI struct {
 	themeApplying  int32
 	filterApplying int32
 
+	// autoRefresh re-reads the current screen on a timer when the preference
+	// asks for it. Nil when it is off, which is the default.
+	autoRefresh *time.Ticker
+
+	// prefs is everything the settings panel owns — how this analyst works,
+	// as opposed to what the application is pointed at.
+	prefs preferences
+
 	// Navigation tracking
 	recentCases  []string
 	recentPivots []string
@@ -857,6 +865,8 @@ func NewUI(ctx context.Context, store *store.Store, llmProvider llm.LLMProvider,
 	ui.recentCases = uiSettings.RecentCases
 	ui.recentPivots = uiSettings.RecentPivots
 	ui.lastVisit = uiSettings.LastVisit
+	ui.prefs = uiSettings.Preferences
+	ui.applyRuntimePreferences()
 	if !ui.hasTrueColor {
 		ui.theme = themeBasic()
 	} else {

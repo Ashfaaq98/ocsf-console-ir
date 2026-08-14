@@ -3,9 +3,6 @@ package ui
 import (
 	"fmt"
 	"strings"
-
-	"github.com/gdamore/tcell/v2"
-	"github.com/rivo/tview"
 )
 
 // Settings: what the application is doing, and the few things worth changing
@@ -41,57 +38,7 @@ type IngestListener interface {
 // without it.
 func (ui *UI) SetIngestListener(l IngestListener) { ui.listener = l }
 
-// showSettings opens the settings panel over the current screen.
-func (ui *UI) showSettings() {
-	t := ui.theme
-
-	body := tview.NewFlex().SetDirection(tview.FlexRow)
-	list := tview.NewList().ShowSecondaryText(true)
-	list.SetBackgroundColor(t.SurfaceRaised)
-	list.SetMainTextColor(t.TextPrimary)
-	list.SetSecondaryTextColor(t.TextMuted)
-	list.SetSelectedBackgroundColor(t.SelectionBg)
-	list.SetSelectedTextColor(t.SelectionFg)
-
-	var refresh func()
-
-	list.AddItem("", "", 'h', func() { ui.toggleIngestListener(refresh) })
-	list.AddItem("", "", 't', func() {
-		ui.closeModal()
-		ui.showThemeCycle()
-	})
-
-	refresh = func() {
-		list.SetItemText(0, ui.listenerLabel(), ui.listenerDetail())
-		list.SetItemText(1,
-			fmt.Sprintf("Theme                      [%s]%s[-:-:-]", t.TagAccent, ui.themeName),
-			"   cycles through the shipped palettes")
-	}
-	refresh()
-
-	list.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
-		if ev.Key() == tcell.KeyEscape {
-			ui.closeModal()
-			return nil
-		}
-		return ev
-	})
-
-	footer := tview.NewTextView().SetDynamicColors(true)
-	footer.SetBackgroundColor(t.SurfaceRaised)
-	footer.SetText(fmt.Sprintf("  [%s]⏎[-:-:-] change   [%s]esc[-:-:-] close   "+
-		"[%s]address and token are set on the command line[-:-:-]",
-		t.TagAccent, t.TagAccent, t.TagMuted))
-
-	body.AddItem(list, 4, 0, true)
-	body.AddItem(blankRow(t.SurfaceRaised), 1, 0, false)
-	body.AddItem(footer, 1, 0, false)
-
-	ui.overlayModal(modalPanel(body, "Settings", t), 74, 10)
-	ui.app.SetFocus(list)
-}
-
-// listenerLabel is the receiver's state in one line.
+// listenerLabel is the receiver's state in one line, for the status bar.
 func (ui *UI) listenerLabel() string {
 	t := ui.theme
 	switch {

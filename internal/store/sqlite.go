@@ -1381,3 +1381,11 @@ func (s *Store) DeleteEvents(ctx context.Context, ids []string) error {
 	}
 	return firstErr
 }
+
+// DriverName is the SQLite driver this binary was built against.
+//
+// Chosen by CGO_ENABLED at build time rather than by any flag, and the two take
+// different DSN spellings for the same pragmas — one driver's form is silently
+// ignored by the other, which is how foreign keys once went unenforced on the
+// shipped build. Worth being able to read without a rebuild.
+func DriverName() string { return sqliteDriver }

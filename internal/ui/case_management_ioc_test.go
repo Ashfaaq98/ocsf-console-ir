@@ -146,56 +146,51 @@ func TestIOCTabAddModalPlusKey_OpensModal(t *testing.T) {
 }
 
 // TestGetCurrentAnalystPriority verifies analyst name resolution order: owner > env > default.
-func TestGetCurrentAnalystPriority(t *testing.T) {
+// One name, everywhere.
+//
+// This screen used to have its own rule for who an action belongs to: the
+// case's owner first, then CONSOLE_IR_ANALYST, then a literal "analyst" — while
+// the rest of the application read USER. So a note could be signed with one
+// name and its audit entry with another, and working someone else's case
+// attributed your actions to *them*. An audit trail that says a.novak closed
+// this case when p.osei closed it is not a record, it is a falsified one.
+func TestActionsAreAttributedToWhoeverIsAtTheKeyboard(t *testing.T) {
 	st, err := store.NewStore(":memory:")
 	if err != nil {
 		t.Fatalf("store.NewStore: %v", err)
 	}
 	defer st.Close()
+	if err := st.SetupAuditTables(); err != nil {
+		t.Fatalf("SetupAuditTables: %v", err)
+	}
 
 	ctx := context.Background()
 	logger := logging.New(os.Stdout, logging.LevelDebug, "test")
 	ui := NewUI(ctx, st, &mockLLMIOC{}, logger, "test")
 
-	// 1) Case owner takes precedence
-	c := store.Case{ID: "case-analyst", Title: "Owner First", Severity: "low", Status: "open", AssignedTo: "owner.user"}
+	// Someone else's case.
+	c := store.Case{ID: "case-analyst", Title: "Owner First", Severity: "low",
+		Status: "open", AssignedTo: "owner.user"}
 	cm := NewCaseManagement(ui, c)
-	// The constructor starts the case's reads; they paint the same widgets this
-	// test is about to write to.
 	awaitIdle(t, ui)
-	if got := cm.getCurrentAnalyst(); got != "owner.user" {
-		t.Fatalf("expected owner.user, got %s", got)
+
+	ui.prefs.Analyst = "p.osei"
+	if got := cm.getCurrentAnalyst(); got != "p.osei" {
+		t.Errorf("an action on another analyst's case was attributed to %q, want p.osei", got)
 	}
 
-	// 2) Env var when no AssignedTo
-	c.AssignedTo = ""
-	cm2 := NewCaseManagement(ui, c)
-	// The constructor starts the case's reads; they paint the same widgets this
-	// test is about to write to.
-	awaitIdle(t, ui)
-
-	old := os.Getenv("CONSOLE_IR_ANALYST")
-	_ = os.Setenv("CONSOLE_IR_ANALYST", "env.user")
-	defer func() {
-		_ = os.Setenv("CONSOLE_IR_ANALYST", old)
-	}()
-
-	if got := cm2.getCurrentAnalyst(); got != "env.user" {
-		t.Fatalf("expected env.user, got %s", got)
+	// And the same answer the rest of the application gives.
+	if got, want := cm.getCurrentAnalyst(), ui.currentAnalyst(); got != want {
+		t.Errorf("the case screen says %q and the rest says %q", got, want)
 	}
 
-	// 3) Default fallback
-	_ = os.Unsetenv("CONSOLE_IR_ANALYST")
-	cm3 := NewCaseManagement(ui, c)
-	// The constructor starts the case's reads; they paint the same widgets this
-	// test is about to write to.
-	awaitIdle(t, ui)
-	if got := cm3.getCurrentAnalyst(); got != "analyst" {
-		t.Fatalf("expected analyst fallback, got %s", got)
+	// With nothing set, the environment decides — for both.
+	ui.prefs.Analyst = ""
+	if got, want := cm.getCurrentAnalyst(), environmentAnalyst(); got != want {
+		t.Errorf("unset, the case screen says %q and the environment says %q", got, want)
 	}
 }
 
-// Small sanity test: ensure Timeline render doesn't freeze with basic events in ascending/descending order.
 func TestTimelineRender_NoFreeze(t *testing.T) {
 	st, err := store.NewStore(":memory:")
 	if err != nil {
