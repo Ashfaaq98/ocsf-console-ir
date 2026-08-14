@@ -63,6 +63,12 @@ type uiSettings struct {
 	// arrived since. A dashboard you check ten times a shift is only useful if
 	// it can say which of these you have already seen.
 	LastVisit time.Time `json:"last_visit,omitempty"`
+
+	// Preferences is everything the settings panel owns. Nested rather than
+	// flattened so the fields above — which predate it and are written by other
+	// code paths — are not disturbed, and so a file from an older build reads
+	// as "every preference is default".
+	Preferences preferences `json:"preferences,omitempty"`
 }
 
 const uiSettingsName = "ui_settings.json"
@@ -117,6 +123,7 @@ func (ui *UI) saveUISettings() {
 		RecentCases:  ui.recentCases,
 		RecentPivots: ui.recentPivots,
 		LastVisit:    ui.lastVisit,
+		Preferences:  ui.prefs,
 	}
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/buildinfo"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
@@ -44,7 +45,21 @@ func wordmarkLines() []string {
 // supportsUnicode reports whether the terminal's locale is UTF-8. tcell will
 // happily draw block characters into a Latin-1 terminal, where they arrive as
 // question marks.
+// forceASCII is the Glyphs preference, held at package level because
+// supportsUnicode is called from every renderer in the package and threading a
+// preference through all of them would be a worse trade than one flag set in
+// one place. Written when preferences load or change, read on the UI goroutine.
+var forceASCII atomic.Bool
+
+// setForceASCII applies the Glyphs preference.
+func setForceASCII(on bool) { forceASCII.Store(on) }
+
 func supportsUnicode() bool {
+	if forceASCII.Load() {
+		// The analyst has seen this terminal render a box as a question mark
+		// and said so, which beats what the environment claims.
+		return false
+	}
 	for _, key := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
 		if val := os.Getenv(key); val != "" {
 			v := strings.ToLower(val)

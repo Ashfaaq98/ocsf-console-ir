@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/rivo/tview"
@@ -203,10 +204,22 @@ func actionBar(theme Theme, hints ...keyHint) string {
 	return strings.Join(parts, fmt.Sprintf(" [%s]·[-:-:-] ", theme.TagMuted))
 }
 
+// absoluteAges is the Relative ages preference, inverted. Package level for the
+// same reason forceASCII is: this function is the funnel every screen calls.
+var absoluteAges atomic.Bool
+
+// setAbsoluteAges applies the Relative ages preference.
+func setAbsoluteAges(on bool) { absoluteAges.Store(on) }
+
 // renderRelativeTime formats a timestamp into relative compact string e.g. 2m, 4h, 3d.
 func renderRelativeTime(t time.Time) string {
 	if t.IsZero() {
 		return "-"
+	}
+	if absoluteAges.Load() {
+		// The Relative ages preference, off. Every list that shows an age goes
+		// through here, so this is the one place it has to be honoured.
+		return t.Format("02 Jan 15:04")
 	}
 	d := time.Since(t)
 	if d < 0 {

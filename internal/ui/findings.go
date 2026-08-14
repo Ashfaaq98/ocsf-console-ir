@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -976,14 +975,14 @@ func (ui *UI) escalateFindings(findings []store.Finding) {
 }
 
 // currentAnalyst returns the operator name recorded on audit entries.
+// currentAnalyst is the name this session writes into records.
+//
+// The setting first, the environment second. It goes into the audit trail, case
+// ownership, notes and the report, and the environment is often wrong — a
+// shared jump box, a login that is not your SOC handle, a container running as
+// root. Somebody reads that name later; it should be one they recognise.
 func (ui *UI) currentAnalyst() string {
-	if u := os.Getenv("USER"); u != "" {
-		return u
-	}
-	if u := os.Getenv("USERNAME"); u != "" {
-		return u
-	}
-	return "analyst"
+	return ui.prefs.analystName()
 }
 
 // repaintCurrentList re-renders the main table for whichever view is open,
