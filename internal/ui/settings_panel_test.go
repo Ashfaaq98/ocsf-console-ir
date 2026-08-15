@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -245,4 +246,128 @@ func requireUnicode(t *testing.T) {
 	t.Helper()
 	setGlyphMode(glyphUnicode)
 	t.Cleanup(func() { setGlyphMode(glyphAuto) })
+}
+
+// M opens settings from every screen, and the footer says so.
+//
+// The comma was the only binding, and a comma cannot be advertised as a letter
+// — so the panel existed and nothing on screen pointed at it. M was chosen for
+// one property above any mnemonic: it is free everywhere, including inside a
+// case, so the footer names the same key wherever you are standing.
+func TestTheSettingsLetterWorksAndIsAdvertised(t *testing.T) {
+	ui, st := newTestUI(t)
+	seedTriageFinding(t, st, "a", "")
+
+	for _, dest := range []destinationID{destHome, destTriage, destCases, destEvents,
+		destIndicators, destReports} {
+		ui.enterScreen(dest)
+		awaitIdle(t, ui)
+
+		if ui.globalInputCapture(tcell.NewEventKey(tcell.KeyRune, 'M', tcell.ModNone)) != nil {
+			t.Errorf("M was not claimed on %v", dest)
+			continue
+		}
+		if ui.activeModal == nil {
+			t.Errorf("M did not open settings on %v", dest)
+		}
+		ui.closeModal()
+
+		// And the screen advertises it, so it is not another undocumented key.
+		ui.setStatusDirect("")
+		if bar := stripTags(ui.statusBar.GetText(true)); !strings.Contains(bar, "M settings") {
+			t.Errorf("%v does not advertise the settings key:\n%s", dest, bar)
+		}
+	}
+
+	// The comma keeps working, and is deliberately never advertised: a footer
+	// naming two keys for one panel spends a column teaching a synonym.
+	ui.enterScreen(destTriage)
+	awaitIdle(t, ui)
+	if ui.globalInputCapture(tcell.NewEventKey(tcell.KeyRune, ',', tcell.ModNone)) != nil {
+		t.Error("the comma stopped opening settings")
+	}
+	if ui.activeModal == nil {
+		t.Error("the comma no longer opens settings")
+	}
+	ui.closeModal()
+}
+
+// The case screen names the same key, and answers it.
+//
+// It installs its own application-wide capture while it is open, so a global
+// key that is not repeated there never arrives — and a settings key that worked
+// on five screens and not the sixth would be worse than none.
+func TestTheCaseScreenUsesTheSameSettingsKey(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+	cm.updateStatus("")
+
+	if bar := stripTags(cm.statusBar.GetText(true)); !strings.Contains(bar, "M settings") {
+		t.Errorf("the case footer does not offer settings:\n%s", bar)
+	}
+
+	if cm.globalInputCapture(tcell.NewEventKey(tcell.KeyRune, 'M', tcell.ModNone)) != nil {
+		t.Fatal("the case screen did not claim M")
+	}
+	if ui.activeModal == nil {
+		t.Error("M did not open settings from inside a case")
+	}
+	ui.closeModal()
+
+	// And the undisplayed comma works here too.
+	if cm.globalInputCapture(tcell.NewEventKey(tcell.KeyRune, ',', tcell.ModNone)) != nil {
+		t.Fatal("the case screen did not claim the comma")
+	}
+	if ui.activeModal == nil {
+		t.Error("the comma did not open settings from inside a case")
+	}
+}
+
+// The letter is free on every screen, which is the property it was chosen for.
+//
+// A key that works on five screens and means something else on the sixth is not
+// a global key. T failed this — it starts a note from a template inside a case
+// — and this test is what would have caught it.
+func TestTheSettingsKeyIsFreeEverywhere(t *testing.T) {
+	const key = 'M'
+
+	for _, path := range []string{"internal/ui/ui.go", "internal/ui/case_management.go"} {
+		src, err := os.ReadFile("../../" + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Every binding of this rune must be the settings one.
+		for _, line := range strings.Split(string(src), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if !strings.HasPrefix(trimmed, "case ") || !strings.Contains(trimmed, "'"+string(key)+"'") {
+				continue
+			}
+			if !strings.Contains(trimmed, "','") {
+				t.Errorf("%s binds %q somewhere other than settings: %s", path, key, trimmed)
+			}
+		}
+	}
+}
+
+// The help card names no key the application does not handle.
+func TestTheHelpCardHasNoDeadJumpKeys(t *testing.T) {
+	ui, _ := newTestUI(t)
+	ui.enterScreen(destTriage)
+	awaitIdle(t, ui)
+
+	card, _ := ui.buildHelpCard(func() {})
+	got := stripTags(strings.Join(renderPrimitive(t, card, 150, 60), "\n"))
+
+	for _, dead := range []string{
+		"Jump to FINDINGS from anywhere",
+		"Jump to ALL EVENTS from anywhere",
+		"Open the findings queue",
+	} {
+		if strings.Contains(got, dead) {
+			t.Errorf("the help card still advertises a removed key: %q", dead)
+		}
+	}
+	if !strings.Contains(got, "Open settings") {
+		t.Errorf("the help card does not mention settings:\n%s", got)
+	}
 }

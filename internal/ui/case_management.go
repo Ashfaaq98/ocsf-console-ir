@@ -648,11 +648,13 @@ func (cm *CaseManagement) setupKeybindings() {
 				// was written, and nothing handled it.
 				cm.takeOwnership()
 				return nil
-			case ',':
-				// Settings reach every screen, this one included. It used not
-				// to: the case screen installs its own application-wide capture
-				// while it is open, so the comma never arrived — on the one
-				// screen where the copilot is in front of you failing.
+			case ',', 'M':
+				// The same two keys as everywhere else, which is the point of
+				// M: a settings key that changed letter inside a case would not
+				// be one. This screen installs its own application-wide capture
+				// while it is open, so a global key that is not repeated here
+				// never arrives — which is what kept settings out of reach on
+				// the one screen where the copilot is in front of you, failing.
 				if cm.parentUI != nil {
 					cm.parentUI.showSettings()
 				}
@@ -1930,8 +1932,10 @@ func (cm *CaseManagement) updateStatus(message string) {
 	// Standard navigation hints
 	// The same words the tab strip uses. Two names for one key — "Tab next" on
 	// the strip and "Tab-left/right" here — reads as two different keys.
-	statusText = fmt.Sprintf("%s%s[%s]Tab[-] next · [%s]Shift+Tab[-] back · [%s]Esc[-] leaves · [%s]?[-] help",
-		statusText, sep, acc, acc, acc, acc)
+	//
+	// The same settings key the rest of the application names.
+	statusText = fmt.Sprintf("%s%s[%s]Tab[-] next · [%s]Shift+Tab[-] back · [%s]M[-] settings · [%s]Esc[-] leaves · [%s]?[-] help",
+		statusText, sep, acc, acc, acc, acc, acc)
 
 	cm.statusBar.SetText(statusText)
 }

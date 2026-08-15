@@ -75,9 +75,9 @@ Flags take precedence over the config file, which takes precedence over defaults
 
 ## LLM provider (optional)
 
-Case summaries and the copilot are optional. Set the provider, model and API key from the TUI's LLM
-Settings (`Shift+L`), or copy [`config/llm_settings.sample.json`](../config/llm_settings.sample.json)
-into your config directory as `llm_settings.json`.
+Case summaries and the copilot are optional. Set the provider, model and API key in the settings
+panel — **`M`** from any screen, then the Copilot category; `Shift+L` opens it there directly. Or copy [`config/llm_settings.sample.json`](../config/llm_settings.sample.json) into your
+config directory as `llm_settings.json`.
 
 With no configuration, Console-IR defaults to a local Ollama model, so nothing is sent anywhere
 unless you configure a remote provider.
@@ -91,7 +91,8 @@ Supported: Ollama, OpenRouter, Groq, and other OpenAI-compatible endpoints.
 
 ## Themes
 
-Press `t` to cycle. Six are registered, in this order:
+Press `t` to cycle, or pick from a list in the settings panel (**`M`**), where each palette is
+applied as you move through it. Six are registered, in this order:
 
 | Theme | |
 |---|---|
