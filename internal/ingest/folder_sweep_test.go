@@ -246,6 +246,76 @@ func TestTheWatchLoopActuallySweeps(t *testing.T) {
 	t.Fatalf("the watch loop swept %d times in 5s at a 20ms interval, want at least 3", got)
 }
 
+// Writing a file emits a creation and then a write, and the modification time
+// moves between them. A mark keyed on size and modification time therefore
+// failed to match on the second notification and ingested the file again. The
+// timing hides this on Linux and shows on macOS and Windows, so the two
+// notifications are driven directly here rather than waited for.
+func TestTheSameBytesAreNotIngestedTwiceWhenTheTimestampMoves(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dropped.json")
+	if err := os.WriteFile(path, []byte(offsetTestEvent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	st := sweepStore(t)
+	ing := newSweepIngestor(dir, st)
+	ctx := context.Background()
+
+	// The creation notification.
+	if err := ing.ingestJSONFile(ctx, path); err != nil {
+		t.Fatalf("first notification: %v", err)
+	}
+	// The write that closed the file lands afterwards and moves the timestamp.
+	later := time.Now().Add(3 * time.Second)
+	if err := os.Chtimes(path, later, later); err != nil {
+		t.Fatal(err)
+	}
+	// The write notification, for content that has not changed.
+	if err := ing.ingestJSONFile(ctx, path); err != nil {
+		t.Fatalf("second notification: %v", err)
+	}
+
+	if n := countEvents(t, st); n != 1 {
+		t.Fatalf("the same bytes were ingested %d times, want 1", n)
+	}
+}
+
+// A creation can be reported while the file is still empty, with the size the
+// writer will end at already visible to stat. Recording that as read ingested
+// nothing and then made every later sweep skip the file — the events were
+// acknowledged and then stranded, which is the failure the sweep exists to
+// prevent.
+func TestAnEmptyFileIsNotRecordedAsIngested(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "still-being-written.json")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	st := sweepStore(t)
+	ing := newSweepIngestor(dir, st)
+	ctx := context.Background()
+
+	if err := ing.ingestJSONFile(ctx, path); err != nil {
+		t.Fatalf("reading an empty file: %v", err)
+	}
+	if _, seen := ing.markOf(path); seen {
+		t.Fatal("an empty file was recorded as ingested, so it would never be read again")
+	}
+
+	// The writer finishes.
+	if err := os.WriteFile(path, []byte(offsetTestEvent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ing.scanOnce(ctx, false); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if n := countEvents(t, st); n != 1 {
+		t.Fatalf("the finished file produced %d events, want 1", n)
+	}
+}
+
 // SweepInterval is what bounds how long a missed notification can strand a
 // file, so a zero value must not disable the sweep outright.
 func TestZeroSweepIntervalFallsBackToTheDefault(t *testing.T) {
