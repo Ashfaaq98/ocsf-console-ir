@@ -151,3 +151,67 @@ func TestSchemaVersionIsRecorded(t *testing.T) {
 		t.Error("SchemaVersion() is empty; classes.json must record the OCSF release it came from")
 	}
 }
+
+// The classes an incident is actually made of are named, not numbered.
+//
+// A class the registry does not know still ingests and still files under its
+// category, but the queue shows "Class 3007" where every other row shows a
+// name. These five arrived in OCSF 1.9.0, and two of them — User Management and
+// Role Management — are the identity classes an account-compromise
+// investigation is entirely made of.
+func TestTheRegistryKnowsTheClassesAnalystsWorkWith(t *testing.T) {
+	for uid, want := range map[int]string{
+		3007: "User Management",
+		3008: "Role Management",
+		1011: "Device Power State Activity",
+		1012: "Clipboard Activity",
+		5022: "Startup Item Query",
+	} {
+		if got := ClassName(uid); got != want {
+			t.Errorf("class %d is %q, want %q — regenerate with scripts/gen-ocsf-classes.sh", uid, got, want)
+		}
+	}
+}
+
+// Category slugs are persisted in events.event_type, so renaming one silently
+// invalidates every stored row that carries it: the filter stops matching and
+// the events read as gone. Upstream renamed category 8 to "unmanned_systems"
+// in 1.9.0 and this deliberately does not follow.
+func TestCategorySlugsAreStableAcrossSchemaVersions(t *testing.T) {
+	for uid, want := range map[int]string{
+		1: "system", 2: "findings", 3: "iam", 4: "network",
+		5: "discovery", 6: "application", 7: "remediation", 8: "unmanned",
+	} {
+		if got := CategorySlug(uid); got != want {
+			t.Errorf("category %d slug is %q, want %q — a stored event_type would stop matching",
+				uid, got, want)
+		}
+	}
+}
+
+// The observable enum tracks the schema, because it is what a pivot is keyed on.
+//
+// An observable whose type_id has no name still pivots — the lookup is on
+// (type_id, value) and does not care — but the Indicators screen labels it
+// "Unknown", which reads as "we could not work out what this is" rather than
+// "this build predates the type". These two arrived with OCSF 1.9.0, alongside
+// the Role Management class they describe.
+func TestTheObservableEnumMatchesTheVendoredSchema(t *testing.T) {
+	for id, want := range map[int]string{
+		49: "IAM Role Object: name",
+		50: "IAM Role Object: uid",
+		99: "Other",
+	} {
+		if got := ObservableTypeName(id); got != want {
+			t.Errorf("observable type %d is %q, want %q", id, got, want)
+		}
+	}
+}
+
+// Both vendored files describe the same schema release. They come from two
+// endpoints and are refreshed by hand, so they can drift apart.
+func TestTheVendoredFilesAgreeOnTheSchemaVersion(t *testing.T) {
+	if got, want := ObservableSchemaVersion(), SchemaVersion(); got != want {
+		t.Errorf("observable_types.json says %q and classes.json says %q", got, want)
+	}
+}

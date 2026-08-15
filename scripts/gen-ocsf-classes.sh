@@ -10,14 +10,21 @@
 #   scripts/gen-ocsf-classes.sh [schema-version]
 #
 # Example:
-#   scripts/gen-ocsf-classes.sh 1.8.0
+#   scripts/gen-ocsf-classes.sh 1.9.0
 #
 # After running, review the diff: new classes are additive and safe, but a
 # renamed or removed class changes what analysts see in the UI.
+#
+# And check the category slugs. They are persisted in events.event_type, so a
+# slug that changes upstream silently invalidates every stored row carrying it —
+# the filter stops matching and those events read as gone. 1.9.0 renamed
+# category 8 from "unmanned" to "unmanned_systems"; classes.json deliberately
+# keeps the old spelling, and TestCategorySlugsAreStableAcrossSchemaVersions
+# fails if a refresh overwrites it.
 
 set -euo pipefail
 
-SCHEMA_VERSION="${1:-1.8.0}"
+SCHEMA_VERSION="${1:-1.9.0}"
 API="https://schema.ocsf.io/api/categories"
 OUT="$(dirname "$0")/../internal/ocsf/classes.json"
 

@@ -114,7 +114,7 @@ Also inside: stdin and folder ingestion, case timelines, a decision log, and ind
 
 ### What "OCSF-native" means here
 
-A vendored **OCSF 1.8.0** registry decides what each record is, rather than hand-written guesses:
+A vendored **OCSF 1.9.0** registry decides what each record is, rather than hand-written guesses:
 
 | Arrives as | Becomes |
 |---|---|
