@@ -205,7 +205,7 @@ func actionBar(theme Theme, hints ...keyHint) string {
 }
 
 // absoluteAges is the Relative ages preference, inverted. Package level for the
-// same reason forceASCII is: this function is the funnel every screen calls.
+// same reason the glyph mode is: this function is the funnel every screen calls.
 var absoluteAges atomic.Bool
 
 // setAbsoluteAges applies the Relative ages preference.

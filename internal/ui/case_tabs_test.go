@@ -589,6 +589,8 @@ func TestTheTabBarIsOneFilledRow(t *testing.T) {
 // rather than as a sentence. Except beside the filled segment, where the fill
 // is already an edge and a rule would read as a seam.
 func TestTheTabsAreSeparated(t *testing.T) {
+	requireUnicode(t)
+
 	ui, _ := newTestUI(t)
 	cm := openCase(t, ui)
 	cm.activeTab = tabBriefing

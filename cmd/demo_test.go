@@ -15,7 +15,11 @@ import (
 // directories were found on a real machine, so the sweep is not hypothetical.
 func TestSweepStaleDemoDirs(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("TMPDIR", tmp)
+	// os.TempDir reads TMPDIR on Unix and TMP or TEMP on Windows. Setting only
+	// the first left the sweep scanning the real temporary directory, where it
+	// found nothing and the fixture below survived — reported as "an abandoned
+	// demo directory was left behind".
+	setTempDir(t, tmp)
 
 	mkdir := func(name string, age time.Duration) string {
 		p := filepath.Join(tmp, name)
@@ -50,7 +54,7 @@ func TestSweepStaleDemoDirs(t *testing.T) {
 }
 
 func TestSweepStaleDemoDirsToleratesAnUnreadableTemp(t *testing.T) {
-	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "does-not-exist"))
+	setTempDir(t, filepath.Join(t.TempDir(), "does-not-exist"))
 	// Housekeeping failure must never fail the command.
 	sweepStaleDemoDirs(logging.New(io.Discard, logging.LevelDebug, "test"))
 }
@@ -59,7 +63,7 @@ func TestSweepStaleDemoDirsToleratesAnUnreadableTemp(t *testing.T) {
 // sweep silently stops matching anything.
 func TestDemoDirPrefixMatchesWhatIsCreated(t *testing.T) {
 	tmp := t.TempDir()
-	t.Setenv("TMPDIR", tmp)
+	setTempDir(t, tmp)
 
 	dir, err := os.MkdirTemp("", demoDirPrefix)
 	if err != nil {
@@ -69,5 +73,13 @@ func TestDemoDirPrefixMatchesWhatIsCreated(t *testing.T) {
 
 	if !strings.HasPrefix(filepath.Base(dir), demoDirPrefix) {
 		t.Errorf("created %q, which the sweep would not match", filepath.Base(dir))
+	}
+}
+
+// setTempDir points os.TempDir at a directory on every platform.
+func setTempDir(t *testing.T, dir string) {
+	t.Helper()
+	for _, key := range []string{"TMPDIR", "TMP", "TEMP"} {
+		t.Setenv(key, dir)
 	}
 }

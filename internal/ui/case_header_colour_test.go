@@ -246,6 +246,8 @@ func TestOTakesTheCase(t *testing.T) {
 // alternative is the bold attribute — which most terminals render by brightening
 // the light rune rather than thickening it. The header draws its own.
 func TestTheHeaderIsFramed(t *testing.T) {
+	requireUnicode(t)
+
 	ui, _ := newTestUI(t)
 	cm := openCase(t, ui)
 	cm.lastWidth = 150

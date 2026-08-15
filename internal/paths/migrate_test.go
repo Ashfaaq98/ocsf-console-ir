@@ -3,6 +3,7 @@ package paths
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -144,6 +145,12 @@ func TestMigrateLegacyNoopWhenNothingToMove(t *testing.T) {
 
 // A WAL that cannot be moved must not leave the database orphaned from it.
 func TestMigrateLegacyStopsWhenASidecarCannotMove(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// The fixture makes the destination unwritable with chmod, which
+		// Windows ignores, so the move succeeds and the assertion is about a
+		// platform behaviour rather than about this code.
+		t.Skip("a directory cannot be made unwritable with chmod on Windows")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores directory permissions")
 	}

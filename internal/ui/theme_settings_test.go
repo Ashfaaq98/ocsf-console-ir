@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
@@ -133,6 +134,11 @@ func TestThemeLoadFallsBackOnBadInput(t *testing.T) {
 }
 
 func TestSettingsFileIsPrivate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Windows has no Unix mode bits: a file created 0600 reports 666.
+		// See docs/configuration.md for what that means for the API key.
+		t.Skip("Windows uses ACLs rather than Unix mode bits")
+	}
 	dir := withTempConfig(t)
 	ui := &UI{logger: logging.New(os.Stderr, logging.LevelError, "test")}
 	ui.setTheme("light")

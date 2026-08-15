@@ -17,6 +17,10 @@ import (
 func TestRuntimeLoggersShareOneFile(t *testing.T) {
 	dir := t.TempDir()
 	paths.Set(paths.Dirs{Data: dir, Config: dir, State: dir})
+	// The log is process-wide and opened once. Left open, the temporary
+	// directory cannot be removed on Windows, and the next test inherits this
+	// one's file.
+	t.Cleanup(closeRuntimeLog)
 
 	serve := runtimeLogger("[serve] ")
 	ui := runtimeLogger("[UI] ")

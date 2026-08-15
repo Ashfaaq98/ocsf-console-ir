@@ -42,31 +42,45 @@ func wordmarkLines() []string {
 	return wordmarkUnicode
 }
 
-// supportsUnicode reports whether the terminal's locale is UTF-8. tcell will
-// happily draw block characters into a Latin-1 terminal, where they arrive as
-// question marks.
-// forceASCII is the Glyphs preference, held at package level because
-// supportsUnicode is called from every renderer in the package and threading a
-// preference through all of them would be a worse trade than one flag set in
-// one place. Written when preferences load or change, read on the UI goroutine.
-var forceASCII atomic.Bool
+// How glyphs are decided, as a three-way rather than a boolean.
+//
+// Auto asks the platform. The other two are answers given rather than detected:
+// the Glyphs preference forces ASCII for a terminal that claims more than it
+// can draw, and a render test forces Unicode so that what it asserts does not
+// depend on the locale of whichever machine is running it — which is how a
+// build agent's code page came to decide whether a test passed.
+type glyphMode int32
+
+const (
+	glyphAuto glyphMode = iota
+	glyphUnicode
+	glyphASCII
+)
+
+var glyphs atomic.Int32
+
+// setGlyphMode chooses how glyphs are decided from here on.
+func setGlyphMode(m glyphMode) { glyphs.Store(int32(m)) }
 
 // setForceASCII applies the Glyphs preference.
-func setForceASCII(on bool) { forceASCII.Store(on) }
+func setForceASCII(on bool) {
+	if on {
+		setGlyphMode(glyphASCII)
+		return
+	}
+	setGlyphMode(glyphAuto)
+}
 
 func supportsUnicode() bool {
-	if forceASCII.Load() {
+	switch glyphMode(glyphs.Load()) {
+	case glyphASCII:
 		// The analyst has seen this terminal render a box as a question mark
-		// and said so, which beats what the environment claims.
+		// and said so, which beats anything detected.
 		return false
+	case glyphUnicode:
+		return true
 	}
-	for _, key := range []string{"LC_ALL", "LC_CTYPE", "LANG"} {
-		if val := os.Getenv(key); val != "" {
-			v := strings.ToLower(val)
-			return strings.Contains(v, "utf-8") || strings.Contains(v, "utf8")
-		}
-	}
-	return false
+	return platformSupportsUnicode()
 }
 
 // The gradient.
