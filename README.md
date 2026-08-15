@@ -85,32 +85,32 @@ that works over SSH. Ingesting, triaging and writing up a case need no network a
 optional enrichment and LLM features reach outside the machine.
 
 
-## Core features
+## What it does
 
-- **Findings-first triage.** A queue ranked by risk; status and verdict set from the keyboard
-- **Real OCSF semantics.** The `activity_id` lifecycle is honoured, so one alert reported five times stays one row
-- **Indicator pivot.** Observables are indexed, so "everything touching this IP" is a lookup, not a scan
-- **Cases that match the schema.** Findings as *members*, events as *evidence*, many-to-many
-- **Built-in enrichment.** GeoIP and WHOIS run in-process — no enrichment service to deploy,
-  though both query the internet today (offline GeoIP is on the roadmap)
-- **Local SQLite storage.** Full-text search, and your data never leaves the machine
+**Ingest.** OCSF records from a file, a directory, stdin, or over HTTP — with or without a terminal.
+Indicators are extracted and indexed on the way in. Console-IR *reads* OCSF and does not convert to
+it: map at the source, which most SIEMs and EDRs can do directly.
 
-Also inside: stdin and folder ingestion, case timelines, a decision log, and indicator extraction.
+**Triage.** Open to a queue ranked by risk, not a wall of log lines. Set status and verdict from the
+keyboard, filter and search the queue, escalate a finding into a case with one key.
 
-**⚗ Experimental** — usable, but not settled:
+**Investigate.** Pivot on any indicator — "everything touching this address" is an indexed lookup,
+not a text scan. Raw events stay one keystroke away as the corroboration layer, with GeoIP and WHOIS
+attached in-process.
 
-- **The AI copilot and case summaries.** Optional and off unless configured. The shipped default
-  (local Ollama) needs a model that answers within 60 seconds, which CPU-only hardware may not manage
-- **Headless / HTTP ingestion.** `ingest --watch` is headless today; the HTTP receiver refuses to
-  start without a TUI rather than accept events it would not store
-- **External threat-intel plugins.** MISP, OpenCTI and IntelOwl integrations live in `plugins/` and
-  run as separate processes over Redis Streams. Embedding them in the binary, the way GeoIP and WHOIS
-  already are, is roadmap — until then they need a Redis to talk over
-- **The high-contrast and colourblind-safe themes.** Registered, but not yet verified screen by screen
+**Document.** A case holds findings as *members* and events as *evidence*, with a timeline, a
+decision log, and an audit trail of who did what.
 
-### What "OCSF-native" means here
+**Hand over.** Write the case up as Markdown from inside it, keep every report written, or produce
+the same document from the command line for a pipeline.
 
-A vendored **OCSF 1.9.0** registry decides what each record is, rather than hand-written guesses:
+### Underneath
+
+- **One SQLite file** with full-text search; nothing leaves the machine except the optional
+  enrichment and copilot lookups
+- **The `activity_id` lifecycle honoured** — one detection reported five times stays one row, and a
+  producer update never overwrites your verdict
+- **A vendored OCSF 1.9.0 registry** decides what each record is, rather than hand-written guesses:
 
 | Arrives as | Becomes |
 |---|---|
@@ -118,6 +118,22 @@ A vendored **OCSF 1.9.0** registry decides what each record is, rather than hand
 | Activity class with `is_alert: true` | **both** a finding and an event |
 | Any other activity class | an **event** |
 
+## Where it stands
+
+⚗ marks something shipped but not settled. *Planned* means on the roadmap, not scheduled.
+
+| | Now | Planned |
+|---|---|---|
+| **Ingest** | Files, directories, stdin, folder watch, HTTP receiver — with or without a terminal | Read from an OCSF data lake; emit Incident Findings back out |
+| **Triage** | Risk-ranked queue, status and verdict, filters, search, escalation to a case | — |
+| **Investigate** | Indicator pivot, indicators across the whole database | View the raw record; activity around an event; a page per host and per account; count by any field |
+| **Cases** | Findings as members, events as evidence, timeline, decision log, audit trail | Write the briefing from the interface — statement, hypotheses, next actions |
+| **Reporting** | Case report from the app or the command line, kept in the Reports screen | Weekly and monthly summaries |
+| **Enrichment** | GeoIP, WHOIS — in-process, no service to run | Offline GeoIP; VirusTotal |
+| **Plugins** | MISP, OpenCTI, IntelOwl ⚗ — separate processes over Redis | The same three in-process, with no broker to run |
+| **Copilot** | ⚗ Case summaries and per-case chat; Ollama, OpenRouter, Groq | A configurable request timeout; natural language to a hunt filter |
+| **Install** | Linux, macOS, Windows — Intel and ARM. Homebrew cask, Scoop, curl, source | winget, `go install` |
+| **Themes** | Six palettes, severity colours proven distinct in every one ⚗ — high-contrast and colourblind are not yet verified screen by screen | — |
 
 ## Architecture
 
