@@ -38,8 +38,8 @@ keyboard-driven place to triage, investigate and document incidents. You open it
 ## Install
 
 ```bash
-# Homebrew (macOS / Linux)
-brew install Ashfaaq98/tap/console-ir
+# Homebrew (macOS)
+brew install --cask Ashfaaq98/tap/console-ir
 
 # curl (Linux / macOS)
 curl -sSfL https://raw.githubusercontent.com/Ashfaaq98/ocsf-console-ir/main/scripts/install.sh | bash

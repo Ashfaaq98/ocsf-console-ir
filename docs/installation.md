@@ -3,11 +3,15 @@
 Console-IR is a single static binary with no runtime dependencies. There is nothing to deploy and
 nothing to configure before first use.
 
-## Homebrew (macOS and Linux)
+## Homebrew (macOS)
 
 ```bash
-brew install Ashfaaq98/tap/console-ir
+brew install --cask Ashfaaq98/tap/console-ir
 ```
+
+A cask rather than a formula. Casks are Homebrew's macOS mechanism, and while the generated one
+carries Linux URLs, **the supported Linux path is the curl installer or an archive below** — that is
+what the release notes point at and what is tested.
 
 ## Scoop (Windows)
 
