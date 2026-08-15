@@ -1692,11 +1692,21 @@ func (ui *UI) setupKeybindings() {
 				// this handler is running on.
 				ui.cycleTheme()
 				return nil
-			case ',':
-				// The comma is the settings key everywhere else, and this panel
-				// is where the HTTP receiver's state is legible: whether it is
-				// listening, on what address, and whether anyone who can reach
-				// it may post.
+			case ',', 'M':
+				// M is the key the footer names, and it was chosen for one
+				// property above any mnemonic: it is free on every screen,
+				// including inside a case. A settings key that changes letter
+				// depending on where you are standing is not a settings key.
+				//
+				// O for Options was the obvious alternative and was rejected:
+				// o already means open-only on Triage and take ownership in a
+				// case, and one letter meaning unrelated things in its two
+				// cases is how keys here have gone wrong before.
+				//
+				// The comma keeps working — it is the convention people arrive
+				// with — and is deliberately not advertised: a footer that
+				// names two keys for one panel spends a column teaching a
+				// synonym.
 				ui.showSettings()
 				return nil
 			case 'f':
@@ -2645,6 +2655,7 @@ func (ui *UI) buildHelpCard(close func()) (tview.Primitive, tview.Primitive) {
 		addKey("J", "Export the whole case as JSON")
 		addKey("e", "Export the pinned evidence as JSON")
 		addKey("t", "Change the theme")
+		addKey("M", "Open settings")
 		addKey("Esc", "Leave the case")
 	}
 
@@ -2698,7 +2709,6 @@ func (ui *UI) buildHelpCard(close func()) (tview.Primitive, tview.Primitive) {
 	addGap()
 
 	addSection("FINDINGS (TRIAGE)")
-	addKV("D", "Open the findings queue")
 	addKV("Enter", "Finding details: evidence, related events, observables")
 	addKV("s", "Set status (New / In Progress / Suppressed / Resolved / Archived)")
 	addKV("v", "Set verdict (True / False Positive, Suspicious, Benign, ...)")
@@ -2726,13 +2736,15 @@ func (ui *UI) buildHelpCard(close func()) (tview.Primitive, tview.Primitive) {
 	addNote("Severity: critical/high/medium/low/informational; Types: network/process/file/authentication/unknown. Time supports RFC3339 and tokens: now, -15m, 1h, today.")
 	addGap()
 
-	addSection("THEMING")
+	addSection("SETTINGS")
+	addKV("M", "Open settings — analyst name, appearance, ingestion, copilot")
 	addKV("t", "Cycle themes (colorblind, dark, gruvbox, high-contrast, light, midnight)")
 	addGap()
 
 	addSection("QUICK ACTIONS")
-	addKV("D", "Jump to FINDINGS from anywhere")
-	addKV("A", "Jump to ALL EVENTS from anywhere")
+	// No letter jumps between screens. D and A were listed here long after they
+	// stopped working: the digits are the only way between destinations, which
+	// is what makes them mean one thing on every screen.
 	addKV("r", "Refresh data")
 	addKV("h / H", "Show this help")
 	addKV("q, Q", "Quit application")

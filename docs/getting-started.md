@@ -73,7 +73,7 @@ Press **`?`** in the app for the full list. The ones that matter most:
 | `r` | Reload |
 | `f` / `F` | Filter / clear filters |
 | `t` | Cycle theme |
-| `,` | Settings |
+| `M` | Settings |
 | `?` (or `h`) | Help |
 | `q` | Quit |
 

@@ -361,12 +361,20 @@ func (ui *UI) onCases() bool {
 
 // screenHints are the keys the current screen owns, plus help, which every
 // screen has and which is the way to find everything not listed.
+// globalHints are the keys every screen has, appended after its own.
+//
+// Here rather than in each destination's list, which is deliberate: the
+// per-screen hints come from the destination table so that a key can only be
+// advertised by the screen that handles it. A global key listed five times in
+// that table would re-open exactly the drift that rule exists to stop.
+var globalHints = []keyHint{{"M", "settings"}, {"?", "help"}}
+
 func (ui *UI) screenHints() []keyHint {
 	d, ok := lookupDestinationByID(ui.destination)
 	if !ok {
-		return []keyHint{{"?", "help"}}
+		return append([]keyHint{}, globalHints...)
 	}
-	return append(append([]keyHint{}, d.hints...), keyHint{"?", "help"})
+	return append(append([]keyHint{}, d.hints...), globalHints...)
 }
 
 // hasEventsContext reports whether the screen showing is paged, filtered and

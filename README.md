@@ -4,7 +4,7 @@
 
 <h1>OCSF Console IR</h1>
 
-<p><b>Incident response for the terminal, not another platform to deploy.</b></p>
+<p><b>Incident response for the terminal</b></p>
 
 <p>
   <a href="https://github.com/Ashfaaq98/ocsf-console-ir/releases"><img src="https://img.shields.io/github/v/release/Ashfaaq98/ocsf-console-ir?display_name=tag" alt="Release" /></a>
@@ -25,12 +25,8 @@
 
 Console-IR is a **terminal-first, OCSF-native** incident-response workspace. It ingests
 [OCSF](https://schema.ocsf.io/) detections and events, enriches indicators, and gives an analyst a
-keyboard-driven place to triage, investigate and document incidents. You open it to a ranked queue of **findings**, the detections your SIEM or EDR actually flagged, rather than a wall of log lines. Raw events stay one keystroke away as the corroboration layer. Everything runs from a single binary backed by SQLite. No broker, no server, no cloud.
+keyboard-driven place to triage, investigate and document incidents. You open it to a ranked queue of **findings**, the detections your SIEM or EDR actually flagged. Raw events stay one keystroke away as the corroboration layer. Everything runs from a single binary backed by SQLite. 
 
-> **Status: early and evolving (v0.2.x).** The TUI workflow is the supported path today. Anything
-> marked **⚗ experimental** below works but is not settled — expect rough edges, and expect it to
-> change between releases.
->
 > **Found a bug? Please [open an issue](https://github.com/Ashfaaq98/ocsf-console-ir/issues/new).**
 > Include what you ran, what you expected and what happened; `console-ir version` prints the build
 > and resolved paths. Bug reports on early software are the most useful thing you can send.

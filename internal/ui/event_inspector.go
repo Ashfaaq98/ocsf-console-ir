@@ -91,6 +91,21 @@ func (ui *UI) showPivotMenu(event store.Event) {
 
 // closeModal returns to the main layout.
 func (ui *UI) closeModal() {
+	// Back to whatever the modal covered, which is not always the main screen.
+	//
+	// restoreMainLayout does what its name says: it mounts the main interface
+	// and clears ui.activeCM. Called to close a panel that had been opened from
+	// inside a case, it therefore threw the case away — the analyst pressed the
+	// settings key, closed the panel, and found themselves on the case list
+	// with their work gone from the screen.
+	if cm := ui.activeCM; cm != nil {
+		ui.activeModal = nil
+		ui.filterModal = nil
+		ui.helpActive = false
+		cm.takeBackTheScreen()
+		return
+	}
+
 	// The whole root, not just the layout.
 	//
 	// SetRoot(ui.layout) drops the status bar, which lives in the flex above it
