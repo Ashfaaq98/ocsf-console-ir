@@ -2,7 +2,9 @@ package ingest
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -90,15 +92,27 @@ type FolderIngestor struct {
 	sweeps int64
 }
 
-// fileMark is what the sweep remembers about a whole-file .json so it can tell
-// "already read" from "changed since". A .jsonl needs none of this: its byte
-// offset already says where reading stopped.
+// fileMark is what the ingestor remembers about a whole-file .json so it can
+// tell "already ingested" from "changed since". A .jsonl needs none of this:
+// its byte offset already says where reading stopped.
+//
+// sum is the authority, and it is a digest of the bytes that were actually
+// ingested. Size and modification time alone cannot do this job: writing a file
+// emits a creation and then a write, and the modification time recorded between
+// them describes content that was never read. That mark then either failed to
+// match — ingesting the file twice — or matched a file whose contents had not
+// been read at all, stranding it permanently.
+//
+// size and modTime remain only as a cheap pre-filter, letting the sweep skip
+// re-reading a file that is certainly unchanged. Correctness never rests on
+// them: a mark that does not match simply means the file is read and hashed.
 type fileMark struct {
 	size    int64
 	modTime time.Time
+	sum     [sha256.Size]byte
 }
 
-func (m fileMark) matches(info os.FileInfo) bool {
+func (m fileMark) unchanged(info os.FileInfo) bool {
 	return m.size == info.Size() && m.modTime.Equal(info.ModTime())
 }
 
@@ -237,21 +251,20 @@ func (fi *FolderIngestor) scanOnce(ctx context.Context, initial bool) error {
 			if err != nil {
 				continue
 			}
-			if mark, seen := fi.markOf(path); seen && mark.matches(info) {
+			if mark, seen := fi.markOf(path); seen && mark.unchanged(info) {
 				continue
 			}
-			if err := fi.processJSONFile(ctx, path); err != nil {
+			if err := fi.ingestJSONFile(ctx, path); err != nil {
 				fi.opts.Logger.Printf("error processing %s: %v", path, err)
 				fi.recordError(err)
 				continue
 			}
-			fi.setMark(path, info)
 		}
 	}
 	return nil
 }
 
-// markOf reports what the sweep last read for a whole-file .json.
+// markOf reports what was last ingested from a whole-file .json.
 func (fi *FolderIngestor) markOf(path string) (fileMark, bool) {
 	fi.mu.Lock()
 	defer fi.mu.Unlock()
@@ -259,11 +272,50 @@ func (fi *FolderIngestor) markOf(path string) (fileMark, bool) {
 	return m, ok
 }
 
-// setMark records a .json as read at the size and modification time given.
-func (fi *FolderIngestor) setMark(path string, info os.FileInfo) {
+// setMark records the digest of the bytes ingested from path, together with the
+// file's size and modification time as they stand now. A stat that fails leaves
+// those two zero, which the pre-filter reads as "changed": the file is read
+// again next sweep and the digest decides.
+func (fi *FolderIngestor) setMark(path string, sum [sha256.Size]byte) {
+	m := fileMark{sum: sum}
+	if info, err := os.Stat(path); err == nil {
+		m.size, m.modTime = info.Size(), info.ModTime()
+	}
 	fi.mu.Lock()
 	defer fi.mu.Unlock()
-	fi.marks[path] = fileMark{size: info.Size(), modTime: info.ModTime()}
+	fi.marks[path] = m
+}
+
+// ingestJSONFile reads a whole-file .json and ingests it unless these exact
+// bytes have already been ingested. Both the watcher and the sweep go through
+// here, so neither can ingest the same content twice or record content it never
+// read.
+func (fi *FolderIngestor) ingestJSONFile(ctx context.Context, path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		// Nothing to ingest, and nothing to remember. A .json that is empty
+		// right now is usually one still being written: marking it read here is
+		// how a file gets acknowledged and then never ingested at all.
+		return nil
+	}
+
+	sum := sha256.Sum256(data)
+	if mark, seen := fi.markOf(path); seen && mark.sum == sum {
+		// Already ingested these bytes. Re-record so the pre-filter matches the
+		// file as it stands, since the write that closed it may have moved the
+		// modification time past what was stored.
+		fi.setMark(path, sum)
+		return nil
+	}
+
+	if err := fi.processJSONBytes(ctx, data); err != nil {
+		return err
+	}
+	fi.setMark(path, sum)
+	return nil
 }
 
 func (fi *FolderIngestor) watchLoop(ctx context.Context) error {
@@ -316,29 +368,14 @@ func (fi *FolderIngestor) watchLoop(ctx context.Context) error {
 					fi.mu.Unlock()
 					fi.saveOffsets()
 				case strings.HasSuffix(lower, ".json"):
-					// A whole-file .json is re-read in full, so it is read again
-					// only when it actually changed. Writing a file emits Create
-					// and then Write, and treating both as "re-read" ingested
-					// every dropped file twice.
-					//
-					// Size and modification time, rather than content: the point
-					// is to avoid reading the file at all. A rewrite that lands
-					// in the same modification-time tick at exactly the same
-					// size is missed, which for a drop folder of uniquely named
-					// files is not a case that arises.
-					info, err := os.Stat(ev.Name)
-					if err != nil {
-						continue
-					}
-					if mark, seen := fi.markOf(ev.Name); seen && mark.matches(info) {
-						continue
-					}
-					if err := fi.processJSONFile(ctx, ev.Name); err != nil {
+					// The digest decides whether this is new content. Writing a
+					// file emits a creation and then a write, and treating both
+					// as "re-read the whole file" ingested every dropped file
+					// twice.
+					if err := fi.ingestJSONFile(ctx, ev.Name); err != nil {
 						fi.opts.Logger.Printf("error processing %s: %v", ev.Name, err)
 						fi.recordError(err)
-						continue
 					}
-					fi.setMark(ev.Name, info)
 				}
 			}
 			if (ev.Op&fsnotify.Remove) != 0 || (ev.Op&fsnotify.Rename) != 0 {
@@ -467,11 +504,9 @@ func (fi *FolderIngestor) processJSONL(ctx context.Context, path string, startOf
 	return bytesRead, nil
 }
 
-func (fi *FolderIngestor) processJSONFile(ctx context.Context, path string) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
+// processJSONBytes ingests the contents of a whole-file .json: either a single
+// record or an array of them.
+func (fi *FolderIngestor) processJSONBytes(ctx context.Context, data []byte) error {
 	trim := strings.TrimSpace(string(data))
 	if trim == "" {
 		return nil
