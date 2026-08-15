@@ -5,11 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.0] - 2026-08-13
+## [0.3.0] - 2026-08-15
 
-The case screen becomes a place to work. Every screen owns its keys, dialogs float over what they
-act on, cases can be written up and kept, and the interface runs headless. Colour now carries
-meaning: severity, status and the kind of thing a value is.
+The case screen becomes a place to work, and settings become one place. Every screen owns its keys,
+dialogs float over what they act on, cases can be written up and kept, and the interface runs
+headless. Colour carries meaning throughout: severity, status, and the kind of thing a value is.
+
+Windows is a first-class platform for the first time — tested in CI, published to Scoop, built for
+ARM, and no longer rendering its entire interface in ASCII.
 
 ### Upgrading from 0.2.x
 
@@ -22,6 +25,11 @@ digits `1`–`5` are now the only way between screens, and they mean the same th
 
 **Nothing to do to your database.** No schema change in this release.
 
+**On Windows, the config directory's `0700` never protected anything.** Windows uses access control
+lists rather than Unix mode bits, so the mode we ask for has no effect — and `llm_settings.json` can
+hold a plaintext API key. This is now documented rather than implied to work everywhere; supply the
+key through an environment variable on a shared Windows machine.
+
 ### Added
 
 - **Reports.** `E` inside a case writes it up as Markdown, the Reports screen keeps every report
@@ -30,14 +38,29 @@ digits `1`–`5` are now the only way between screens, and they mean the same th
 - **Headless HTTP ingest.** `--http-ingest-enable` now works with `--no-tui`: the folder watcher
   that reads posted payloads back in runs in both modes. Previously the receiver answered
   `202 Accepted` and left the events unread on disk.
-- **A settings panel** on `,` showing the HTTP receiver's state — listening or not, on what address,
-  whether a token is required, how many payloads it has taken — with a toggle beside the theme.
+- **One settings panel**, on `,` from every screen including inside a case. Six categories —
+  General, Appearance, Ingestion, Copilot, Plugins, System — with search across all of them and an
+  explanation of every row. It replaced four unconnected places: a two-item panel, a provider form
+  reachable only from inside a case, a theme key, and a set of flags nothing surfaced.
+  - **Every row names where its value came from** — default, config file, flag, chosen here, or
+    detected. With four layers of configuration the useful question is not what can be changed but
+    why a value is what it is.
+  - A row a flag has already decided is shown and explains itself, rather than accepting a change it
+    could not keep.
+  - **Your analyst name is settable.** It goes into the audit trail, case ownership, notes and
+    reports, and was taken from `$USER` — wrong on a shared machine.
+  - `Shift+L` opens the panel on Copilot, where the provider form now lives.
 - **Semantic colour for entities.** Hosts, users, addresses and artifacts each get a colour taken
-  from their OCSF observable type, on every screen that shows one. The palettes were chosen by
-  searching each theme for the most vivid set that stays distinguishable under three kinds of colour
-  blindness, and that is enforced by test.
+  from their OCSF observable type, on **every** screen that shows one — the queue, findings, events,
+  the timeline, indicators, notes, the briefing and the copilot's answers. The palettes were chosen
+  by searching each theme for the most vivid set that stays distinguishable under three kinds of
+  colour blindness, and that is enforced by test. Inside prose, entities are found by shape — dotted
+  quads, hashes, endpoint file extensions — because colouring a guess is worse than colouring
+  nothing.
 - **A theme picker** on the settings panel, replacing blind cycling. Six palettes ship.
 - **Windows on ARM**, and publishing to Scoop, so Windows has an install path better than a zip.
+- **CI runs on macOS and Windows**, not only Linux. Before this, "supports three platforms" rested
+  on cross-compilation alone.
 - **Notes on the case timeline**, so what an analyst wrote sits beside what happened.
 - **`o` takes ownership of a case.** The header had told analysts to press it since the prompt was
   written and nothing handled it; `assigned_to` was set once at escalation and never again.
@@ -58,6 +81,14 @@ digits `1`–`5` are now the only way between screens, and they mean the same th
 
 ### Fixed
 
+- **The whole interface rendered in ASCII on every Windows terminal.** Unicode support was decided
+  by reading `LC_ALL`, `LC_CTYPE` and `LANG` — a Unix convention Windows never sets — so the answer
+  was always no. Frames drew as `+---+`, scrollbars as pipes, the sparkline as `_.-#-._`, on a
+  platform whose default terminal has rendered UTF-8 for years. Windows now asks the console for its
+  output code page, and trusts Windows Terminal outright.
+- **A leaked log file handle.** Closing the log left its `sync.Once` fired, so the package still
+  believed it was open, handed out a closed file, and every write after a close went nowhere
+  silently. Unix lets you delete an open file, which is why only Windows noticed.
 - **Arrowing an empty pane hung the application.** An empty tab draws unselectable cells in a
   selectable table, and tview searches for somewhere to land forever. Every tab was affected.
 - **Pressing `2` at start-up deadlocked the event loop**, as did `s` on the cases screen: both
@@ -66,6 +97,8 @@ digits `1`–`5` are now the only way between screens, and they mean the same th
 - **Focus was lost when a modal closed** — arrow keys did nothing until you changed screens.
 - **The findings pane and the copilot ignored the theme.** Three copilot widgets had never been in
   the theming pass at all, so the drawer had black bands on every palette.
+- **Two analyst names.** The case screen attributed an action to the case's *owner*, everything else
+  to `$USER` — so working someone else's case signed your notes and audit entries with their name.
 - Screens no longer advertise keys they do not handle, or data they cannot source.
 
 ### Removed
