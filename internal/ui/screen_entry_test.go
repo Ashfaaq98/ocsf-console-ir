@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Ashfaaq98/ocsf-console-ir/internal/llm"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/logging"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/ocsf"
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
@@ -28,7 +29,14 @@ func newTestUI(t *testing.T) (*UI, *store.Store) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	ui := NewUI(ctx, st, nil, logging.New(io.Discard, logging.LevelError, "test"), "test")
+	// An explicit stub, not nil.
+	//
+	// Passed nil, NewUI builds a provider from the persisted settings, which
+	// default to a local Ollama — so a unit test made a real HTTP request to
+	// localhost and waited out its sixty-second timeout. Hermetic tests do not
+	// talk to the network, and one that does is slow everywhere and flaky
+	// wherever the port happens to answer.
+	ui := NewUI(ctx, st, &llm.LocalStub{}, logging.New(io.Discard, logging.LevelError, "test"), "test")
 	t.Cleanup(func() {
 		if ui.home != nil {
 			ui.home.close()
@@ -241,6 +249,11 @@ func TestCaseSummaryReadsTheCasesOwnEvents(t *testing.T) {
 	// The summary runs asynchronously; the point here is that it does not
 	// depend on ui.events, and does not panic now that ui.events is nil.
 	ui.showCaseSummary()
+
+	// And it is waited for. It reads the store, so letting the test return
+	// while it is still running left a query in flight against a database the
+	// cleanup was about to delete.
+	awaitIdle(t, ui)
 }
 
 // A missing provider is reported, not dereferenced.

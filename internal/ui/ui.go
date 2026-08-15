@@ -2499,7 +2499,17 @@ func (ui *UI) showCaseSummary() {
 	ui.setStatusDirect("[%s]Generating case summary...[-:-:-]", ui.theme.TagWarning)
 
 	caseID := selectedCase.ID
-	go func() {
+
+	// Through spawnLoad, so the read is tracked.
+	//
+	// A bare goroutine here queried the store after a caller had finished with
+	// it — invisible on Unix, where an open file can still be deleted, and a
+	// hard failure on Windows: "the process cannot access the file because it
+	// is being used by another process" when the temporary directory holding
+	// the database was removed. Anything that touches the store off the UI
+	// goroutine belongs here, so a caller about to take the database away can
+	// wait for it.
+	ui.spawnLoad(func() {
 		// The case's own events, not whatever the events screen last loaded.
 		// ui.events belongs to a different screen, is empty on the one this key
 		// is pressed from, and is cleared outright when a screen changes — so
@@ -2524,7 +2534,7 @@ func (ui *UI) showCaseSummary() {
 			ui.showModal("Case Summary", summary)
 			ui.setStatusDirect("[%s]Case summary generated[-:-:-]", ui.theme.TagSuccess)
 		})
-	}()
+	})
 }
 
 // showHelp displays a professionally formatted Help using a table layout
