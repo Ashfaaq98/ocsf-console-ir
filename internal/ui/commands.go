@@ -47,7 +47,7 @@ func (ui *UI) showCommandPalette() {
 			if filter == "" || strings.Contains(strings.ToLower(cmd.Name), filter) || strings.Contains(strings.ToLower(cmd.Description), filter) {
 				c := cmd
 				list.AddItem(c.Name, c.Description, rune(0), func() {
-					ui.app.SetRoot(ui.layout, true)
+					ui.closeModal()
 					c.Action()
 				})
 			}
@@ -60,19 +60,28 @@ func (ui *UI) showCommandPalette() {
 		populate(text)
 	})
 
+	// Closed through closeModal, never with SetRoot.
+	//
+	// SetRoot(ui.layout) looks like it puts the screen back and does three
+	// things wrong: it leaves ui.activeModal set, so the application still
+	// believes a modal is open and isDialogActive suppresses every global key —
+	// the palette closed and nothing worked afterwards, on any screen, for the
+	// rest of the session. It also drops the status bar, which lives in the
+	// flex above the layout, and it never gives focus back.
 	input.SetDoneFunc(func(key tcell.Key) {
-		if key == tcell.KeyEscape {
-			ui.app.SetRoot(ui.layout, true)
-		} else if key == tcell.KeyEnter {
-			if list.GetItemCount() > 0 {
-				idx := list.GetCurrentItem()
-				main, _ := list.GetItemText(idx)
-				for _, cmd := range commands {
-					if cmd.Name == main {
-						ui.app.SetRoot(ui.layout, true)
-						cmd.Action()
-						break
-					}
+		switch key {
+		case tcell.KeyEscape:
+			ui.closeModal()
+		case tcell.KeyEnter:
+			if list.GetItemCount() == 0 {
+				return
+			}
+			name, _ := list.GetItemText(list.GetCurrentItem())
+			for _, cmd := range commands {
+				if cmd.Name == name {
+					ui.closeModal()
+					cmd.Action()
+					return
 				}
 			}
 		}

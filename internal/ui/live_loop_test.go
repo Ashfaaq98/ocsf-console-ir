@@ -7,6 +7,7 @@ import (
 
 	"github.com/Ashfaaq98/ocsf-console-ir/internal/store"
 	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
 )
 
 // liveUI starts the real event loop against a simulated terminal.
@@ -253,4 +254,91 @@ func awaitTab(ui *UI, want int, within time.Duration) bool {
 		time.Sleep(10 * time.Millisecond)
 	}
 	return false
+}
+
+// Closing the command palette leaves the application usable.
+//
+// It closed itself with SetRoot(ui.layout) at three call sites rather than
+// through closeModal, which does three things that matters: it clears
+// activeModal, restores the root *with* the status bar, and gives focus back to
+// the screen. Without it the application still believed a modal was open, so
+// isDialogActive suppressed every global key — nothing worked, on any screen,
+// for the rest of the session.
+func TestClosingTheCommandPaletteLeavesTheAppUsable(t *testing.T) {
+	ui, st, screen := liveUI(t)
+	seedTriageFinding(t, st, "a", "")
+
+	screen.InjectKey(tcell.KeyRune, '1', tcell.ModNone)
+	if !awaitDestination(ui, destTriage, 5*time.Second) {
+		t.Fatal("never reached Triage")
+	}
+
+	screen.InjectKey(tcell.KeyRune, ':', tcell.ModNone)
+	if err := pingLoop(ui, 5*time.Second); err != nil {
+		t.Fatal("opening the palette froze the application")
+	}
+	screen.InjectKey(tcell.KeyEscape, 0, tcell.ModNone)
+	if err := pingLoop(ui, 5*time.Second); err != nil {
+		t.Fatal("closing the palette froze the application")
+	}
+
+	// The keys have to work afterwards, which is the actual complaint.
+	screen.InjectKey(tcell.KeyRune, '2', tcell.ModNone)
+	if !awaitDestination(ui, destCases, 5*time.Second) {
+		t.Fatal("after the palette closed, the digits no longer moved between screens")
+	}
+
+	var modal tview.Primitive
+	done := make(chan struct{})
+	go func() {
+		ui.app.QueueUpdate(func() {
+			modal = ui.activeModal
+			close(done)
+		})
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the loop stopped answering")
+	}
+
+	if modal != nil {
+		t.Error("the palette closed but the application still thinks a modal is open")
+	}
+}
+
+// The navigation rail is a legend, not a control.
+//
+// It was a scrollable TextView — tview's default — so a mouse click took focus
+// and the arrow keys then scrolled a fixed list of five destinations, while the
+// queue the analyst was reading stopped answering them because it no longer had
+// focus.
+func TestTheNavRailIsNotAControl(t *testing.T) {
+	ui, st := newTestUI(t)
+	seedTriageFinding(t, st, "a", "")
+	ui.enterScreen(destTriage)
+	awaitIdle(t, ui)
+
+	// A left click where the rail is drawn must not take focus from the queue.
+	ui.app.SetFocus(ui.eventList)
+	renderPrimitive(t, ui.mainRoot(), 150, 40)
+
+	handler := ui.navRail.MouseHandler()
+	consumed, _ := handler(tview.MouseLeftDown,
+		tcell.NewEventMouse(3, 5, tcell.Button1, tcell.ModNone),
+		func(p tview.Primitive) { ui.app.SetFocus(p) })
+
+	if got := ui.app.GetFocus(); got != ui.eventList {
+		t.Errorf("clicking the rail moved focus to %T; the queue should keep it", got)
+	}
+	_ = consumed
+
+	// And there is nothing to scroll: a fixed list of destinations.
+	if _, _, _, height := ui.navRail.GetInnerRect(); height > 0 {
+		row, _ := ui.navRail.GetScrollOffset()
+		ui.navRail.InputHandler()(tcell.NewEventKey(tcell.KeyDown, 0, tcell.ModNone), func(tview.Primitive) {})
+		if after, _ := ui.navRail.GetScrollOffset(); after != row {
+			t.Errorf("the rail scrolled from %d to %d; it is a fixed legend", row, after)
+		}
+	}
 }
