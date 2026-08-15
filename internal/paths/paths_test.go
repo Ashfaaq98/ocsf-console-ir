@@ -3,6 +3,7 @@ package paths
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -82,6 +83,8 @@ func TestResolvePortableRestoresLegacyLayout(t *testing.T) {
 }
 
 func TestMkdirAllIsPrivate(t *testing.T) {
+	requireUnixPermissions(t)
+
 	base := t.TempDir()
 	d := Dirs{
 		Data:   filepath.Join(base, "data"),
@@ -122,5 +125,18 @@ func TestCurrentDefaultsAndSet(t *testing.T) {
 	Set(want)
 	if got := Current(); got != want {
 		t.Errorf("Current() = %+v, want %+v", got, want)
+	}
+}
+
+// requireUnixPermissions skips a test that asserts on Unix mode bits.
+//
+// Windows has no such thing — it uses access control lists, and Go reports 777
+// for a directory created with 0700. Skipping is honest where pretending would
+// not be: the 0700 the code asks for genuinely does not protect a config
+// directory on Windows, and that limit is documented rather than papered over.
+func requireUnixPermissions(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows uses ACLs rather than Unix mode bits; see docs/configuration.md")
 	}
 }

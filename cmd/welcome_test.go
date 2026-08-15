@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -113,6 +114,12 @@ func TestCreateDatabaseProducesAMigratedDatabase(t *testing.T) {
 // An unwritable location must surface as an error the screen can show, not as
 // a panic or a silent success.
 func TestCreateDatabaseReportsAnUnwritableLocation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// The fixture is a directory made unwritable with chmod 0500, which
+		// Windows does not honour — so the write succeeds and the test reports
+		// the code as broken when it behaved correctly for the platform.
+		t.Skip("a directory cannot be made unwritable with chmod on Windows")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("root ignores directory permissions")
 	}

@@ -10,6 +10,8 @@ import (
 // The sparkline's job is shape. Peaks must read as peaks and troughs as
 // troughs, or the strip is decoration.
 func TestSparklineReflectsShape(t *testing.T) {
+	requireUnicode(t)
+
 	got := []rune(sparkline([]int{0, 1, 5, 20, 5, 1, 0}, 7))
 
 	if len(got) != 7 {
@@ -38,6 +40,8 @@ func TestSparklineNeverHidesActivity(t *testing.T) {
 
 // A flat line is a flat line, not an empty string and not a division by zero.
 func TestSparklineOnAnEmptyDay(t *testing.T) {
+	requireUnicode(t)
+
 	got := sparkline(make([]int, 24), 12)
 
 	if len([]rune(got)) != 12 {

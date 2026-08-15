@@ -23,7 +23,14 @@ cases whichever folder you launch it from. Run `console-ir version` to see the r
 
 `--portable` is useful on a USB stick, or a jump box you do not want to leave traces on.
 
-Config directories are created mode `0700`, because `llm_settings.json` can hold a plaintext API key.
+Config directories are created mode `0700`, and `llm_settings.json` mode `0600`, because that file
+can hold a plaintext API key.
+
+> **On Windows this does not protect the file.** Windows uses access control lists rather than Unix
+> mode bits, so the `0700` we ask for has no effect — the directory inherits whatever its parent
+> grants. If you keep an API key on a shared Windows machine, restrict `%APPDATA%\console-ir`
+> yourself, or supply the key through an environment variable instead so it is never written to
+> disk.
 
 The watched drop folder is deliberately *not* per-user: it stays relative to where you launch
 (`./incoming`). Point it anywhere with `--ingest-dir`.

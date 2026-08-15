@@ -28,6 +28,8 @@ func TestScrollbarIsAbsentWhenEverythingFits(t *testing.T) {
 
 // A pane that holds more than it can show says so.
 func TestScrollbarAppearsWhenContentOverflows(t *testing.T) {
+	requireUnicode(t)
+
 	tv := tview.NewTextView().SetDynamicColors(true)
 	tv.SetBorder(true)
 	attachScrollbar(tv, ptrTheme(themeDark()))
@@ -154,6 +156,8 @@ func thumbRows(lines []string) []int {
 // tview.Table draws no position indicator — so there was no way to tell how far
 // down a queue you were, while the detail pane below it had a bar.
 func TestTableScrollbarMarksThePosition(t *testing.T) {
+	requireUnicode(t)
+
 	tbl := tview.NewTable().SetSelectable(true, false).SetFixed(1, 0)
 	tbl.SetBorder(true)
 	attachTableScrollbar(tbl, 1, ptrTheme(themeDark()))
@@ -177,6 +181,8 @@ func TestTableScrollbarMarksThePosition(t *testing.T) {
 // run, so GetOffset returns the previous frame's — a bar built on that trails
 // by a row for as long as the key is held, and stops short of the end.
 func TestTableScrollbarReachesTheEnd(t *testing.T) {
+	requireUnicode(t)
+
 	tbl := tview.NewTable().SetSelectable(true, false).SetFixed(1, 0)
 	tbl.SetBorder(true)
 	attachTableScrollbar(tbl, 1, ptrTheme(themeDark()))

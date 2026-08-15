@@ -233,3 +233,16 @@ func TestTheCatalogIsWellFormed(t *testing.T) {
 		}
 	}
 }
+
+// requireUnicode forces Unicode glyphs for the length of a test.
+//
+// A render test that asserts on a box-drawing character must not depend on the
+// locale of the machine running it. On a build agent it does: Windows has no
+// LC_ALL, and its console code page is whatever the runner happens to set — so
+// the same assertion passed on one platform and failed on another for reasons
+// that had nothing to do with the code under test.
+func requireUnicode(t *testing.T) {
+	t.Helper()
+	setGlyphMode(glyphUnicode)
+	t.Cleanup(func() { setGlyphMode(glyphAuto) })
+}

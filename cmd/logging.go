@@ -95,8 +95,22 @@ func runtimeLogPath() string {
 	return ""
 }
 
+// closeRuntimeLog releases the log file and lets it be opened again.
+//
+// Resetting the once matters as much as closing the handle. Without it the
+// package still believes it is initialised, so runtimeLog hands out a closed
+// file and initRuntimeLog will not reopen — every write after a close goes
+// nowhere, silently.
+//
+// It also leaked a handle. On Unix an open file can still be deleted, so a test
+// that opened the log and did not close it looked clean; Windows refuses, which
+// is how the leak surfaced — "the process cannot access the file because it is
+// being used by another process" during a temporary directory's cleanup.
 func closeRuntimeLog() {
 	if runtimeLogFile != nil {
 		_ = runtimeLogFile.Close()
+		runtimeLogFile = nil
 	}
+	runtimeLogRoot = nil
+	runtimeLogOnce = sync.Once{}
 }
