@@ -1,57 +1,215 @@
 {
-  "schema_version": "1.8.0",
+  "schema_version": "1.9.0",
   "source": "https://schema.ocsf.io/api/objects/observable",
   "note": "Vendored observable.type_id enum. type_id is the only required attribute of the observable object. Refresh with scripts/gen-ocsf-classes.sh.",
   "types": [
-    { "id": 0, "name": "Unknown" },
-    { "id": 1, "name": "Hostname" },
-    { "id": 2, "name": "IP Address" },
-    { "id": 3, "name": "MAC Address" },
-    { "id": 4, "name": "User Name" },
-    { "id": 5, "name": "Email Address" },
-    { "id": 6, "name": "URL String" },
-    { "id": 7, "name": "File Name" },
-    { "id": 8, "name": "Hash" },
-    { "id": 9, "name": "Process Name" },
-    { "id": 10, "name": "Resource UID" },
-    { "id": 11, "name": "Port" },
-    { "id": 12, "name": "Subnet" },
-    { "id": 13, "name": "Command Line" },
-    { "id": 14, "name": "Country" },
-    { "id": 15, "name": "Process ID" },
-    { "id": 16, "name": "HTTP User-Agent" },
-    { "id": 17, "name": "CWE Object: uid" },
-    { "id": 18, "name": "CVE Object: uid" },
-    { "id": 19, "name": "User Credential ID" },
-    { "id": 20, "name": "Endpoint" },
-    { "id": 21, "name": "User" },
-    { "id": 22, "name": "Email" },
-    { "id": 23, "name": "Uniform Resource Locator" },
-    { "id": 24, "name": "File" },
-    { "id": 25, "name": "Process" },
-    { "id": 26, "name": "Geo Location" },
-    { "id": 27, "name": "Container" },
-    { "id": 28, "name": "Registry Key" },
-    { "id": 29, "name": "Registry Value" },
-    { "id": 30, "name": "Fingerprint" },
-    { "id": 31, "name": "User Object: uid" },
-    { "id": 32, "name": "Group Object: name" },
-    { "id": 33, "name": "Group Object: uid" },
-    { "id": 34, "name": "Account Object: name" },
-    { "id": 35, "name": "Account Object: uid" },
-    { "id": 36, "name": "Script Content" },
-    { "id": 37, "name": "Serial Number" },
-    { "id": 38, "name": "Resource Details Object: name" },
-    { "id": 39, "name": "Process Entity Object: uid" },
-    { "id": 40, "name": "Email Object: subject" },
-    { "id": 41, "name": "Email Object: uid" },
-    { "id": 42, "name": "Message UID" },
-    { "id": 43, "name": "Registry Value Object: name" },
-    { "id": 44, "name": "Advisory Object: uid" },
-    { "id": 45, "name": "File Path" },
-    { "id": 46, "name": "Registry Key Path" },
-    { "id": 47, "name": "Device Object: uid" },
-    { "id": 48, "name": "Network Endpoint Object: uid" },
-    { "id": 99, "name": "Other" }
+    {
+      "id": 0,
+      "name": "Unknown"
+    },
+    {
+      "id": 1,
+      "name": "Hostname"
+    },
+    {
+      "id": 2,
+      "name": "IP Address"
+    },
+    {
+      "id": 3,
+      "name": "MAC Address"
+    },
+    {
+      "id": 4,
+      "name": "User Name"
+    },
+    {
+      "id": 5,
+      "name": "Email Address"
+    },
+    {
+      "id": 6,
+      "name": "URL String"
+    },
+    {
+      "id": 7,
+      "name": "File Name"
+    },
+    {
+      "id": 8,
+      "name": "Hash"
+    },
+    {
+      "id": 9,
+      "name": "Process Name"
+    },
+    {
+      "id": 10,
+      "name": "Resource UID"
+    },
+    {
+      "id": 11,
+      "name": "Port"
+    },
+    {
+      "id": 12,
+      "name": "Subnet"
+    },
+    {
+      "id": 13,
+      "name": "Command Line"
+    },
+    {
+      "id": 14,
+      "name": "Country"
+    },
+    {
+      "id": 15,
+      "name": "Process ID"
+    },
+    {
+      "id": 16,
+      "name": "HTTP User-Agent"
+    },
+    {
+      "id": 17,
+      "name": "CWE Object: uid"
+    },
+    {
+      "id": 18,
+      "name": "CVE Object: uid"
+    },
+    {
+      "id": 19,
+      "name": "User Credential ID"
+    },
+    {
+      "id": 20,
+      "name": "Endpoint"
+    },
+    {
+      "id": 21,
+      "name": "User"
+    },
+    {
+      "id": 22,
+      "name": "Email"
+    },
+    {
+      "id": 23,
+      "name": "Uniform Resource Locator"
+    },
+    {
+      "id": 24,
+      "name": "File"
+    },
+    {
+      "id": 25,
+      "name": "Process"
+    },
+    {
+      "id": 26,
+      "name": "Geo Location"
+    },
+    {
+      "id": 27,
+      "name": "Container"
+    },
+    {
+      "id": 28,
+      "name": "Registry Key"
+    },
+    {
+      "id": 29,
+      "name": "Registry Value"
+    },
+    {
+      "id": 30,
+      "name": "Fingerprint"
+    },
+    {
+      "id": 31,
+      "name": "User Object: uid"
+    },
+    {
+      "id": 32,
+      "name": "Group Object: name"
+    },
+    {
+      "id": 33,
+      "name": "Group Object: uid"
+    },
+    {
+      "id": 34,
+      "name": "Account Object: name"
+    },
+    {
+      "id": 35,
+      "name": "Account Object: uid"
+    },
+    {
+      "id": 36,
+      "name": "Script Content"
+    },
+    {
+      "id": 37,
+      "name": "Serial Number"
+    },
+    {
+      "id": 38,
+      "name": "Resource Details Object: name"
+    },
+    {
+      "id": 39,
+      "name": "Process Entity Object: uid"
+    },
+    {
+      "id": 40,
+      "name": "Email Object: subject"
+    },
+    {
+      "id": 41,
+      "name": "Email Object: uid"
+    },
+    {
+      "id": 42,
+      "name": "Message UID"
+    },
+    {
+      "id": 43,
+      "name": "Registry Value Object: name"
+    },
+    {
+      "id": 44,
+      "name": "Advisory Object: uid"
+    },
+    {
+      "id": 45,
+      "name": "File Path"
+    },
+    {
+      "id": 46,
+      "name": "Registry Key Path"
+    },
+    {
+      "id": 47,
+      "name": "Device Object: uid"
+    },
+    {
+      "id": 48,
+      "name": "Network Endpoint Object: uid"
+    },
+    {
+      "id": 49,
+      "name": "IAM Role Object: name"
+    },
+    {
+      "id": 50,
+      "name": "IAM Role Object: uid"
+    },
+    {
+      "id": 99,
+      "name": "Other"
+    }
   ]
 }

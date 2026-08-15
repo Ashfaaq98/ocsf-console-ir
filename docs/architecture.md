@@ -27,7 +27,7 @@
 
 ## The router
 
-Class handling is driven by a vendored **OCSF 1.8.0** registry
+Class handling is driven by a vendored **OCSF 1.9.0** registry
 ([`internal/ocsf/classes.json`](../internal/ocsf/classes.json)), embedded with `go:embed`, so
 classes are named and categorised the way the schema defines them rather than by hand-written
 guesses.

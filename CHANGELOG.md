@@ -58,6 +58,12 @@ key through an environment variable on a shared Windows machine.
   quads, hashes, endpoint file extensions — because colouring a guess is worse than colouring
   nothing.
 - **A theme picker** on the settings panel, replacing blind cycling. Six palettes ship.
+- **OCSF 1.9.0.** The vendored registry moves from 1.8.0, gaining five classes — **User Management**
+  and **Role Management**, which an account-compromise investigation is largely made of, plus
+  Clipboard Activity, Device Power State Activity and Startup Item Query — and two observable types
+  for IAM roles. Nothing was renamed or removed. A weekly CI job now compares the vendored version
+  against `schema.ocsf.io`, so falling behind is noticed in days rather than by a user whose records
+  arrive as `Class 3007`.
 - **Windows on ARM**, and publishing to Scoop, so Windows has an install path better than a zip.
 - **CI runs on macOS and Windows**, not only Linux. Before this, "supports three platforms" rested
   on cross-compilation alone.

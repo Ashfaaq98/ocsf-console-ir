@@ -44,9 +44,10 @@ type observableTypesFile struct {
 }
 
 type observableTypeRegistry struct {
-	types  []ObservableType
-	byID   map[int]string
-	byName map[string]int
+	types         []ObservableType
+	byID          map[int]string
+	byName        map[string]int
+	schemaVersion string
 }
 
 var (
@@ -61,9 +62,10 @@ func loadObservableTypes() *observableTypeRegistry {
 			panic(fmt.Sprintf("ocsf: embedded observable_types.json is invalid: %v", err))
 		}
 		r := &observableTypeRegistry{
-			types:  f.Types,
-			byID:   make(map[int]string, len(f.Types)),
-			byName: make(map[string]int, len(f.Types)),
+			types:         f.Types,
+			byID:          make(map[int]string, len(f.Types)),
+			byName:        make(map[string]int, len(f.Types)),
+			schemaVersion: f.SchemaVersion,
 		}
 		for _, t := range f.Types {
 			r.byID[t.ID] = t.Name
@@ -144,3 +146,10 @@ func ObservableTypes() []ObservableType {
 	copy(out, r.types)
 	return out
 }
+
+// ObservableSchemaVersion reports the OCSF release the embedded observable enum
+// was generated from.
+//
+// Separate from SchemaVersion because the two files come from two endpoints and
+// are refreshed by hand: they can drift, and a test says so when they do.
+func ObservableSchemaVersion() string { return loadObservableTypes().schemaVersion }

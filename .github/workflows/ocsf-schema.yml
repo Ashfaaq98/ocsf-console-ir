@@ -1,0 +1,45 @@
+name: OCSF schema
+
+# Is the vendored registry still current?
+#
+# Not a runtime check: the binary embeds its schema copy so it works on an
+# airgapped laptop, and phoning home to compare versions would undo that. This
+# asks upstream once a week instead, on a machine that is already online, so a
+# release we have fallen behind is noticed within days rather than by a user
+# whose records show up as "Class 3007".
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    name: Compare with schema.ocsf.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compare the vendored version with upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          vendored="$(jq -r .schema_version internal/ocsf/classes.json)"
+          observables="$(jq -r .schema_version internal/ocsf/observable_types.json)"
+          upstream="$(curl -fsSL --max-time 30 https://schema.ocsf.io/api/version | jq -r .version)"
+
+          echo "vendored classes:     $vendored"
+          echo "vendored observables: $observables"
+          echo "upstream:             $upstream"
+
+          if [ "$vendored" != "$observables" ]; then
+            echo "::error::The two vendored files disagree: $vendored and $observables."
+            exit 1
+          fi
+          if [ "$vendored" != "$upstream" ]; then
+            echo "::error::OCSF $upstream is out; this build vendors $vendored. Refresh with scripts/gen-ocsf-classes.sh $upstream and review the diff — especially the category slugs, which are persisted in events.event_type."
+            exit 1
+          fi
+          echo "The vendored registry is current."

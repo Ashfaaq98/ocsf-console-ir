@@ -1,108 +1,480 @@
 {
-  "schema_version": "1.8.0",
+  "schema_version": "1.9.0",
   "source": "https://schema.ocsf.io/api/categories",
   "note": "Vendored point-in-time copy of the OCSF class registry. Refresh with scripts/gen-ocsf-classes.sh.",
   "categories": [
-    { "uid": 0, "name": "Uncategorized", "slug": "uncategorized" },
-    { "uid": 1, "name": "System Activity", "slug": "system" },
-    { "uid": 2, "name": "Findings", "slug": "findings" },
-    { "uid": 3, "name": "Identity & Access Management", "slug": "iam" },
-    { "uid": 4, "name": "Network Activity", "slug": "network" },
-    { "uid": 5, "name": "Discovery", "slug": "discovery" },
-    { "uid": 6, "name": "Application Activity", "slug": "application" },
-    { "uid": 7, "name": "Remediation", "slug": "remediation" },
-    { "uid": 8, "name": "Unmanned Systems", "slug": "unmanned" }
+    {
+      "uid": 1,
+      "name": "System Activity",
+      "slug": "system"
+    },
+    {
+      "uid": 2,
+      "name": "Findings",
+      "slug": "findings"
+    },
+    {
+      "uid": 3,
+      "name": "Identity & Access Management",
+      "slug": "iam"
+    },
+    {
+      "uid": 4,
+      "name": "Network Activity",
+      "slug": "network"
+    },
+    {
+      "uid": 5,
+      "name": "Discovery",
+      "slug": "discovery"
+    },
+    {
+      "uid": 6,
+      "name": "Application Activity",
+      "slug": "application"
+    },
+    {
+      "uid": 7,
+      "name": "Remediation",
+      "slug": "remediation"
+    },
+    {
+      "uid": 8,
+      "name": "Unmanned Systems",
+      "slug": "unmanned",
+      "slug_note": "Held at the upstream 1.8 spelling. Category slugs are persisted in events.event_type, so renaming one here silently invalidates every stored row that carries it \u2014 the filter stops matching and the events look gone. Upstream calls this \"unmanned_systems\" from 1.9.0."
+    }
   ],
   "classes": [
-    { "uid": 0, "name": "Base Event", "cat": 0 },
-
-    { "uid": 1001, "name": "File System Activity", "cat": 1 },
-    { "uid": 1002, "name": "Kernel Extension Activity", "cat": 1 },
-    { "uid": 1003, "name": "Kernel Activity", "cat": 1 },
-    { "uid": 1004, "name": "Memory Activity", "cat": 1 },
-    { "uid": 1005, "name": "Module Activity", "cat": 1 },
-    { "uid": 1006, "name": "Scheduled Job Activity", "cat": 1 },
-    { "uid": 1007, "name": "Process Activity", "cat": 1 },
-    { "uid": 1008, "name": "Event Log Activity", "cat": 1 },
-    { "uid": 1009, "name": "Script Activity", "cat": 1 },
-    { "uid": 1010, "name": "Peripheral Activity", "cat": 1 },
-    { "uid": 201001, "name": "Registry Key Activity", "cat": 1 },
-    { "uid": 201002, "name": "Registry Value Activity", "cat": 1 },
-    { "uid": 201003, "name": "Windows Resource Activity", "cat": 1 },
-    { "uid": 201004, "name": "Windows Service Activity", "cat": 1 },
-
-    { "uid": 2001, "name": "Security Finding", "cat": 2, "deprecated": "1.1.0" },
-    { "uid": 2002, "name": "Vulnerability Finding", "cat": 2 },
-    { "uid": 2003, "name": "Compliance Finding", "cat": 2 },
-    { "uid": 2004, "name": "Detection Finding", "cat": 2 },
-    { "uid": 2005, "name": "Incident Finding", "cat": 2 },
-    { "uid": 2006, "name": "Data Security Finding", "cat": 2 },
-    { "uid": 2007, "name": "Application Security Posture Finding", "cat": 2 },
-    { "uid": 2008, "name": "IAM Analysis Finding", "cat": 2 },
-
-    { "uid": 3001, "name": "Account Change", "cat": 3 },
-    { "uid": 3002, "name": "Authentication", "cat": 3 },
-    { "uid": 3003, "name": "Authorize Session", "cat": 3 },
-    { "uid": 3004, "name": "Entity Management", "cat": 3 },
-    { "uid": 3005, "name": "User Access Management", "cat": 3 },
-    { "uid": 3006, "name": "Group Management", "cat": 3 },
-
-    { "uid": 4001, "name": "Network Activity", "cat": 4 },
-    { "uid": 4002, "name": "HTTP Activity", "cat": 4 },
-    { "uid": 4003, "name": "DNS Activity", "cat": 4 },
-    { "uid": 4004, "name": "DHCP Activity", "cat": 4 },
-    { "uid": 4005, "name": "RDP Activity", "cat": 4 },
-    { "uid": 4006, "name": "SMB Activity", "cat": 4 },
-    { "uid": 4007, "name": "SSH Activity", "cat": 4 },
-    { "uid": 4008, "name": "FTP Activity", "cat": 4 },
-    { "uid": 4009, "name": "Email Activity", "cat": 4 },
-    { "uid": 4010, "name": "Network File Activity", "cat": 4 },
-    { "uid": 4011, "name": "Email File Activity", "cat": 4 },
-    { "uid": 4012, "name": "Email URL Activity", "cat": 4 },
-    { "uid": 4013, "name": "NTP Activity", "cat": 4 },
-    { "uid": 4014, "name": "Tunnel Activity", "cat": 4 },
-
-    { "uid": 5001, "name": "Device Inventory Info", "cat": 5 },
-    { "uid": 5002, "name": "Device Config State", "cat": 5 },
-    { "uid": 5003, "name": "User Inventory Info", "cat": 5 },
-    { "uid": 5004, "name": "Operating System Patch State", "cat": 5 },
-    { "uid": 5006, "name": "Kernel Object Query", "cat": 5 },
-    { "uid": 5007, "name": "File Query", "cat": 5 },
-    { "uid": 5008, "name": "Folder Query", "cat": 5 },
-    { "uid": 5009, "name": "Admin Group Query", "cat": 5 },
-    { "uid": 5010, "name": "Job Query", "cat": 5 },
-    { "uid": 5011, "name": "Module Query", "cat": 5 },
-    { "uid": 5012, "name": "Network Connection Query", "cat": 5 },
-    { "uid": 5013, "name": "Networks Query", "cat": 5 },
-    { "uid": 5014, "name": "Peripheral Device Query", "cat": 5 },
-    { "uid": 5015, "name": "Process Query", "cat": 5 },
-    { "uid": 5016, "name": "Service Query", "cat": 5 },
-    { "uid": 5017, "name": "User Session Query", "cat": 5 },
-    { "uid": 5018, "name": "User Query", "cat": 5 },
-    { "uid": 5019, "name": "Device Config State Change", "cat": 5 },
-    { "uid": 5020, "name": "Software Inventory Info", "cat": 5 },
-    { "uid": 5021, "name": "OSINT Inventory Info", "cat": 5 },
-    { "uid": 5023, "name": "Cloud Resources Inventory Info", "cat": 5 },
-    { "uid": 5040, "name": "Live Evidence Info", "cat": 5 },
-    { "uid": 205004, "name": "Registry Key Query", "cat": 5 },
-    { "uid": 205005, "name": "Registry Value Query", "cat": 5 },
-    { "uid": 205019, "name": "Prefetch Query", "cat": 5 },
-
-    { "uid": 6001, "name": "Web Resources Activity", "cat": 6 },
-    { "uid": 6002, "name": "Application Lifecycle", "cat": 6 },
-    { "uid": 6003, "name": "API Activity", "cat": 6 },
-    { "uid": 6004, "name": "Web Resource Access Activity", "cat": 6 },
-    { "uid": 6005, "name": "Datastore Activity", "cat": 6 },
-    { "uid": 6006, "name": "File Hosting Activity", "cat": 6 },
-    { "uid": 6007, "name": "Scan Activity", "cat": 6 },
-    { "uid": 6008, "name": "Application Error", "cat": 6 },
-
-    { "uid": 7001, "name": "Remediation Activity", "cat": 7 },
-    { "uid": 7002, "name": "File Remediation Activity", "cat": 7 },
-    { "uid": 7003, "name": "Process Remediation Activity", "cat": 7 },
-    { "uid": 7004, "name": "Network Remediation Activity", "cat": 7 },
-
-    { "uid": 8001, "name": "Drone Flights Activity", "cat": 8 },
-    { "uid": 8002, "name": "Airborne Broadcast Activity", "cat": 8 }
+    {
+      "uid": 1001,
+      "name": "File System Activity",
+      "cat": 1
+    },
+    {
+      "uid": 1002,
+      "name": "Kernel Extension Activity",
+      "cat": 1
+    },
+    {
+      "uid": 1003,
+      "name": "Kernel Activity",
+      "cat": 1
+    },
+    {
+      "uid": 1004,
+      "name": "Memory Activity",
+      "cat": 1
+    },
+    {
+      "uid": 1005,
+      "name": "Module Activity",
+      "cat": 1
+    },
+    {
+      "uid": 1006,
+      "name": "Scheduled Job Activity",
+      "cat": 1
+    },
+    {
+      "uid": 1007,
+      "name": "Process Activity",
+      "cat": 1
+    },
+    {
+      "uid": 1008,
+      "name": "Event Log Activity",
+      "cat": 1
+    },
+    {
+      "uid": 1009,
+      "name": "Script Activity",
+      "cat": 1
+    },
+    {
+      "uid": 1010,
+      "name": "Peripheral Activity",
+      "cat": 1
+    },
+    {
+      "uid": 1011,
+      "name": "Device Power State Activity",
+      "cat": 1
+    },
+    {
+      "uid": 1012,
+      "name": "Clipboard Activity",
+      "cat": 1
+    },
+    {
+      "uid": 2001,
+      "name": "Security Finding",
+      "cat": 2
+    },
+    {
+      "uid": 2002,
+      "name": "Vulnerability Finding",
+      "cat": 2
+    },
+    {
+      "uid": 2003,
+      "name": "Compliance Finding",
+      "cat": 2
+    },
+    {
+      "uid": 2004,
+      "name": "Detection Finding",
+      "cat": 2
+    },
+    {
+      "uid": 2005,
+      "name": "Incident Finding",
+      "cat": 2
+    },
+    {
+      "uid": 2006,
+      "name": "Data Security Finding",
+      "cat": 2
+    },
+    {
+      "uid": 2007,
+      "name": "Application Security Posture Finding",
+      "cat": 2
+    },
+    {
+      "uid": 2008,
+      "name": "IAM Analysis Finding",
+      "cat": 2
+    },
+    {
+      "uid": 3001,
+      "name": "Account Change",
+      "cat": 3
+    },
+    {
+      "uid": 3002,
+      "name": "Authentication",
+      "cat": 3
+    },
+    {
+      "uid": 3003,
+      "name": "Authorize Session",
+      "cat": 3
+    },
+    {
+      "uid": 3004,
+      "name": "Entity Management",
+      "cat": 3
+    },
+    {
+      "uid": 3005,
+      "name": "User Access Management",
+      "cat": 3
+    },
+    {
+      "uid": 3006,
+      "name": "Group Management",
+      "cat": 3
+    },
+    {
+      "uid": 3007,
+      "name": "User Management",
+      "cat": 3
+    },
+    {
+      "uid": 3008,
+      "name": "Role Management",
+      "cat": 3
+    },
+    {
+      "uid": 4001,
+      "name": "Network Activity",
+      "cat": 4
+    },
+    {
+      "uid": 4002,
+      "name": "HTTP Activity",
+      "cat": 4
+    },
+    {
+      "uid": 4003,
+      "name": "DNS Activity",
+      "cat": 4
+    },
+    {
+      "uid": 4004,
+      "name": "DHCP Activity",
+      "cat": 4
+    },
+    {
+      "uid": 4005,
+      "name": "RDP Activity",
+      "cat": 4
+    },
+    {
+      "uid": 4006,
+      "name": "SMB Activity",
+      "cat": 4
+    },
+    {
+      "uid": 4007,
+      "name": "SSH Activity",
+      "cat": 4
+    },
+    {
+      "uid": 4008,
+      "name": "FTP Activity",
+      "cat": 4
+    },
+    {
+      "uid": 4009,
+      "name": "Email Activity",
+      "cat": 4
+    },
+    {
+      "uid": 4010,
+      "name": "Network File Activity",
+      "cat": 4
+    },
+    {
+      "uid": 4011,
+      "name": "Email File Activity",
+      "cat": 4
+    },
+    {
+      "uid": 4012,
+      "name": "Email URL Activity",
+      "cat": 4
+    },
+    {
+      "uid": 4013,
+      "name": "NTP Activity",
+      "cat": 4
+    },
+    {
+      "uid": 4014,
+      "name": "Tunnel Activity",
+      "cat": 4
+    },
+    {
+      "uid": 5001,
+      "name": "Device Inventory Info",
+      "cat": 5
+    },
+    {
+      "uid": 5002,
+      "name": "Device Config State",
+      "cat": 5
+    },
+    {
+      "uid": 5003,
+      "name": "User Inventory Info",
+      "cat": 5
+    },
+    {
+      "uid": 5004,
+      "name": "Operating System Patch State",
+      "cat": 5
+    },
+    {
+      "uid": 5006,
+      "name": "Kernel Object Query",
+      "cat": 5
+    },
+    {
+      "uid": 5007,
+      "name": "File Query",
+      "cat": 5
+    },
+    {
+      "uid": 5008,
+      "name": "Folder Query",
+      "cat": 5
+    },
+    {
+      "uid": 5009,
+      "name": "Admin Group Query",
+      "cat": 5
+    },
+    {
+      "uid": 5010,
+      "name": "Job Query",
+      "cat": 5
+    },
+    {
+      "uid": 5011,
+      "name": "Module Query",
+      "cat": 5
+    },
+    {
+      "uid": 5012,
+      "name": "Network Connection Query",
+      "cat": 5
+    },
+    {
+      "uid": 5013,
+      "name": "Networks Query",
+      "cat": 5
+    },
+    {
+      "uid": 5014,
+      "name": "Peripheral Device Query",
+      "cat": 5
+    },
+    {
+      "uid": 5015,
+      "name": "Process Query",
+      "cat": 5
+    },
+    {
+      "uid": 5016,
+      "name": "Service Query",
+      "cat": 5
+    },
+    {
+      "uid": 5017,
+      "name": "User Session Query",
+      "cat": 5
+    },
+    {
+      "uid": 5018,
+      "name": "User Query",
+      "cat": 5
+    },
+    {
+      "uid": 5019,
+      "name": "Device Config State Change",
+      "cat": 5
+    },
+    {
+      "uid": 5020,
+      "name": "Software Inventory Info",
+      "cat": 5
+    },
+    {
+      "uid": 5021,
+      "name": "OSINT Inventory Info",
+      "cat": 5
+    },
+    {
+      "uid": 5022,
+      "name": "Startup Item Query",
+      "cat": 5
+    },
+    {
+      "uid": 5023,
+      "name": "Cloud Resources Inventory Info",
+      "cat": 5
+    },
+    {
+      "uid": 5040,
+      "name": "Live Evidence Info",
+      "cat": 5
+    },
+    {
+      "uid": 6001,
+      "name": "Web Resources Activity",
+      "cat": 6
+    },
+    {
+      "uid": 6002,
+      "name": "Application Lifecycle",
+      "cat": 6
+    },
+    {
+      "uid": 6003,
+      "name": "API Activity",
+      "cat": 6
+    },
+    {
+      "uid": 6004,
+      "name": "Web Resource Access Activity",
+      "cat": 6
+    },
+    {
+      "uid": 6005,
+      "name": "Datastore Activity",
+      "cat": 6
+    },
+    {
+      "uid": 6006,
+      "name": "File Hosting Activity",
+      "cat": 6
+    },
+    {
+      "uid": 6007,
+      "name": "Scan Activity",
+      "cat": 6
+    },
+    {
+      "uid": 6008,
+      "name": "Application Error",
+      "cat": 6
+    },
+    {
+      "uid": 7001,
+      "name": "Remediation Activity",
+      "cat": 7
+    },
+    {
+      "uid": 7002,
+      "name": "File Remediation Activity",
+      "cat": 7
+    },
+    {
+      "uid": 7003,
+      "name": "Process Remediation Activity",
+      "cat": 7
+    },
+    {
+      "uid": 7004,
+      "name": "Network Remediation Activity",
+      "cat": 7
+    },
+    {
+      "uid": 8001,
+      "name": "Drone Flights Activity",
+      "cat": 8
+    },
+    {
+      "uid": 8002,
+      "name": "Airborne Broadcast Activity",
+      "cat": 8
+    },
+    {
+      "uid": 201001,
+      "name": "Registry Key Activity",
+      "cat": 1
+    },
+    {
+      "uid": 201002,
+      "name": "Registry Value Activity",
+      "cat": 1
+    },
+    {
+      "uid": 201003,
+      "name": "Windows Resource Activity",
+      "cat": 1
+    },
+    {
+      "uid": 201004,
+      "name": "Windows Service Activity",
+      "cat": 1
+    },
+    {
+      "uid": 205004,
+      "name": "Registry Key Query",
+      "cat": 5
+    },
+    {
+      "uid": 205005,
+      "name": "Registry Value Query",
+      "cat": 5
+    },
+    {
+      "uid": 205019,
+      "name": "Prefetch Query",
+      "cat": 5
+    }
   ]
 }
