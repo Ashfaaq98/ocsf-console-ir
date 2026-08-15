@@ -36,7 +36,17 @@ func liveUI(t *testing.T) (*UI, *store.Store, tcell.SimulationScreen) {
 		// Drain first, stop second. Anything still in flight finishes through
 		// queueUpdate, and queueUpdate waits on the very loop Stop ends — so
 		// stopping first strands every pending load forever.
-		settle(ui, 5*time.Second)
+		//
+		// The budget is generous on purpose. It was five seconds, which a
+		// loaded Windows agent could not always meet: settle gave up, Stop
+		// killed the loop, and the *next* cleanup — the one that waits for
+		// home — blocked on goroutines that could no longer finish. The test
+		// binary then sat until Go's ten-minute timeout and blamed whichever
+		// test was running at the time.
+		if !settle(ui, 30*time.Second) {
+			t.Error("the screen would not settle: a load was still queueing updates " +
+				"when the event loop was about to stop")
+		}
 		ui.running.Store(false)
 		ui.app.Stop()
 	})
@@ -148,7 +158,12 @@ func awaitDestination(ui *UI, want destinationID, within time.Duration) bool {
 
 // settle waits for the screens' background work while the loop can still
 // service it.
-func settle(ui *UI, within time.Duration) {
+// settle drains everything in flight and reports whether it managed to.
+//
+// The bool matters: a settle that quietly times out leaves work queued against
+// an event loop that is about to stop, and every one of those goroutines then
+// blocks forever.
+func settle(ui *UI, within time.Duration) bool {
 	done := make(chan struct{})
 	go func() {
 		// Home is taken from the screen on the loop and closed off it: the
@@ -167,7 +182,9 @@ func settle(ui *UI, within time.Duration) {
 	}()
 	select {
 	case <-done:
+		return true
 	case <-time.After(within):
+		return false
 	}
 }
 
@@ -192,7 +209,7 @@ func TestArrowingAnEmptyPaneDoesNotFreeze(t *testing.T) {
 	if err := pingLoop(ui, 5*time.Second); err != nil {
 		t.Fatal("opening the case froze the application")
 	}
-	settle(ui, 5*time.Second)
+	_ = settle(ui, 15*time.Second)
 
 	if ui.activeCM == nil {
 		t.Fatal("the case screen never opened, so this test proved nothing")
@@ -340,5 +357,31 @@ func TestTheNavRailIsNotAControl(t *testing.T) {
 		if after, _ := ui.navRail.GetScrollOffset(); after != row {
 			t.Errorf("the rail scrolled from %d to %d; it is a fixed legend", row, after)
 		}
+	}
+}
+
+// Cleanup gives up rather than hanging.
+//
+// An unbounded wait in a test helper does not fail a test — it stops the whole
+// binary until Go's ten-minute timeout, and the panic then names whichever test
+// happened to be running rather than the one that leaked. That is exactly how a
+// stranded home load presented: nine minutes inside an unrelated test, on
+// Windows only, because a loaded agent could not drain inside the old
+// five-second budget.
+func TestTheHarnessGivesUpRatherThanHanging(t *testing.T) {
+	if drained(func() { time.Sleep(2 * time.Second) }, 100*time.Millisecond) {
+		t.Error("drained claimed success on work that had not finished")
+	}
+	if !drained(func() {}, time.Second) {
+		t.Error("drained reported failure on work that finished at once")
+	}
+}
+
+// And settle reports whether it drained, instead of timing out in silence and
+// letting the caller stop an event loop that still has work queued against it.
+func TestSettleSaysWhetherItDrained(t *testing.T) {
+	ui, _, _ := liveUI(t)
+	if !settle(ui, 15*time.Second) {
+		t.Error("a quiet screen would not settle")
 	}
 }
