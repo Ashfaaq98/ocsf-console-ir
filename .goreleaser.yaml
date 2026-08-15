@@ -68,26 +68,43 @@ changelog:
       regexp: '^perf(\(.+\))?!?:'
     - title: Other Changes
 
-brews:
+# Homebrew, as a cask rather than a formula.
+#
+# GoReleaser deprecated `brews:` in favour of `homebrew_casks:`, and `goreleaser
+# check` failed on every run until this moved. The change is not a rename:
+# Homebrew Cask is a macOS mechanism, and casks in the main tap carry
+# `Required: macOS`. GoReleaser does emit `on_linux` stanzas, so a Linux
+# Homebrew may tolerate it — but that is not a path this project tests or
+# recommends. Linux users get the curl installer or an archive, and the README,
+# the docs and the release header all say `--cask` with the platform beside it
+# rather than offering `brew install` bare.
+homebrew_casks:
   - name: console-ir
     repository:
       owner: Ashfaaq98
       name: homebrew-tap
       branch: main
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
-    directory: Formula
-    # The tap (Ashfaaq98/homebrew-tap) and HOMEBREW_TAP_TOKEN both exist now, so
-    # the formula is published again. It had been pinned to "true" since before
-    # the tap was created, which left Homebrew users on v0.1.0 while v0.1.1
-    # shipped. "auto" still skips snapshots and prereleases.
+    directory: Casks
+    # The tap and HOMEBREW_TAP_TOKEN both exist, so this publishes. It had been
+    # pinned to "true" before the tap was created, which left Homebrew users on
+    # v0.1.0 while v0.1.1 shipped. "auto" still skips snapshots and prereleases.
     skip_upload: auto
     homepage: "https://github.com/Ashfaaq98/ocsf-console-ir"
     description: "Terminal-first OCSF-native incident response manager for security analysts"
     license: "AGPL-3.0-only"
-    install: |
-      bin.install "console-ir"
-    test: |
-      system "#{bin}/console-ir", "--version"
+    hooks:
+      post:
+        # macOS quarantines anything downloaded without a notarised signature,
+        # and refuses to run it with a dialog that says the binary is damaged
+        # rather than that it is unsigned. Stripping the attribute on install is
+        # what every unsigned cask does; signing and notarising is the real fix
+        # and needs an Apple developer account.
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/console-ir"]
+          end
+
 
 # Scoop is the low-friction Windows channel: the manifest is generated from the
 # archives already built here and published to a bucket repo, so a Windows
@@ -119,10 +136,10 @@ release:
   header: |
     ## Quick Install
 
-    ### Homebrew
+    ### Homebrew (macOS)
 
     ```bash
-    brew install Ashfaaq98/tap/console-ir
+    brew install --cask Ashfaaq98/tap/console-ir
     ```
 
     ### curl installer (Linux and macOS)

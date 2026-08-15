@@ -161,12 +161,15 @@ Confirm:
 
 ### Homebrew
 
-Verify the formula was created in `Ashfaaq98/homebrew-tap`, then test:
+Verify the **cask** was created in `Ashfaaq98/homebrew-tap` under `Casks/`, then test on macOS:
 
 ```bash
-brew install Ashfaaq98/tap/console-ir
+brew install --cask Ashfaaq98/tap/console-ir
 console-ir --version
 ```
+
+Casks are Homebrew's macOS mechanism. Linux users install with the curl script or an archive, and
+the README says so — check that it still does.
 
 ### Scoop
 
