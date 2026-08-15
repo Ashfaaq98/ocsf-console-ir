@@ -40,7 +40,20 @@ type FolderOptions struct {
 	// Enricher, when set, receives each ingested event for in-process
 	// enrichment by embedded core plugins. Optional; nil disables it.
 	Enricher Enricher
+	// SweepInterval is how often watch mode re-reads the directory as a backstop
+	// behind fsnotify. Defaults to defaultSweepInterval when zero.
+	//
+	// It is not an optimisation. fsnotify drops creates — most visibly on
+	// Windows, where the watch is not fully established when Add returns — and
+	// without a sweep a dropped notification means the file is never read at
+	// all. The sender is told 202 Accepted and the events sit on disk.
+	SweepInterval time.Duration
 }
+
+// defaultSweepInterval is how long a file can sit unread when fsnotify misses
+// its create. Short enough that a pipeline stall is measured in seconds, long
+// enough that an idle watcher is one ReadDir every few seconds.
+const defaultSweepInterval = 3 * time.Second
 
 // FolderIngestor ingests OCSF events from a directory (one-shot or watch mode).
 // DefaultDir is the drop folder watched when none is configured.
@@ -62,6 +75,7 @@ type FolderIngestor struct {
 
 	caseID  string
 	offsets map[string]int64 // per-file tail offset for jsonl
+	marks   map[string]fileMark
 	mu      sync.Mutex
 
 	// Counters, read by the dashboard from the UI goroutine while ingestion
@@ -70,6 +84,22 @@ type FolderIngestor struct {
 	ingested int64
 	errors   int64
 	lastErr  string
+	// sweeps counts completed directory re-reads. The sweep is a backstop, so
+	// it is invisible when fsnotify is working — which is every run on Linux,
+	// and why a ticker that did nothing survived until Windows CI found it.
+	sweeps int64
+}
+
+// fileMark is what the sweep remembers about a whole-file .json so it can tell
+// "already read" from "changed since". A .jsonl needs none of this: its byte
+// offset already says where reading stopped.
+type fileMark struct {
+	size    int64
+	modTime time.Time
+}
+
+func (m fileMark) matches(info os.FileInfo) bool {
+	return m.size == info.Size() && m.modTime.Equal(info.ModTime())
 }
 
 // NewFolderIngestor constructs a folder ingestor.
@@ -93,12 +123,16 @@ func NewFolderIngestor(parser *Parser, st *store.Store, b bus.Bus, opts FolderOp
 		// A ".state" name so it never matches the *.json / *.jsonl watch patterns.
 		opts.StateFile = filepath.Join(opts.Dir, ".ingest-offsets.state")
 	}
+	if opts.SweepInterval <= 0 {
+		opts.SweepInterval = defaultSweepInterval
+	}
 	return &FolderIngestor{
 		parser:  parser,
 		store:   st,
 		bus:     b,
 		opts:    opts,
 		offsets: make(map[string]int64),
+		marks:   make(map[string]fileMark),
 	}
 }
 
@@ -116,7 +150,7 @@ func (fi *FolderIngestor) Run(ctx context.Context) error {
 	}
 
 	// One-shot initial pass
-	if err := fi.scanOnce(ctx); err != nil {
+	if err := fi.scanOnce(ctx, true); err != nil {
 		return err
 	}
 
@@ -148,7 +182,14 @@ func (fi *FolderIngestor) matches(name string) bool {
 	return false
 }
 
-func (fi *FolderIngestor) scanOnce(ctx context.Context) error {
+// scanOnce reads every matching file in the directory once.
+//
+// initial distinguishes the pass made at startup from the periodic sweep behind
+// fsnotify. It only governs TailFromEnd, which exists to skip a backlog that was
+// already on disk when the watcher started. A file that appears later is not
+// backlog, and skipping it would mean whether its contents were ingested
+// depended on whether the sweep or the notification reached it first.
+func (fi *FolderIngestor) scanOnce(ctx context.Context, initial bool) error {
 	entries, err := os.ReadDir(fi.opts.Dir)
 	if err != nil {
 		return fmt.Errorf("read dir: %w", err)
@@ -169,7 +210,7 @@ func (fi *FolderIngestor) scanOnce(ctx context.Context) error {
 			// A brand-new file (no persisted offset) in tail-only mode starts at
 			// EOF so an existing backlog isn't imported. Files already seen resume
 			// from their offset; otherwise we ingest from the beginning.
-			if !seen && fi.opts.Watch && fi.opts.TailFromEnd {
+			if !seen && initial && fi.opts.Watch && fi.opts.TailFromEnd {
 				if st, err := os.Stat(path); err == nil {
 					fi.mu.Lock()
 					fi.offsets[path] = st.Size()
@@ -188,13 +229,41 @@ func (fi *FolderIngestor) scanOnce(ctx context.Context) error {
 			fi.offsets[path] = newOffset
 			fi.mu.Unlock()
 		} else if strings.HasSuffix(strings.ToLower(e.Name()), ".json") {
+			// A whole-file .json is re-read in full every time it is processed,
+			// so the sweep has to know it has already read this one. Without the
+			// mark, every .json sitting in the drop folder would be ingested
+			// again on every sweep.
+			info, err := e.Info()
+			if err != nil {
+				continue
+			}
+			if mark, seen := fi.markOf(path); seen && mark.matches(info) {
+				continue
+			}
 			if err := fi.processJSONFile(ctx, path); err != nil {
 				fi.opts.Logger.Printf("error processing %s: %v", path, err)
 				fi.recordError(err)
+				continue
 			}
+			fi.setMark(path, info)
 		}
 	}
 	return nil
+}
+
+// markOf reports what the sweep last read for a whole-file .json.
+func (fi *FolderIngestor) markOf(path string) (fileMark, bool) {
+	fi.mu.Lock()
+	defer fi.mu.Unlock()
+	m, ok := fi.marks[path]
+	return m, ok
+}
+
+// setMark records a .json as read at the size and modification time given.
+func (fi *FolderIngestor) setMark(path string, info os.FileInfo) {
+	fi.mu.Lock()
+	defer fi.mu.Unlock()
+	fi.marks[path] = fileMark{size: info.Size(), modTime: info.ModTime()}
 }
 
 func (fi *FolderIngestor) watchLoop(ctx context.Context) error {
@@ -209,7 +278,7 @@ func (fi *FolderIngestor) watchLoop(ctx context.Context) error {
 	}
 
 	fi.opts.Logger.Printf("Watching directory: %s (patterns: %s)", fi.opts.Dir, strings.Join(fi.opts.Patterns, ","))
-	ticker := time.NewTicker(3 * time.Second)
+	ticker := time.NewTicker(fi.opts.SweepInterval)
 	defer ticker.Stop()
 
 	for {
@@ -247,11 +316,29 @@ func (fi *FolderIngestor) watchLoop(ctx context.Context) error {
 					fi.mu.Unlock()
 					fi.saveOffsets()
 				case strings.HasSuffix(lower, ".json"):
-					// Re-process entire file on write
+					// A whole-file .json is re-read in full, so it is read again
+					// only when it actually changed. Writing a file emits Create
+					// and then Write, and treating both as "re-read" ingested
+					// every dropped file twice.
+					//
+					// Size and modification time, rather than content: the point
+					// is to avoid reading the file at all. A rewrite that lands
+					// in the same modification-time tick at exactly the same
+					// size is missed, which for a drop folder of uniquely named
+					// files is not a case that arises.
+					info, err := os.Stat(ev.Name)
+					if err != nil {
+						continue
+					}
+					if mark, seen := fi.markOf(ev.Name); seen && mark.matches(info) {
+						continue
+					}
 					if err := fi.processJSONFile(ctx, ev.Name); err != nil {
 						fi.opts.Logger.Printf("error processing %s: %v", ev.Name, err)
 						fi.recordError(err)
+						continue
 					}
+					fi.setMark(ev.Name, info)
 				}
 			}
 			if (ev.Op&fsnotify.Remove) != 0 || (ev.Op&fsnotify.Rename) != 0 {
@@ -265,6 +352,18 @@ func (fi *FolderIngestor) watchLoop(ctx context.Context) error {
 				fi.opts.Logger.Printf("watch error: %v", err)
 			}
 		case <-ticker.C:
+			// Re-read the directory. fsnotify is the fast path, not the only
+			// one: a dropped create used to mean the file was never read at
+			// all, so a pipeline posting into the drop folder was acknowledged
+			// and then silently lost. Offsets and marks make this a no-op for
+			// everything already ingested.
+			if err := fi.scanOnce(ctx, false); err != nil {
+				fi.opts.Logger.Printf("sweep of %s failed: %v", fi.opts.Dir, err)
+				fi.recordError(err)
+			} else {
+				fi.saveOffsets()
+			}
+			atomic.AddInt64(&fi.sweeps, 1)
 			// Periodically sync case event count (only when using a case)
 			if fi.caseID != "" {
 				_ = fi.store.UpdateCaseEventCount(context.Background(), fi.caseID)

@@ -23,7 +23,7 @@ func runWatchScan(t *testing.T, dir string, st *store.Store) *FolderIngestor {
 		CaseTitle: "", // no case assignment
 	})
 	ing.loadOffsets()
-	if err := ing.scanOnce(context.Background()); err != nil {
+	if err := ing.scanOnce(context.Background(), true); err != nil {
 		t.Fatalf("scanOnce: %v", err)
 	}
 	ing.saveOffsets()
@@ -93,7 +93,7 @@ func TestFolderIngest_TailFromEndSkipsBacklog(t *testing.T) {
 		CaseTitle:   "",
 	})
 	ing.loadOffsets()
-	if err := ing.scanOnce(context.Background()); err != nil {
+	if err := ing.scanOnce(context.Background(), true); err != nil {
 		t.Fatalf("scanOnce: %v", err)
 	}
 	if n := countEvents(t, st); n != 0 {
