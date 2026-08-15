@@ -371,3 +371,61 @@ func TestTheHelpCardHasNoDeadJumpKeys(t *testing.T) {
 		t.Errorf("the help card does not mention settings:\n%s", got)
 	}
 }
+
+// Settings opened from inside a case leaves you inside the case.
+//
+// It did not. overlayModal floated every panel over the *main* interface
+// whatever was showing, and closeModal returned to the main interface and
+// cleared ui.activeCM — so pressing the settings key inside a case put the
+// panel over the case list, and closing it left the analyst there, out of the
+// case they were working, with no indication anything had happened.
+func TestSettingsFromInsideACaseKeepsTheCase(t *testing.T) {
+	ui, _ := newTestUI(t)
+	cm := openCase(t, ui)
+	cm.switchTab(tabEvents)
+
+	if cm.globalInputCapture(tcell.NewEventKey(tcell.KeyRune, 'M', tcell.ModNone)) != nil {
+		t.Fatal("the case screen did not claim the settings key")
+	}
+	if ui.activeModal == nil {
+		t.Fatal("settings did not open")
+	}
+	// The case is still the screen underneath, not the case list.
+	if ui.activeCM != cm {
+		t.Error("opening settings dropped the case while the panel was still open")
+	}
+
+	ui.closeModal()
+
+	if ui.activeCM != cm {
+		t.Error("closing settings left the case — the analyst is now on the case list")
+	}
+	if cm.modalActive {
+		t.Error("the case still believes a modal is open")
+	}
+	if cm.activeTab != tabEvents {
+		t.Errorf("the case came back on tab %d, not the one it was left on", cm.activeTab)
+	}
+	// And the keyboard is back on the case, not stranded on a dead panel.
+	if got := ui.app.GetFocus(); got != cm.eventsTable {
+		t.Errorf("focus returned to %T, not the tab that had it", got)
+	}
+}
+
+// A panel opened from a normal screen still returns to that screen.
+func TestSettingsFromAScreenStillReturnsToIt(t *testing.T) {
+	ui, st := newTestUI(t)
+	seedTriageFinding(t, st, "a", "")
+	ui.enterScreen(destTriage)
+	awaitIdle(t, ui)
+
+	ui.showSettings()
+	ui.closeModal()
+
+	if ui.destination != destTriage {
+		t.Errorf("closing settings left Triage for %v", ui.destination)
+	}
+	if ui.activeModal != nil {
+		t.Error("the panel closed but the application still thinks one is open")
+	}
+}

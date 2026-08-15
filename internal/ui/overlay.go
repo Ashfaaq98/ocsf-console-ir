@@ -38,10 +38,24 @@ func (ui *UI) mainRoot() tview.Primitive {
 // and correct itself on the next keypress.
 func (ui *UI) overlayModal(p tview.Primitive, width, height int) {
 	pages := tview.NewPages().
-		AddPage("screen", ui.mainRoot(), true, true).
+		AddPage("screen", ui.modalBackground(), true, true).
 		AddPage("modal", centredModal(p, width, height), true, true)
 	ui.rootModal(pages)
 	ui.app.SetFocus(p)
+}
+
+// modalBackground is what a modal floats over: the screen that is actually
+// showing.
+//
+// It used to be the main interface unconditionally, which is wrong whenever a
+// case is open. Pressing the settings key inside a case put the panel over the
+// *case list* — the case vanished behind it, and closing the panel left you on
+// the list, having silently left the case you were working.
+func (ui *UI) modalBackground() tview.Primitive {
+	if cm := ui.activeCM; cm != nil && cm.layout != nil {
+		return cm.layout
+	}
+	return ui.mainRoot()
 }
 
 // modalPanel frames a modal's body: a border, a title, and a background of its

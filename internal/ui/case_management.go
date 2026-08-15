@@ -3411,6 +3411,25 @@ func (cm *CaseManagement) deleteSelectedManualIOCs() {
 	cm.pushModalRoot(modal)
 }
 
+// takeBackTheScreen puts the case back after something covered it.
+//
+// One method because two paths need it. The case screen stacks its own modals
+// through pushModalRoot, and it is also covered by panels the main interface
+// raises — settings is the one that matters, since it opens from inside a case.
+// Those go up with ui.overlayModal, which knows nothing about a case, so the
+// way back has to be callable from outside too.
+func (cm *CaseManagement) takeBackTheScreen() {
+	cm.modalActive = false
+	cm.currentRoot = cm.layout
+	cm.app.SetRoot(cm.layout, true)
+	if cm.globalInputCapture != nil {
+		cm.app.SetInputCapture(cm.globalInputCapture)
+	}
+	cm.renderTabBar()
+	cm.updateFocusStyles()
+	cm.focusCurrentPane()
+}
+
 // pushModalRoot mounts a modal and relaxes the global input capture so Tab/Enter work inside forms.
 func (cm *CaseManagement) pushModalRoot(p tview.Primitive) {
 	// Mark modal active; rely on modal widget capture and global handler for Esc/q.
@@ -3461,20 +3480,11 @@ func (cm *CaseManagement) popModalRoot() {
 
 		// If we restored to the main layout, we are exiting modal mode.
 		if prev == cm.layout {
-			cm.modalActive = false
-			// Restore global input capture and pane focus
-			// Prefer the popped snapshot if present, else keep existing globalInputCapture.
+			// Prefer the popped snapshot if present, else keep existing.
 			if prevIC != nil {
 				cm.globalInputCapture = prevIC
 			}
-			if cm.globalInputCapture != nil {
-				cm.app.SetInputCapture(cm.globalInputCapture)
-			}
-			// Re-render header and focus visuals
-			cm.renderTabBar()
-			cm.updateFocusStyles()
-			// Restore focus to the last focused pane.
-			cm.focusCurrentPane()
+			cm.takeBackTheScreen()
 		} else {
 			// Still inside nested modal stack (e.g., back to LLM Settings form)
 			cm.modalActive = true
