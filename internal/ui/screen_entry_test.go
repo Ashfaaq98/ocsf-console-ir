@@ -38,11 +38,24 @@ func newTestUI(t *testing.T) (*UI, *store.Store) {
 	// wherever the port happens to answer.
 	ui := NewUI(ctx, st, &llm.LocalStub{}, logging.New(io.Discard, logging.LevelError, "test"), "test")
 	t.Cleanup(func() {
-		if ui.home != nil {
-			ui.home.close()
-			ui.home.wait()
+		// Bounded, because an unbounded wait here does not fail — it hangs the
+		// whole test binary until Go's own ten-minute timeout, and the panic
+		// that follows names whichever test happened to be running rather than
+		// the one that leaked.
+		//
+		// Home's loads finish through queueUpdate, which under a live event
+		// loop blocks until that loop drains it. If the loop has already been
+		// stopped, they never come back — so this reports rather than waits.
+		if !drained(func() {
+			if ui.home != nil {
+				ui.home.close()
+				ui.home.wait()
+			}
+			ui.waitForLoads()
+		}, 30*time.Second) {
+			t.Error("a load was still running at the end of the test, and could not finish — " +
+				"something queued an update after the event loop stopped")
 		}
-		ui.waitForLoads()
 	})
 	return ui, st
 }
@@ -302,4 +315,19 @@ func TestTheLetterJumpsAreGone(t *testing.T) {
 		}
 	}
 	awaitIdle(t, ui)
+}
+
+// drained runs fn and reports whether it finished inside the budget.
+//
+// Cleanup has to be able to give up. A test helper that blocks forever turns a
+// leaked goroutine into a ten-minute hang attributed to an unrelated test.
+func drained(fn func(), within time.Duration) bool {
+	done := make(chan struct{})
+	go func() { fn(); close(done) }()
+	select {
+	case <-done:
+		return true
+	case <-time.After(within):
+		return false
+	}
 }
