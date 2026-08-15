@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"github.com/gdamore/tcell/v2"
 	"strings"
 
 	"github.com/rivo/tview"
@@ -235,6 +236,21 @@ func (ui *UI) buildNavRail() *tview.TextView {
 	// screen, and none of the three said what this panel was for.
 	stylePanel(rail.Box, "NAVIGATION", PanelRoleRail, ui.theme)
 	rail.SetBackgroundColor(ui.theme.Bg)
+
+	// A legend, not a control, and now actually built like one.
+	//
+	// It was a scrollable TextView, which is tview's default, so clicking it
+	// took focus and the arrow keys then scrolled a fixed list of five
+	// destinations — while the queue the analyst was reading stopped
+	// responding to them, because it no longer had focus. The comment beside
+	// the initial SetFocus has claimed this is not a focus target since it was
+	// written; these two lines make that true.
+	rail.SetScrollable(false)
+	rail.SetMouseCapture(func(action tview.MouseAction, event *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		// Consumed rather than passed on: TextView's own handler focuses
+		// itself on a left click, and there is nothing here to click.
+		return action, nil
+	})
 	return rail
 }
 
