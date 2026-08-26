@@ -7,6 +7,34 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [0.3.0] - 2026-08-15
 
+### Security
+
+Five defects in the ingestion path, found by an external review of the repository. The HTTP
+receiver is opt-in and off by default; the drop-folder ones apply to every run.
+
+- **A bind with no host in front of the port opened the receiver to the whole network without a
+  token.** `--http-ingest-bind :8081` listens on every interface, exactly as `0.0.0.0:8081` does,
+  but the guard that demands a bearer token treated it as loopback. The analyst who typed the
+  shorter form got an unauthenticated endpoint on every interface while the documentation and the
+  settings screen both said a token was required. Both spellings are now refused without a token.
+- **A token-less loopback receiver accepted posts from any web page the analyst had open.**
+  Everything on the machine can reach `127.0.0.1`, browsers included, and the request shape used
+  triggers no preflight. Without a token the receiver now refuses a request carrying another
+  site's origin, or a host that is not its own. Forwarders and scripts send neither and are
+  unaffected.
+- **Every restart re-ingested the whole drop folder.** Nothing deletes an ingested payload and the
+  startup scan reads everything it finds, so each start added another copy of every `.json` — over
+  weeks, an event count several times the truth, with the copies indistinguishable from real
+  telemetry. Digests are now persisted beside the byte offsets that already gave `.jsonl` this
+  property.
+- **A named pipe or a symlink called `events.json` stopped or killed the process.** The watcher
+  matched on the name alone, so opening a pipe blocked ingestion indefinitely while still reporting
+  itself healthy, and reading a symlink to an endless device exhausted memory and took the whole
+  application down. Entries are now checked before they are opened, and reads are bounded.
+- **Validating a posted body decoded it a second time**, holding roughly twenty times its size in
+  memory for no gain — enough, with concurrent requests, to exhaust a small machine. Validation no
+  longer decodes.
+
 The case screen becomes a place to work, and settings become one place. Every screen owns its keys,
 dialogs float over what they act on, cases can be written up and kept, and the interface runs
 headless. Colour carries meaning throughout: severity, status, and the kind of thing a value is.

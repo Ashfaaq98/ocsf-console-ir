@@ -216,7 +216,10 @@ func ingestionSettings() settingsCategory {
 					"what to expose and to whom, often taken by someone other than the analyst — " +
 					"so it does not move when a preference does.",
 				detail: []string{
-					"A bearer token is required on anything other than a loopback address.",
+					"A bearer token is required on anything other than a loopback address, " +
+						"and \":8081\" is one: a bind with no host listens on every interface.",
+					"Without a token, a loopback receiver still refuses anything posted from a " +
+						"web page, since a browser can reach 127.0.0.1 without you knowing.",
 				},
 			},
 			{

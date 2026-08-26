@@ -13,6 +13,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -190,6 +191,17 @@ func (h *HTTPIngestServer) handleIngest(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// A loopback bind is not an authentication boundary. Without a token,
+	// anything running on this machine can post — including any web page the
+	// analyst opens, since a string body makes the request CORS-simple and no
+	// preflight is sent. Requiring the browser's own Origin and Host to name
+	// this listener rejects cross-site posts and DNS-rebound origins alike.
+	// A token makes this unnecessary: the Authorization header forces a
+	// preflight no cross-site page can pass.
+	if h.opts.Token == "" && !h.originAllowed(r) {
+		http.Error(w, "origin not allowed", http.StatusForbidden)
+		return
+	}
 	// Basic bearer auth
 	if h.opts.Token != "" {
 		auth := r.Header.Get("Authorization")
@@ -316,11 +328,13 @@ func validateJSON(body []byte) error {
 	if trim[0] != '{' && trim[0] != '[' {
 		return errors.New("expected object or array")
 	}
-	// Try unmarshal as interface to fully validate
-	var v interface{}
-	if err := json.Unmarshal(trim, &v); err != nil {
-		return err
-	}
+	// Deliberately no json.Unmarshal here. json.Valid above already proved the
+	// body well-formed, so decoding it into an interface{} adds no validation —
+	// but it does materialise the whole body as a live object tree, which for a
+	// wide, shallow body costs roughly twenty times its size in heap that the
+	// collector cannot reclaim while the decode is running. With the default
+	// burst of 20 those decodes stack, and a few megabytes of request can turn
+	// into gigabytes of live heap. The parser reads the file again anyway.
 	return nil
 }
 
@@ -426,11 +440,53 @@ func remoteIP(addr string) string {
 	return addr
 }
 
-// isLocalhostBind returns true if the bind address is a localhost address.
+// originAllowed reports whether a request may post while no token is set.
+//
+// Browsers attach Origin to every cross-origin POST and to same-origin POSTs
+// alike, so requiring it to name this listener blocks a page on any other site
+// from writing into the analyst's cases. A DNS-rebound page carries its own
+// public name in Origin and Host, so it is refused on both. A sandboxed or
+// file:// document sends "null", which matches nothing.
+//
+// Non-browser senders — a forwarder, curl, the tool's own tests — send no
+// Origin at all and are unaffected. Their Host still has to name the listener,
+// which is what it naturally is when they post to the address they were given.
+func (h *HTTPIngestServer) originAllowed(r *http.Request) bool {
+	_, port, err := net.SplitHostPort(h.Address())
+	if err != nil {
+		return false
+	}
+	allowed := map[string]bool{
+		net.JoinHostPort("127.0.0.1", port): true,
+		net.JoinHostPort("localhost", port): true,
+		net.JoinHostPort("::1", port):       true,
+	}
+	if o := strings.TrimSpace(r.Header.Get("Origin")); o != "" {
+		u, err := url.Parse(o)
+		if err != nil || !allowed[u.Host] {
+			return false
+		}
+	}
+	// HTTP/1.0 senders may omit Host entirely; they cannot be a browser.
+	return r.Host == "" || allowed[r.Host]
+}
+
+// isLocalhostBind reports whether the bind address reaches only this machine.
+//
+// A host-less bind is deliberately not loopback. net.Listen("tcp", ":8081")
+// listens on every unicast and anycast address of the host, exactly as
+// "0.0.0.0:8081" does — it is the shorter spelling of the same thing, not a
+// safer one. Treating it as loopback let the token requirement be skipped for
+// the most idiomatic way to write a wildcard bind, so the analyst who typed
+// the short form got an unauthenticated receiver on every interface while the
+// documentation and the settings screen both promised a token was required.
+//
+// An empty string cannot reach here: the constructor rewrites an empty Bind to
+// the loopback default before the guard runs.
 func isLocalhostBind(bind string) bool {
 	host, _, err := net.SplitHostPort(bind)
 	if err != nil {
 		host = bind
 	}
-	return host == "" || host == "127.0.0.1" || host == "localhost" || host == "::1"
+	return host == "127.0.0.1" || host == "localhost" || host == "::1"
 }
