@@ -74,7 +74,9 @@ type Briefing struct {
 // Malformed entries are skipped rather than failing the whole briefing: one bad
 // row written by an older build must not blank the screen.
 func (s *Store) GetBriefing(ctx context.Context, caseID string) (Briefing, error) {
-	notes, err := s.GetNotes(ctx, caseID)
+	// Oldest first: a checklist and a set of hypotheses read in the order the
+	// analyst wrote them, not reversed.
+	notes, err := s.notesInOrder(ctx, caseID, true)
 	if err != nil {
 		return Briefing{}, fmt.Errorf("failed to read briefing notes: %w", err)
 	}

@@ -303,10 +303,26 @@ func (s *Store) AddNote(ctx context.Context, note Note) (string, error) {
 	return note.ID, nil
 }
 
-// GetNotes retrieves notes for a case (returns color and linking metadata)
+// GetNotes retrieves notes for a case, newest first (returns color and linking
+// metadata).
 func (s *Store) GetNotes(ctx context.Context, caseID string) ([]Note, error) {
+	return s.notesInOrder(ctx, caseID, false)
+}
+
+// notesInOrder reads a case's notes, oldest first when oldestFirst is set.
+//
+// created_at is stored to the second, so notes written in one loop — a briefing
+// checklist being saved, say — all carry the same timestamp and cannot be
+// ordered by it. rowid breaks that tie in the order the rows were inserted;
+// without it SQLite is free to return equal keys in any order at all, which is
+// how a checklist came back reversed on one platform and not another.
+func (s *Store) notesInOrder(ctx context.Context, caseID string, oldestFirst bool) ([]Note, error) {
 	query := `SELECT id, case_id, content, author, color, linked_type, linked_id, created_at, updated_at
-		FROM notes WHERE case_id = ? ORDER BY created_at DESC`
+		FROM notes WHERE case_id = ? ORDER BY created_at DESC, rowid DESC`
+	if oldestFirst {
+		query = `SELECT id, case_id, content, author, color, linked_type, linked_id, created_at, updated_at
+		FROM notes WHERE case_id = ? ORDER BY created_at ASC, rowid ASC`
+	}
 
 	rows, err := s.db.QueryContext(ctx, query, caseID)
 	if err != nil {
