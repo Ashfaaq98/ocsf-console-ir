@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,6 +43,15 @@ type FolderOptions struct {
 	// Enricher, when set, receives each ingested event for in-process
 	// enrichment by embedded core plugins. Optional; nil disables it.
 	Enricher Enricher
+	// MarksFile is where the digests of whole-file .json payloads are persisted
+	// between runs. Watch mode only; defaults to ".ingest-marks.state" in Dir.
+	//
+	// Nothing ever deletes an ingested payload, and the startup scan reads every
+	// file it finds, so without this a restart re-ingests the entire accumulated
+	// drop folder — every event again, indistinguishable from new telemetry.
+	// The byte offsets that give .jsonl this property have always been
+	// persisted; this is the same guarantee for .json.
+	MarksFile string
 	// SweepInterval is how often watch mode re-reads the directory as a backstop
 	// behind fsnotify. Defaults to defaultSweepInterval when zero.
 	//
@@ -92,6 +102,37 @@ type FolderIngestor struct {
 	sweeps int64
 }
 
+// maxIngestFileBytes bounds how much of one dropped file is read into memory.
+// The drop folder is written by forwarders and scripts, some of which may be
+// the very host under investigation, so an entry there is untrusted input.
+const maxIngestFileBytes = 256 << 20
+
+// ingestEntryOK rejects an entry before anything opens it.
+//
+// The pattern match only ever looked at the name, and os.ReadDir reports what
+// lstat says, so a symlink or a named pipe called events.json passed straight
+// through to a read. Opening a pipe with no writer blocks forever inside the
+// single ingest goroutine — ingestion simply stops, with the watcher still
+// reporting itself healthy — and reading a symlink to an endless device, or a
+// sparse file the size of a disk, allocates until the runtime dies of it,
+// taking the interface, the store and every service down with it.
+//
+// Lstat, not Stat: the point is to see the symlink rather than follow it.
+func ingestEntryOK(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%s: not a regular file (%s), skipped", path, info.Mode())
+	}
+	if info.Size() > maxIngestFileBytes {
+		return fmt.Errorf("%s: %d bytes exceeds the %d byte ingest limit, skipped",
+			path, info.Size(), maxIngestFileBytes)
+	}
+	return nil
+}
+
 // fileMark is what the ingestor remembers about a whole-file .json so it can
 // tell "already ingested" from "changed since". A .jsonl needs none of this:
 // its byte offset already says where reading stopped.
@@ -137,6 +178,10 @@ func NewFolderIngestor(parser *Parser, st *store.Store, b bus.Bus, opts FolderOp
 		// A ".state" name so it never matches the *.json / *.jsonl watch patterns.
 		opts.StateFile = filepath.Join(opts.Dir, ".ingest-offsets.state")
 	}
+	if opts.MarksFile == "" && opts.Dir != "" {
+		// A ".state" name so it never matches the *.json / *.jsonl patterns.
+		opts.MarksFile = filepath.Join(opts.Dir, ".ingest-marks.state")
+	}
 	if opts.SweepInterval <= 0 {
 		opts.SweepInterval = defaultSweepInterval
 	}
@@ -161,6 +206,7 @@ func (fi *FolderIngestor) Run(ctx context.Context) error {
 	// re-ingest files that were already read.
 	if fi.opts.Watch {
 		fi.loadOffsets()
+		fi.loadMarks()
 	}
 
 	// One-shot initial pass
@@ -216,6 +262,11 @@ func (fi *FolderIngestor) scanOnce(ctx context.Context, initial bool) error {
 			continue
 		}
 		path := filepath.Join(fi.opts.Dir, e.Name())
+		if err := ingestEntryOK(path); err != nil {
+			fi.opts.Logger.Printf("skipping %s: %v", path, err)
+			fi.recordError(err)
+			continue
+		}
 		if strings.HasSuffix(strings.ToLower(e.Name()), ".jsonl") {
 			fi.mu.Lock()
 			offset, seen := fi.offsets[path]
@@ -291,9 +342,22 @@ func (fi *FolderIngestor) setMark(path string, sum [sha256.Size]byte) {
 // here, so neither can ingest the same content twice or record content it never
 // read.
 func (fi *FolderIngestor) ingestJSONFile(ctx context.Context, path string) error {
-	data, err := os.ReadFile(path)
+	if err := ingestEntryOK(path); err != nil {
+		return err
+	}
+	// Bounded even though ingestEntryOK just checked the size: the file can grow
+	// between the two, and this is the read that would allocate without end.
+	f, err := os.Open(path)
 	if err != nil {
 		return err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxIngestFileBytes+1))
+	if err != nil {
+		return err
+	}
+	if int64(len(data)) > maxIngestFileBytes {
+		return fmt.Errorf("%s exceeds the %d byte ingest limit", path, maxIngestFileBytes)
 	}
 	if len(bytes.TrimSpace(data)) == 0 {
 		// Nothing to ingest, and nothing to remember. A .json that is empty
@@ -315,6 +379,9 @@ func (fi *FolderIngestor) ingestJSONFile(ctx context.Context, path string) error
 		return err
 	}
 	fi.setMark(path, sum)
+	// Persisted now rather than at shutdown: a process killed between the two
+	// re-ingests this file on the next start, which is the defect being closed.
+	fi.saveMarks()
 	return nil
 }
 
@@ -350,6 +417,11 @@ func (fi *FolderIngestor) watchLoop(ctx context.Context) error {
 			lower := strings.ToLower(name)
 
 			if (ev.Op&fsnotify.Create) != 0 || (ev.Op&fsnotify.Write) != 0 {
+				if err := ingestEntryOK(ev.Name); err != nil {
+					fi.opts.Logger.Printf("skipping %s: %v", ev.Name, err)
+					fi.recordError(err)
+					continue
+				}
 				switch {
 				case strings.HasSuffix(lower, ".jsonl"):
 					// Tail from last offset (or 0 if new file)
@@ -381,8 +453,10 @@ func (fi *FolderIngestor) watchLoop(ctx context.Context) error {
 			if (ev.Op&fsnotify.Remove) != 0 || (ev.Op&fsnotify.Rename) != 0 {
 				fi.mu.Lock()
 				delete(fi.offsets, ev.Name)
+				delete(fi.marks, ev.Name)
 				fi.mu.Unlock()
 				fi.saveOffsets()
+				fi.saveMarks()
 			}
 		case err := <-w.Errors:
 			if err != nil {
@@ -406,6 +480,71 @@ func (fi *FolderIngestor) watchLoop(ctx context.Context) error {
 				_ = fi.store.UpdateCaseEventCount(context.Background(), fi.caseID)
 			}
 		}
+	}
+}
+
+// persistedMark is the on-disk form of a fileMark. The digest is hex so the
+// state file stays readable, and the modification time is nanoseconds since the
+// epoch so it round-trips exactly rather than through a formatted string.
+type persistedMark struct {
+	Size int64  `json:"size"`
+	Mod  int64  `json:"mod"`
+	Sum  string `json:"sum"`
+}
+
+// loadMarks restores the digests of already-ingested .json payloads. A missing
+// or unreadable file is not an error: the files are read and hashed again, and
+// the worst case is the duplication this exists to prevent.
+func (fi *FolderIngestor) loadMarks() {
+	if fi.opts.MarksFile == "" {
+		return
+	}
+	data, err := os.ReadFile(fi.opts.MarksFile)
+	if err != nil {
+		return
+	}
+	var m map[string]persistedMark
+	if err := json.Unmarshal(data, &m); err != nil {
+		fi.opts.Logger.Printf("ignoring corrupt ingest marks %s: %v", fi.opts.MarksFile, err)
+		return
+	}
+	fi.mu.Lock()
+	defer fi.mu.Unlock()
+	for k, v := range m {
+		raw, err := hex.DecodeString(v.Sum)
+		if err != nil || len(raw) != sha256.Size {
+			continue
+		}
+		var sum [sha256.Size]byte
+		copy(sum[:], raw)
+		fi.marks[k] = fileMark{size: v.Size, modTime: time.Unix(0, v.Mod), sum: sum}
+	}
+}
+
+// saveMarks atomically persists the marks. Best-effort: a failure is logged,
+// not fatal, and costs a re-ingest of that file on the next start.
+func (fi *FolderIngestor) saveMarks() {
+	if fi.opts.MarksFile == "" {
+		return
+	}
+	fi.mu.Lock()
+	snapshot := make(map[string]persistedMark, len(fi.marks))
+	for k, v := range fi.marks {
+		snapshot[k] = persistedMark{Size: v.size, Mod: v.modTime.UnixNano(), Sum: hex.EncodeToString(v.sum[:])}
+	}
+	fi.mu.Unlock()
+
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		return
+	}
+	tmp := fi.opts.MarksFile + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		fi.opts.Logger.Printf("could not persist ingest marks: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, fi.opts.MarksFile); err != nil {
+		fi.opts.Logger.Printf("could not persist ingest marks: %v", err)
 	}
 }
 

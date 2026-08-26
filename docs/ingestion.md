@@ -58,8 +58,20 @@ It works headless as well as under the TUI: the folder watcher that reads those 
 in both modes, so `--http-ingest-enable --no-tui` stores what it accepts.
 
 ```bash
-console-ir --no-tui --http-ingest-enable --http-ingest-bind 0.0.0.0:8081
+console-ir --no-tui --http-ingest-enable --http-ingest-bind 0.0.0.0:8081 \
+  --http-ingest-token "$(openssl rand -hex 32)"
 ```
+
+**Anything other than a loopback address needs a token, and that includes `:8081`.** A bind with no
+host in front of the port is not a shorthand for localhost — `:8081` listens on every interface of
+the machine, exactly as `0.0.0.0:8081` does. Console-IR refuses both without a token.
+
+**A loopback bind is not a security boundary on its own.** Everything on the machine can reach
+`127.0.0.1`, including web pages the analyst has open in a browser, which can post to a local port
+without the analyst noticing. So when no token is set, the receiver accepts a request only when it
+did not come from a browser at all, or came from a page served by the receiver itself; anything
+carrying another site's origin is refused with `403`. Forwarders, `curl` and scripts send no origin
+and are unaffected. Setting a token replaces this with the token check.
 
 The receiver can also be switched on and off from inside the TUI, under settings (`,`), which shows
 whether it is listening, on what address, whether a token is required and how many payloads it has
